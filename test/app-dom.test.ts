@@ -672,7 +672,7 @@ describe("web app · settings", () => {
       expect(body, `${label} missing from setup`).toContain(label);
     }
     // and the phone, which is the part people never find on their own
-    expect(body).toContain("loom up --restart --tailnet");
+    expect(body).toContain("notch up --restart --tailnet");
     expect(m.errors.join("\n")).toBe("");
   });
 
