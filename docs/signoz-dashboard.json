@@ -1,0 +1,217 @@
+{
+  "title": "Notch — Agent Fleet Observability",
+  "description": "Live view of the Notch coding-agent fleet from its OpenTelemetry gen_ai spans: turn throughput, LLM cost, token usage, latency, baton handoffs, and errors. Import via SigNoz → Dashboards → New dashboard → Import JSON. Assumes service.name = notch.",
+  "tags": ["notch", "gen_ai", "agents", "llm"],
+  "variables": {},
+  "layout": [
+    { "i": "notch-turns", "x": 0, "y": 0, "w": 6, "h": 3 },
+    { "i": "notch-cost", "x": 6, "y": 0, "w": 6, "h": 3 },
+    { "i": "notch-tokens", "x": 0, "y": 3, "w": 6, "h": 3 },
+    { "i": "notch-latency", "x": 6, "y": 3, "w": 6, "h": 3 },
+    { "i": "notch-handoffs", "x": 0, "y": 6, "w": 4, "h": 3 },
+    { "i": "notch-errors", "x": 4, "y": 6, "w": 8, "h": 3 },
+    { "i": "notch-by-agent", "x": 0, "y": 9, "w": 12, "h": 3 }
+  ],
+  "widgets": [
+    {
+      "id": "notch-turns",
+      "title": "Agent turns / min (by agent)",
+      "description": "Count of gen_ai.agent.turn spans, grouped by agent.",
+      "panelTypes": "graph",
+      "timePreferance": "GLOBAL_TIME",
+      "query": {
+        "queryType": "builder",
+        "promql": [],
+        "clickhouse_sql": [],
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "traces",
+              "queryName": "A",
+              "expression": "A",
+              "aggregateOperator": "count",
+              "aggregateAttribute": { "key": "", "dataType": "", "type": "", "isColumn": false, "isJSON": false },
+              "filters": { "op": "AND", "items": [
+                { "key": { "key": "serviceName", "dataType": "string", "type": "tag", "isColumn": true }, "op": "=", "value": "notch" },
+                { "key": { "key": "name", "dataType": "string", "type": "tag", "isColumn": true }, "op": "=", "value": "gen_ai.agent.turn" }
+              ] },
+              "groupBy": [ { "key": "gen_ai.agent.id", "dataType": "string", "type": "tag", "isColumn": false } ],
+              "legend": "{{gen_ai.agent.id}}",
+              "reduceTo": "sum",
+              "stepInterval": 60,
+              "orderBy": [], "having": [], "disabled": false
+            }
+          ],
+          "queryFormulas": []
+        }
+      }
+    },
+    {
+      "id": "notch-cost",
+      "title": "LLM cost (USD)",
+      "description": "Sum of gen_ai.usage.cost_usd across turns.",
+      "panelTypes": "graph",
+      "timePreferance": "GLOBAL_TIME",
+      "query": {
+        "queryType": "builder",
+        "promql": [], "clickhouse_sql": [],
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "traces",
+              "queryName": "A",
+              "expression": "A",
+              "aggregateOperator": "sum",
+              "aggregateAttribute": { "key": "gen_ai.usage.cost_usd", "dataType": "float64", "type": "tag", "isColumn": false, "isJSON": false },
+              "filters": { "op": "AND", "items": [
+                { "key": { "key": "serviceName", "dataType": "string", "type": "tag", "isColumn": true }, "op": "=", "value": "notch" }
+              ] },
+              "groupBy": [], "legend": "cost usd", "reduceTo": "sum", "stepInterval": 60,
+              "orderBy": [], "having": [], "disabled": false
+            }
+          ],
+          "queryFormulas": []
+        }
+      }
+    },
+    {
+      "id": "notch-tokens",
+      "title": "Tokens (in + out)",
+      "description": "Sum of input and output tokens per interval.",
+      "panelTypes": "graph",
+      "timePreferance": "GLOBAL_TIME",
+      "query": {
+        "queryType": "builder",
+        "promql": [], "clickhouse_sql": [],
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "traces", "queryName": "A", "expression": "A", "aggregateOperator": "sum",
+              "aggregateAttribute": { "key": "gen_ai.usage.input_tokens", "dataType": "float64", "type": "tag", "isColumn": false, "isJSON": false },
+              "filters": { "op": "AND", "items": [ { "key": { "key": "serviceName", "dataType": "string", "type": "tag", "isColumn": true }, "op": "=", "value": "notch" } ] },
+              "groupBy": [], "legend": "input", "reduceTo": "sum", "stepInterval": 60, "orderBy": [], "having": [], "disabled": false
+            },
+            {
+              "dataSource": "traces", "queryName": "B", "expression": "B", "aggregateOperator": "sum",
+              "aggregateAttribute": { "key": "gen_ai.usage.output_tokens", "dataType": "float64", "type": "tag", "isColumn": false, "isJSON": false },
+              "filters": { "op": "AND", "items": [ { "key": { "key": "serviceName", "dataType": "string", "type": "tag", "isColumn": true }, "op": "=", "value": "notch" } ] },
+              "groupBy": [], "legend": "output", "reduceTo": "sum", "stepInterval": 60, "orderBy": [], "having": [], "disabled": false
+            }
+          ],
+          "queryFormulas": []
+        }
+      }
+    },
+    {
+      "id": "notch-latency",
+      "title": "Turn latency p95 (ms)",
+      "description": "p95 duration of gen_ai.agent.turn spans.",
+      "panelTypes": "graph",
+      "timePreferance": "GLOBAL_TIME",
+      "query": {
+        "queryType": "builder",
+        "promql": [], "clickhouse_sql": [],
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "traces", "queryName": "A", "expression": "A", "aggregateOperator": "p95",
+              "aggregateAttribute": { "key": "durationNano", "dataType": "float64", "type": "tag", "isColumn": true, "isJSON": false },
+              "filters": { "op": "AND", "items": [
+                { "key": { "key": "serviceName", "dataType": "string", "type": "tag", "isColumn": true }, "op": "=", "value": "notch" },
+                { "key": { "key": "name", "dataType": "string", "type": "tag", "isColumn": true }, "op": "=", "value": "gen_ai.agent.turn" }
+              ] },
+              "groupBy": [], "legend": "p95", "reduceTo": "avg", "stepInterval": 60, "orderBy": [], "having": [], "disabled": false
+            }
+          ],
+          "queryFormulas": []
+        }
+      },
+      "yAxisUnit": "ns"
+    },
+    {
+      "id": "notch-handoffs",
+      "title": "Baton handoffs",
+      "description": "Count of notch.baton.handoff spans.",
+      "panelTypes": "value",
+      "timePreferance": "GLOBAL_TIME",
+      "query": {
+        "queryType": "builder",
+        "promql": [], "clickhouse_sql": [],
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "traces", "queryName": "A", "expression": "A", "aggregateOperator": "count",
+              "aggregateAttribute": { "key": "", "dataType": "", "type": "", "isColumn": false, "isJSON": false },
+              "filters": { "op": "AND", "items": [
+                { "key": { "key": "serviceName", "dataType": "string", "type": "tag", "isColumn": true }, "op": "=", "value": "notch" },
+                { "key": { "key": "name", "dataType": "string", "type": "tag", "isColumn": true }, "op": "=", "value": "notch.baton.handoff" }
+              ] },
+              "groupBy": [], "legend": "handoffs", "reduceTo": "sum", "stepInterval": 60, "orderBy": [], "having": [], "disabled": false
+            }
+          ],
+          "queryFormulas": []
+        }
+      }
+    },
+    {
+      "id": "notch-errors",
+      "title": "Errors / min",
+      "description": "Spans with error status (failed turns, route failures, notch.error).",
+      "panelTypes": "graph",
+      "timePreferance": "GLOBAL_TIME",
+      "query": {
+        "queryType": "builder",
+        "promql": [], "clickhouse_sql": [],
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "traces", "queryName": "A", "expression": "A", "aggregateOperator": "count",
+              "aggregateAttribute": { "key": "", "dataType": "", "type": "", "isColumn": false, "isJSON": false },
+              "filters": { "op": "AND", "items": [
+                { "key": { "key": "serviceName", "dataType": "string", "type": "tag", "isColumn": true }, "op": "=", "value": "notch" },
+                { "key": { "key": "hasError", "dataType": "bool", "type": "tag", "isColumn": true }, "op": "=", "value": "true" }
+              ] },
+              "groupBy": [], "legend": "errors", "reduceTo": "sum", "stepInterval": 60, "orderBy": [], "having": [], "disabled": false
+            }
+          ],
+          "queryFormulas": []
+        }
+      }
+    },
+    {
+      "id": "notch-by-agent",
+      "title": "Turns · cost · tokens by agent",
+      "description": "Per-agent rollup over the selected window.",
+      "panelTypes": "table",
+      "timePreferance": "GLOBAL_TIME",
+      "query": {
+        "queryType": "builder",
+        "promql": [], "clickhouse_sql": [],
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "traces", "queryName": "A", "expression": "A", "aggregateOperator": "count",
+              "aggregateAttribute": { "key": "", "dataType": "", "type": "", "isColumn": false, "isJSON": false },
+              "filters": { "op": "AND", "items": [
+                { "key": { "key": "serviceName", "dataType": "string", "type": "tag", "isColumn": true }, "op": "=", "value": "notch" },
+                { "key": { "key": "name", "dataType": "string", "type": "tag", "isColumn": true }, "op": "=", "value": "gen_ai.agent.turn" }
+              ] },
+              "groupBy": [ { "key": "gen_ai.agent.id", "dataType": "string", "type": "tag", "isColumn": false } ],
+              "legend": "turns", "reduceTo": "sum", "stepInterval": 60, "orderBy": [], "having": [], "disabled": false
+            },
+            {
+              "dataSource": "traces", "queryName": "B", "expression": "B", "aggregateOperator": "sum",
+              "aggregateAttribute": { "key": "gen_ai.usage.cost_usd", "dataType": "float64", "type": "tag", "isColumn": false, "isJSON": false },
+              "filters": { "op": "AND", "items": [
+                { "key": { "key": "serviceName", "dataType": "string", "type": "tag", "isColumn": true }, "op": "=", "value": "notch" }
+              ] },
+              "groupBy": [ { "key": "gen_ai.agent.id", "dataType": "string", "type": "tag", "isColumn": false } ],
+              "legend": "cost usd", "reduceTo": "sum", "stepInterval": 60, "orderBy": [], "having": [], "disabled": false
+            }
+          ],
+          "queryFormulas": []
+        }
+      }
+    }
+  ]
+}
