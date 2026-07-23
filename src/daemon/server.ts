@@ -20,6 +20,7 @@ import { NotHolderError } from "../core/baton.js";
 import type { MemoryKind, MemoryPatch } from "../core/brain.js";
 import { retrieve } from "../core/brain-index.js";
 import { RouteActiveError } from "../core/routes.js";
+import { recordAgentEvent } from "../observability/index.js";
 import { ADES, buildDefaultRoutes, defaultAgentConfigs, detectAdes } from "../core/ades.js";
 import { logbook, type LogLevel } from "../core/logbook.js";
 import { searchChats, searchCode } from "../core/search.js";
@@ -1836,7 +1837,13 @@ export class LoomDaemon {
       }
     }
     const rt = await ProjectRuntime.open(info);
-    rt.log.onEvent((e) => this.broadcast(info.id, e));
+    rt.log.onEvent((e) => {
+      this.broadcast(info.id, e);
+      // Single central hook for live events (agent turns AND API-driven handoffs /
+      // routes / memory): fold each into a SigNoz span. Rehydration reads via
+      // log.list(), not append(), so history is never re-exported.
+      recordAgentEvent(e, { project: info.name });
+    });
     this.runtimes.set(info.id, rt);
     return rt;
   }
