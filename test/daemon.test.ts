@@ -65,7 +65,7 @@ describe("loom daemon end-to-end", () => {
 
     const manifest = await fetch(`${baseUrl}/app/manifest.webmanifest`);
     expect(manifest.status).toBe(200);
-    expect(((await manifest.json()) as { name: string }).name).toBe("Loom");
+    expect(((await manifest.json()) as { name: string }).name).toBe("Notch");
 
     const rootRedirect = await fetch(`${baseUrl}/`, { redirect: "manual" });
     expect(rootRedirect.status).toBe(302);
