@@ -1,0 +1,25 @@
+node_modules/
+dist/
+app/.expo/
+coverage/
+*.log
+.DS_Store
+.loom/
+*.db
+*.db-journal
+.env
+_references_/
+desktop/dist/
+# The daemon staged for packaging: a copy of dist/ plus ~78MB of production
+# node_modules, rebuilt by `npm run stage` on every `npm run dist`. Output, not
+# source. (The icons next to it under desktop/build/ ARE source — hence the
+# narrow path rather than desktop/build/.)
+desktop/build/daemon/
+
+# Reference clones read while designing (mem0, AntiGravity-AutoAccept, …). They
+# are other people's repos with their own licences and histories — 54MB of mem0
+# alone. Cloned on demand; never ours to commit.
+references/
+
+# installed agent skills (add via: npx skills add SigNoz/agent-skills)
+.agents/
