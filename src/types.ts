@@ -306,11 +306,16 @@ export interface AgentCost {
   usd: number;
   turns: number;
   ms: number;
+  /** LLM tokens across this agent's turns (0 when the adapter reports cost only). */
+  tokensIn: number;
+  tokensOut: number;
 }
 
 export interface CostSummary {
   totalUsd: number;
   turns: number;
   totalMs: number;
+  tokensIn: number;
+  tokensOut: number;
   byAgent: AgentCost[];
 }

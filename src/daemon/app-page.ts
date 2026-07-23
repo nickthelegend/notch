@@ -1079,6 +1079,50 @@ try{if(localStorage.getItem("loomTheme")==="light")document.documentElement.clas
     font-family:var(--font-mono);font-size:12px;letter-spacing:0;caret-color:var(--ok)}
   .terminput.busy input{opacity:.6}
   .terminput .st{flex:none;font-size:10px;font-family:var(--font-mono);color:var(--muted-foreground)}
+  /* ── Observatory (the fleet in action, the one brain) ── */
+  #pane-observatory{padding:18px 20px 40px}
+  .obhead{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+  .obtitle{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:650;letter-spacing:-.01em}
+  .obtitle svg{width:18px;height:18px;color:var(--primary)}
+  .obtitle .obsub{font-weight:400}
+  .obsub{color:var(--muted-foreground);font-size:12px}
+  .obsignoz{margin-left:auto;display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:500;
+    color:var(--muted-foreground);border:1px solid var(--border);border-radius:var(--radius-sm);
+    padding:6px 11px;text-decoration:none;transition:background .15s,color .15s}
+  .obsignoz svg{width:13px;height:13px}
+  .obsignoz:hover{background:color-mix(in srgb, var(--primary) 14%, transparent);color:var(--foreground);
+    border-color:color-mix(in srgb, var(--primary) 45%, transparent)}
+  .obmetrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:10px;margin-bottom:18px}
+  .obcard{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px}
+  .obcard.accent{border-color:color-mix(in srgb, var(--primary) 40%, transparent)}
+  .obcl{font-size:11px;color:var(--muted-foreground);font-family:var(--font-mono);letter-spacing:.04em;text-transform:uppercase}
+  .obcv{font-size:22px;font-weight:650;letter-spacing:-.02em;margin-top:4px;font-variant-numeric:tabular-nums}
+  .obcard.accent .obcv{color:var(--primary)}
+  .obcv .live{color:var(--thread-ink)}
+  .obcs{font-size:11px;color:var(--muted-foreground);margin-top:2px}
+  .obcanvaswrap{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
+    padding:8px;margin-bottom:18px;position:relative;overflow:hidden;
+    background-image:radial-gradient(color-mix(in srgb, var(--muted-foreground) 16%, transparent) 1px, transparent 1px);
+    background-size:22px 22px}
+  .obsvg{display:block;width:100%;height:auto;max-height:60vh;touch-action:none}
+  .obnode{cursor:grab}
+  @media (prefers-reduced-motion:no-preference){
+    .obbrainpulse{transform-origin:center;animation:obpulse 2.4s ease-out infinite}
+    .obnode.busy .obdotpulse{transform-origin:center;animation:obpulse 1.6s ease-out infinite}
+  }
+  @keyframes obpulse{0%{transform:scale(1);opacity:.6}70%{transform:scale(1.5);opacity:0}100%{opacity:0}}
+  .obagents{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+  .obagentshead{font-size:11px;color:var(--muted-foreground);font-family:var(--font-mono);letter-spacing:.04em;
+    text-transform:uppercase;padding:11px 14px 8px}
+  .obrow{display:flex;align-items:center;gap:10px;padding:9px 14px;border-top:1px solid var(--border);font-size:13px}
+  .obdot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--muted-foreground)}
+  .obdot.busy{background:var(--thread)}.obdot.baton{background:var(--shuttle)}
+  .obname{font-weight:600}
+  .obkind{color:var(--muted-foreground);font-size:12px}
+  .obspend{margin-left:auto;font-variant-numeric:tabular-nums}
+  .obturns,.obtok{color:var(--muted-foreground);font-size:12px;font-variant-numeric:tabular-nums;min-width:64px;text-align:right}
+  .obempty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;height:100%;text-align:center}
+
   /* ── Board (work flowing from working → needs you → review → merge) ── */
   .boardview{display:flex;flex-direction:column;gap:14px;height:100%}
   .bhead{display:flex;align-items:baseline;gap:12px;flex:none}
@@ -1770,6 +1814,8 @@ ${BRAND_SPRITE}
     // a changed file: document outline with a small +/- pair inside
     tree: svg('<path d="M14.5 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7.5z"/><path d="M14 3v5h5"/><path d="M12 11.5v4"/><path d="M10 13.5h4"/><path d="M10 18h4"/>'),
     route: svg('<circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="5.5" r="2.5"/><path d="M8 18.5h5.5a4 4 0 0 0 4-4V8"/>'),
+    // lucide telescope — the Observatory: watching the fleet
+    telescope: svg('<path d="m10.065 12.493-6.18 1.318a.934.934 0 0 1-1.108-.702l-.537-2.15a1.07 1.07 0 0 1 .691-1.265l13.673-4.418"/><path d="m13.56 11.747 4.332-.924"/><path d="m16 21-3.105-6.21"/><path d="M16.485 5.94a2 2 0 0 1 1.455-2.425l1.09-.272a1 1 0 0 1 1.212.727l1.515 6.06a1 1 0 0 1-.727 1.213l-1.09.272a2 2 0 0 1-2.425-1.455z"/><path d="m6.158 8.633 1.114 4.456"/><path d="m8 21 3.105-6.21"/><circle cx="12" cy="13" r="2"/>'),
     // three columns of differing fill — a kanban board at 13px
     board: svg('<rect x="3" y="4" width="5" height="16" rx="1.5"/><rect x="10" y="4" width="5" height="10" rx="1.5"/><rect x="17" y="4" width="4" height="6" rx="1.5"/>'),
     chat: svg('<path d="M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"/>'),
@@ -2176,6 +2222,7 @@ ${BRAND_SPRITE}
         '<div class="pane scroll" id="pane-thread"><div id="agenthead" class="agenthead" style="display:none"></div><div id="routebar"></div><div id="feed">' + LOADER + "</div></div>" +
         '<div class="pane scroll" id="pane-brain" style="display:none">' + LOADER + "</div>" +
         '<div class="pane scroll" id="pane-board" style="display:none"></div>' +
+        '<div class="pane scroll" id="pane-observatory" style="display:none">' + LOADER + "</div>" +
                 composerHtml +
         "</div>" +
         '<div class="dockpane" id="dockpane">' +
@@ -2233,10 +2280,10 @@ ${BRAND_SPRITE}
     // mobile has no #tabsbox, so this is a no-op there by construction
     function drawTabs(){
       var box = document.getElementById("tabsbox"); if (!box) return;
-      var tabs = ["thread", "board", "brain"];
+      var tabs = ["thread", "board", "brain", "observatory"];
       if (tabs.indexOf(state.tab) < 0) state.tab = "thread";
       var LBL = { thread: [ICONS.thread, "Thread"], board: [ICONS.board, "Board"],
-                  brain: [ICONS.memory, "Brain"] };
+                  brain: [ICONS.memory, "Brain"], observatory: [ICONS.telescope, "Observatory"] };
       box.innerHTML = tabs.map(function(tb){
         return '<button class="tab' + (state.tab === tb ? " active" : "") + '" data-tab="' + tb + '">' +
           LBL[tb][0] + LBL[tb][1] + "</button>";
@@ -2247,7 +2294,7 @@ ${BRAND_SPRITE}
     }
     function showTab(name){
       state.tab = name;
-      ["thread", "board", "brain"].forEach(function(t){
+      ["thread", "board", "brain", "observatory"].forEach(function(t){
         var p = document.getElementById("pane-" + t);
         if (p) p.style.display = t === name ? "" : "none";
       });
@@ -2260,10 +2307,133 @@ ${BRAND_SPRITE}
       if (name === "brain") refreshBrain();
       // first open fetches; later opens keep the board (and your pins)
       if (name === "board") { if (board.data) drawBoardPane(); else loadBoard(); }
+      if (name === "observatory") drawObservatory();
       if (name === "thread") {
         var sc = document.getElementById("pane-thread");
         if (sc) sc.scrollTop = sc.scrollHeight;
       }
+    }
+
+    // ---- Observatory: the fleet in action, the one brain -------------------
+    // A live canvas of every agent as a node linked to the shared brain, the
+    // baton drawn in shuttle, plus fleet metrics — the same numbers Notch ships
+    // to SigNoz as gen_ai spans. Kept dependency-free, rendered from strings.
+    var obNodePos = {};        // agent id -> {x,y} once dragged, persists across redraws
+    var obRefreshT = null;
+    var OBS_LIVE_KINDS = { run_complete: 1, handoff: 1, status: 1, route_started: 1,
+      route_completed: 1, route_failed: 1, agent_join: 1, agent_leave: 1, needs_input: 1 };
+    function scheduleObsRefresh(){
+      if (obRefreshT || state.tab !== "observatory") return;
+      obRefreshT = setTimeout(function(){ obRefreshT = null; if (state.tab === "observatory") drawObservatory(); }, 700);
+    }
+    function tokfmt(n){ n = Number(n) || 0; return n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + "k" : String(n); }
+    function trunc(s, m){ s = String(s || ""); return s.length > m ? s.slice(0, m - 1) + "\\u2026" : s; }
+    function drawObservatory(){
+      var el = document.getElementById("pane-observatory"); if (!el) return;
+      var p = state.project;
+      if (!p){ el.innerHTML = '<div class="obempty"><div class="biglogo">notch</div><div class="hair"></div><div class="obsub">Open a project to watch its fleet in action.</div></div>'; return; }
+      api("/api/projects/" + p.id + "/metrics")
+        .then(function(r){ renderObservatory(el, p, (r && r.metrics) || {}); })
+        .catch(function(){ renderObservatory(el, p, {}); });
+    }
+    function renderObservatory(el, p, m){
+      var agents = (p.agents || []);
+      var byAgent = {}; (m.byAgent || []).forEach(function(a){ byAgent[a.agentId] = a; });
+      var active = agents.filter(function(a){ return a.busy; }).length;
+      var totalUsd = m.totalUsd != null ? m.totalUsd : (p.costUsd || 0);
+      var turns = m.turns || 0, tin = m.tokensIn || 0, tout = m.tokensOut || 0;
+      function card(label, val, sub, accent){
+        return '<div class="obcard' + (accent ? " accent" : "") + '"><div class="obcl">' + label +
+          '</div><div class="obcv">' + val + '</div><div class="obcs">' + sub + "</div></div>";
+      }
+      var cards =
+        card("Agents", '<span class="live">' + active + "</span> / " + agents.length, "active / in fleet") +
+        card("Baton", esc(p.holder || "\\u2014"), "who holds it now") +
+        card("Spend", money(totalUsd), "across all agents", true) +
+        card("Turns", String(turns), "completed") +
+        card("Tokens", tokfmt(tin + tout), tokfmt(tin) + " in \\u00b7 " + tokfmt(tout) + " out");
+      var rows = agents.map(function(a){
+        var c = byAgent[a.id] || {}, baton = a.id === p.holder;
+        var cls = a.busy ? "busy" : baton ? "baton" : "idle";
+        return '<div class="obrow"><span class="obdot ' + cls + '"></span>' +
+          '<span class="obname">' + esc(a.id) + "</span>" +
+          '<span class="obkind">' + esc(a.kind || "") + (a.role ? " \\u00b7 " + esc(a.role) : "") + "</span>" +
+          '<span class="obspend">' + money(c.usd || 0) + "</span>" +
+          '<span class="obturns">' + (c.turns || 0) + " turns</span>" +
+          '<span class="obtok">' + tokfmt((c.tokensIn || 0) + (c.tokensOut || 0)) + " tok</span></div>";
+      }).join("") || '<div class="obsub" style="padding:10px 2px">No agents in this project yet.</div>';
+      el.innerHTML =
+        '<div class="obhead"><div class="obtitle">' + ICONS.telescope +
+          '<span>Observatory</span> <span class="obsub">agents in action \\u00b7 the one brain</span></div>' +
+          '<a class="obsignoz" href="http://localhost:8080" target="_blank" rel="noreferrer">' + ICONS.route + " View in SigNoz</a></div>" +
+        '<div class="obmetrics">' + cards + "</div>" +
+        '<div class="obcanvaswrap">' + observatoryCanvas(agents, p.holder, byAgent) + "</div>" +
+        '<div class="obagents"><div class="obagentshead">Fleet</div>' + rows + "</div>";
+      wireObservatoryDrag(el);
+    }
+    function observatoryCanvas(agents, holder, byAgent){
+      var n = agents.length, W = 680, H = Math.max(260, 80 + n * 62);
+      var bx = 104, by = H / 2, ax = 460;
+      var nodes = agents.map(function(a, i){
+        var pos = obNodePos[a.id];
+        var ay = n <= 1 ? H / 2 : 54 + i * ((H - 108) / Math.max(1, n - 1));
+        return { a: a, x: pos ? pos.x : ax, y: pos ? pos.y : ay };
+      });
+      var edges = nodes.map(function(nd){
+        var baton = nd.a.id === holder, busy = nd.a.busy;
+        var col = baton ? "var(--shuttle)" : busy ? "var(--thread)" : "var(--border)";
+        var mid = (bx + nd.x) / 2;
+        return '<path d="M ' + (bx + 30) + " " + by + " C " + mid + " " + by + ", " + mid + " " + nd.y + ", " + nd.x + " " + nd.y +
+          '" fill="none" stroke="' + col + '" stroke-width="' + (baton ? 2 : 1.2) + '" ' +
+          (busy || baton ? '' : 'stroke-dasharray="3 6" ') + 'opacity="' + (busy || baton ? "0.85" : "0.4") + '"/>';
+      }).join("");
+      var brain =
+        '<g transform="translate(' + bx + " " + by + ')">' +
+          '<circle r="30" fill="url(#obglow)" stroke="var(--primary)" stroke-width="1.5"/>' +
+          '<circle class="obbrainpulse" r="30" fill="none" stroke="var(--primary)" stroke-width="1.5"/>' +
+          '<g transform="translate(-9 -9)" stroke="var(--primary)" stroke-width="1.6" fill="none" stroke-linejoin="round">' +
+            '<path d="m9 1 8 4.4L9 9.8 1 5.4 9 1Z"/><path d="m1 9 8 4.4 8-4.4"/></g>' +
+          '<text x="0" y="48" text-anchor="middle" fill="var(--foreground)" font-size="10.5" font-weight="500">shared brain</text>' +
+        "</g>";
+      var an = nodes.map(function(nd){
+        var a = nd.a, c = byAgent[a.id] || {}, baton = a.id === holder, busy = a.busy;
+        var stroke = baton ? "var(--shuttle)" : busy ? "var(--thread)" : "var(--border)";
+        var dot = busy ? "var(--thread)" : baton ? "var(--shuttle)" : "var(--muted-foreground)";
+        return '<g class="obnode' + (busy ? " busy" : "") + '" data-agent="' + esc(a.id) +
+          '" transform="translate(' + nd.x + " " + nd.y + ')">' +
+          '<rect x="0" y="-22" width="156" height="44" rx="11" fill="var(--card)" stroke="' + stroke + '" stroke-width="' + (busy || baton ? 2 : 1) + '"/>' +
+          '<circle cx="17" cy="0" r="4" fill="' + dot + '"' + (busy ? ' class="obdotpulse"' : "") + "/>" +
+          '<text x="31" y="-3" fill="var(--card-foreground)" font-size="12.5" font-weight="600">' + esc(trunc(a.id, 15)) + "</text>" +
+          '<text x="31" y="13" fill="var(--muted-foreground)" font-size="10.5">' + esc(a.kind || "agent") + (c.usd ? " \\u00b7 " + money(c.usd) : "") + "</text>" +
+          (baton ? '<text x="146" y="-9" text-anchor="end" fill="var(--shuttle-ink)" font-size="8.5" font-weight="700" letter-spacing="0.06em">BATON</text>' : "") +
+          "</g>";
+      }).join("");
+      return '<svg viewBox="0 0 ' + W + " " + H + '" class="obsvg" preserveAspectRatio="xMidYMid meet">' +
+        '<defs><radialGradient id="obglow" cx="50%" cy="38%"><stop offset="0%" stop-color="color-mix(in srgb, var(--primary) 46%, var(--card))"/>' +
+        '<stop offset="100%" stop-color="color-mix(in srgb, var(--primary) 12%, var(--card))"/></radialGradient></defs>' +
+        edges + brain + an + "</svg>";
+    }
+    /** Drag agent nodes around the canvas; positions persist across live redraws. */
+    function wireObservatoryDrag(el){
+      var svg = el.querySelector(".obsvg"); if (!svg) return;
+      var drag = null;
+      function pt(e){ var r = svg.getBoundingClientRect(); var vb = svg.viewBox.baseVal;
+        return { x: (e.clientX - r.left) / r.width * vb.width, y: (e.clientY - r.top) / r.height * vb.height }; }
+      Array.prototype.forEach.call(svg.querySelectorAll(".obnode"), function(g){
+        g.style.cursor = "grab";
+        g.addEventListener("pointerdown", function(e){
+          e.preventDefault(); drag = { g: g, id: g.getAttribute("data-agent") };
+          g.setPointerCapture(e.pointerId); g.style.cursor = "grabbing";
+        });
+      });
+      svg.addEventListener("pointermove", function(e){
+        if (!drag) return; var q = pt(e);
+        obNodePos[drag.id] = { x: q.x, y: q.y };
+        drag.g.setAttribute("transform", "translate(" + q.x + " " + q.y + ")");
+        // redraw only the edges cheaply by re-rendering the whole svg is heavy;
+        // leave edges until next live refresh — the node follows the cursor now.
+      });
+      svg.addEventListener("pointerup", function(){ if (drag){ drag.g.style.cursor = "grab"; drag = null; drawObservatory(); } });
     }
 
     // ---- diff/preview dock (right of the chat, opens on click) --------------
@@ -4343,6 +4513,9 @@ ${BRAND_SPRITE}
             // tab is in the background: announce it, flash the title, and (if
             // permitted) raise an OS notification.
             if (frame.event.kind === "needs_input") notifyNeedsInput(frame.event);
+            // The Observatory watches the whole fleet, so it refreshes on any
+            // project-wide event, not just this chat's.
+            if (OBS_LIVE_KINDS[frame.event.kind]) scheduleObsRefresh();
             // one socket carries the whole project; this thread is one chat.
             // An event with no chat predates chats and belongs to main.
             if ((frame.event.chat || "main") !== chatId) return;
