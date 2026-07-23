@@ -1122,6 +1122,38 @@ try{if(localStorage.getItem("loomTheme")==="light")document.documentElement.clas
   .obspend{margin-left:auto;font-variant-numeric:tabular-nums}
   .obturns,.obtok{color:var(--muted-foreground);font-size:12px;font-variant-numeric:tabular-nums;min-width:64px;text-align:right}
   .obempty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;height:100%;text-align:center}
+  /* sub-view tabs (Canvas / Graph / Timeline / Metrics) */
+  .obtabs{display:inline-flex;gap:2px;background:var(--secondary);border:1px solid var(--border);
+    border-radius:var(--radius);padding:3px;margin-bottom:16px}
+  .obtab{appearance:none;background:none;border:0;color:var(--muted-foreground);font:inherit;font-size:12.5px;
+    font-weight:500;padding:6px 14px;border-radius:var(--radius-sm);cursor:pointer;transition:background .15s,color .15s}
+  .obtab:hover{color:var(--foreground)}
+  .obtab.on{background:var(--card);color:var(--foreground);box-shadow:0 1px 0 rgb(0 0 0 / .12)}
+  .obbody{min-height:200px}
+  .obnote{color:var(--muted-foreground);font-size:12.5px;padding:0 2px 12px;max-width:70ch}
+  .obcanvaswrap.graph{padding:8px}
+  /* timeline */
+  .obtimeline{list-style:none;margin:0;padding:2px 0 2px 2px;position:relative}
+  .obtimeline:before{content:"";position:absolute;left:5px;top:6px;bottom:6px;width:1px;background:var(--border)}
+  .obtl{position:relative;display:flex;align-items:baseline;gap:12px;padding:6px 0 6px 22px;font-size:13px}
+  .obtldot{position:absolute;left:1px;top:11px;width:9px;height:9px;border-radius:50%;background:var(--muted-foreground);
+    box-shadow:0 0 0 3px var(--background)}
+  .obtl.ok .obtldot{background:var(--ok)}.obtl.baton .obtldot{background:var(--shuttle)}
+  .obtl.warn .obtldot{background:var(--warn)}.obtl.err .obtldot{background:var(--err)}
+  .obtl.info .obtldot{background:var(--thread)}.obtl.mem .obtldot{background:var(--primary)}
+  .obtllabel{flex:1;font-family:var(--font-mono);font-size:12px;color:var(--foreground);letter-spacing:.01em}
+  .obtl.err .obtllabel{color:var(--err)}.obtl.warn .obtllabel{color:var(--warn)}
+  .obtltime{color:var(--muted-foreground);font-size:11px;font-variant-numeric:tabular-nums;flex:none}
+  /* metrics detail */
+  .obmsec{margin-bottom:14px}
+  .obmlabel{font-size:11px;color:var(--muted-foreground);font-family:var(--font-mono);letter-spacing:.04em;
+    text-transform:uppercase;margin-bottom:8px}
+  .obchain{display:flex;align-items:center;flex-wrap:wrap;gap:6px}
+  .obchip{background:var(--secondary);border:1px solid var(--border);border-radius:999px;padding:3px 11px;font-size:12px;font-weight:500}
+  .obchain .obarrow{color:var(--shuttle-ink)}
+  .obmgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;margin-bottom:16px}
+  .obminicard{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:10px 13px}
+  .obcv.sm{font-size:19px}
 
   /* ── Board (work flowing from working → needs you → review → merge) ── */
   .boardview{display:flex;flex-direction:column;gap:14px;height:100%}
@@ -2332,13 +2364,17 @@ ${BRAND_SPRITE}
       var el = document.getElementById("pane-observatory"); if (!el) return;
       var p = state.project;
       if (!p){ el.innerHTML = '<div class="obempty"><div class="biglogo">notch</div><div class="hair"></div><div class="obsub">Open a project to watch its fleet in action.</div></div>'; return; }
-      api("/api/projects/" + p.id + "/metrics")
-        .then(function(r){ renderObservatory(el, p, (r && r.metrics) || {}); })
-        .catch(function(){ renderObservatory(el, p, {}); });
+      if (!state.obView) state.obView = "canvas";
+      Promise.all([
+        api("/api/projects/" + p.id + "/metrics").catch(function(){ return {}; }),
+        api("/api/projects/" + p.id + "/events?limit=500").catch(function(){ return {}; })
+      ]).then(function(res){
+        renderObservatory(el, p, (res[0] && res[0].metrics) || {}, (res[1] && res[1].events) || []);
+      });
     }
-    function renderObservatory(el, p, m){
-      var agents = (p.agents || []);
-      var byAgent = {}; (m.byAgent || []).forEach(function(a){ byAgent[a.agentId] = a; });
+    function obByAgent(m){ var o = {}; (m.byAgent || []).forEach(function(a){ o[a.agentId] = a; }); return o; }
+    function renderObservatory(el, p, m, events){
+      var agents = (p.agents || []), byAgent = obByAgent(m);
       var active = agents.filter(function(a){ return a.busy; }).length;
       var totalUsd = m.totalUsd != null ? m.totalUsd : (p.costUsd || 0);
       var turns = m.turns || 0, tin = m.tokensIn || 0, tout = m.tokensOut || 0;
@@ -2352,24 +2388,128 @@ ${BRAND_SPRITE}
         card("Spend", money(totalUsd), "across all agents", true) +
         card("Turns", String(turns), "completed") +
         card("Tokens", tokfmt(tin + tout), tokfmt(tin) + " in \\u00b7 " + tokfmt(tout) + " out");
-      var rows = agents.map(function(a){
-        var c = byAgent[a.id] || {}, baton = a.id === p.holder;
-        var cls = a.busy ? "busy" : baton ? "baton" : "idle";
-        return '<div class="obrow"><span class="obdot ' + cls + '"></span>' +
-          '<span class="obname">' + esc(a.id) + "</span>" +
-          '<span class="obkind">' + esc(a.kind || "") + (a.role ? " \\u00b7 " + esc(a.role) : "") + "</span>" +
-          '<span class="obspend">' + money(c.usd || 0) + "</span>" +
-          '<span class="obturns">' + (c.turns || 0) + " turns</span>" +
-          '<span class="obtok">' + tokfmt((c.tokensIn || 0) + (c.tokensOut || 0)) + " tok</span></div>";
-      }).join("") || '<div class="obsub" style="padding:10px 2px">No agents in this project yet.</div>';
+      var VIEWS = [["canvas", "Canvas"], ["graph", "Graph"], ["timeline", "Timeline"], ["metrics", "Metrics"]];
+      var tabs = VIEWS.map(function(v){
+        return '<button class="obtab' + (state.obView === v[0] ? " on" : "") + '" data-obv="' + v[0] + '">' + esc(v[1]) + "</button>";
+      }).join("");
+      var body;
+      if (state.obView === "graph") body = observatoryGraph(agents, p.holder, events, byAgent);
+      else if (state.obView === "timeline") body = observatoryTimeline(events);
+      else if (state.obView === "metrics") body = observatoryMetricsDetail(p, events, byAgent);
+      else body = '<div class="obcanvaswrap">' + observatoryCanvas(agents, p.holder, byAgent) + "</div>";
       el.innerHTML =
         '<div class="obhead"><div class="obtitle">' + ICONS.telescope +
           '<span>Observatory</span> <span class="obsub">agents in action \\u00b7 the one brain</span></div>' +
           '<a class="obsignoz" href="http://localhost:8080" target="_blank" rel="noreferrer">' + ICONS.route + " View in SigNoz</a></div>" +
         '<div class="obmetrics">' + cards + "</div>" +
-        '<div class="obcanvaswrap">' + observatoryCanvas(agents, p.holder, byAgent) + "</div>" +
+        '<div class="obtabs">' + tabs + "</div>" +
+        '<div class="obbody">' + body + "</div>";
+      Array.prototype.forEach.call(el.querySelectorAll(".obtab"), function(t){
+        t.onclick = function(){ state.obView = t.getAttribute("data-obv"); renderObservatory(el, p, m, events); };
+      });
+      if (state.obView === "canvas" || state.obView === "graph") wireObservatoryDrag(el);
+    }
+    // GRAPH: the baton/handoff DAG — agents in columns by handoff depth, edges
+    // are the passes of the baton. Draggable, like the canvas.
+    function observatoryGraph(agents, holder, events, byAgent){
+      var ids = agents.map(function(a){ return a.id; }), idset = {};
+      ids.forEach(function(i){ idset[i] = 1; });
+      var byId = {}; agents.forEach(function(a){ byId[a.id] = a; });
+      var em = {};
+      (events || []).forEach(function(e){
+        if (e.kind !== "handoff" || !e.payload) return;
+        var f = e.payload.from, t = e.payload.to;
+        if (f && t && idset[f] && idset[t] && f !== t) em[f + "\\u0001" + t] = (em[f + "\\u0001" + t] || 0) + 1;
+      });
+      var edges = Object.keys(em).map(function(k){ var pr = k.split("\\u0001"); return { from: pr[0], to: pr[1], n: em[k] }; });
+      var incoming = {}; ids.forEach(function(i){ incoming[i] = []; });
+      edges.forEach(function(e){ incoming[e.to].push(e.from); });
+      var layer = {};
+      function layerOf(id, seen){
+        if (layer[id] != null) return layer[id];
+        if (seen[id]) return 0;
+        var s2 = {}; for (var k in seen) s2[k] = 1; s2[id] = 1;
+        var inc = incoming[id] || []; if (!inc.length) return (layer[id] = 0);
+        var mx = 0; inc.forEach(function(src){ mx = Math.max(mx, layerOf(src, s2) + 1); });
+        return (layer[id] = mx);
+      }
+      ids.forEach(function(i){ layerOf(i, {}); });
+      var byLayer = {}, maxLayer = 0;
+      ids.forEach(function(i){ var l = layer[i] || 0; (byLayer[l] = byLayer[l] || []).push(i); maxLayer = Math.max(maxLayer, l); });
+      var COL = 202, ROW = 74, NW = 158, NH = 46, PADX = 28, PADY = 34, maxRows = 1, pos = {};
+      Object.keys(byLayer).forEach(function(l){ maxRows = Math.max(maxRows, byLayer[l].length);
+        byLayer[l].forEach(function(id, r){ pos[id] = { x: PADX + Number(l) * COL, y: PADY + r * ROW }; }); });
+      ids.forEach(function(id){ if (obNodePos["g:" + id]) pos[id] = obNodePos["g:" + id]; });
+      var W = PADX * 2 + maxLayer * COL + NW, H = Math.max(220, PADY * 2 + (maxRows - 1) * ROW + NH);
+      var edgeSvg = edges.map(function(e){
+        var a = pos[e.from], b = pos[e.to]; if (!a || !b) return "";
+        var x1 = a.x + NW, y1 = a.y + NH / 2, x2 = b.x, y2 = b.y + NH / 2, mid = (x1 + x2) / 2;
+        return '<path d="M ' + x1 + " " + y1 + " C " + mid + " " + y1 + ", " + mid + " " + y2 + ", " + x2 + " " + y2 +
+          '" fill="none" stroke="var(--shuttle)" stroke-width="1.5" opacity="0.55" marker-end="url(#obarrow)"/>';
+      }).join("");
+      var nodeSvg = ids.map(function(id){
+        var a = byId[id] || { id: id }, c = byAgent[id] || {}, baton = id === holder, busy = a.busy, pp = pos[id];
+        var stroke = baton ? "var(--shuttle)" : busy ? "var(--thread)" : "var(--border)";
+        var dot = busy ? "var(--thread)" : baton ? "var(--shuttle)" : "var(--muted-foreground)";
+        return '<g class="obnode' + (busy ? " busy" : "") + '" data-agent="g:' + esc(id) + '" transform="translate(' + pp.x + " " + pp.y + ')">' +
+          '<rect x="0" y="0" width="' + NW + '" height="' + NH + '" rx="10" fill="var(--card)" stroke="' + stroke + '" stroke-width="' + (busy || baton ? 2 : 1) + '"/>' +
+          '<circle cx="15" cy="' + (NH / 2) + '" r="4" fill="' + dot + '"' + (busy ? ' class="obdotpulse"' : "") + "/>" +
+          '<text x="28" y="' + (NH / 2 - 2) + '" fill="var(--card-foreground)" font-size="12" font-weight="600">' + esc(trunc(id, 15)) + "</text>" +
+          '<text x="28" y="' + (NH / 2 + 12) + '" fill="var(--muted-foreground)" font-size="10">' + esc(a.kind || "agent") + (c.turns ? " \\u00b7 " + c.turns + "t" : "") + "</text>" +
+          (baton ? '<text x="' + (NW - 8) + '" y="12" text-anchor="end" fill="var(--shuttle-ink)" font-size="8.5" font-weight="700" letter-spacing="0.06em">BATON</text>' : "") +
+          "</g>";
+      }).join("");
+      var note = edges.length ? "" : '<div class="obnote">No baton handoffs yet \\u2014 the flow graph draws itself as the baton moves between agents.</div>';
+      return note + '<div class="obcanvaswrap"><svg viewBox="0 0 ' + W + " " + H + '" class="obsvg" preserveAspectRatio="xMidYMid meet">' +
+        '<defs><marker id="obarrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--shuttle)"/></marker></defs>' +
+        edgeSvg + nodeSvg + "</svg></div>";
+    }
+    // TIMELINE: the chronological trace — turns, handoffs, routes, memory folds.
+    function observatoryTimeline(events){
+      var KINDS = { run_complete: ["ok", 1], handoff: ["baton", 1], route_started: ["info", 1], route_step: ["info", 1],
+        route_completed: ["ok", 1], route_failed: ["err", 1], memory_add: ["mem", 1], memory_update: ["mem", 1],
+        memory_forget: ["mem", 1], needs_input: ["warn", 1], error: ["err", 1], decision: ["info", 1] };
+      var evs = (events || []).filter(function(e){ return KINDS[e.kind]; }).sort(function(a, b){ return a.ts - b.ts; });
+      if (!evs.length) return '<div class="obnote">No fleet events yet. Run a turn and the trace fills in.</div>';
+      var base = evs[0].ts;
+      var rows = evs.map(function(e){
+        var p = e.payload || {}, cls = KINDS[e.kind][0], label;
+        if (e.kind === "run_complete") label = esc(e.agentId || "agent") + " finished a turn" + (p.durationMs ? " \\u00b7 " + (Math.round(p.durationMs / 100) / 10) + "s" : "");
+        else if (e.kind === "handoff") label = "baton \\u00b7 " + esc(p.from || "?") + " \\u2192 " + esc(p.to || "?");
+        else if (e.kind.indexOf("route_") === 0) label = "route " + e.kind.slice(6) + (p.error ? " \\u00b7 " + esc(p.error) : "");
+        else if (e.kind.indexOf("memory_") === 0) label = "brain \\u00b7 " + e.kind.slice(7) + (p.kind ? " (" + esc(p.kind) + ")" : "");
+        else if (e.kind === "needs_input") label = esc(e.agentId || "agent") + " needs input";
+        else if (e.kind === "error") label = esc(p.message || "error");
+        else label = "decision \\u00b7 " + esc(trunc(p.text || "", 56));
+        var secs = Math.max(0, Math.round((e.ts - base) / 1000));
+        var t = secs < 60 ? secs + "s" : Math.floor(secs / 60) + "m " + (secs % 60) + "s";
+        return '<li class="obtl ' + cls + '"><span class="obtldot"></span><span class="obtllabel">' + label + '</span><span class="obtltime">' + t + "</span></li>";
+      }).join("");
+      return '<ol class="obtimeline">' + rows + "</ol>";
+    }
+    // METRICS: the baton path + counts + per-agent fleet breakdown.
+    function observatoryMetricsDetail(p, events, byAgent){
+      var agents = (p.agents || []);
+      var handoffs = (events || []).filter(function(e){ return e.kind === "handoff"; }).length;
+      var routes = (events || []).filter(function(e){ return e.kind === "route_completed" || e.kind === "route_failed"; }).length;
+      var chain = [];
+      (events || []).forEach(function(e){ if (e.kind === "handoff" && e.payload){ if (!chain.length && e.payload.from) chain.push(e.payload.from); if (e.payload.to) chain.push(e.payload.to); } });
+      var CAP = 16, trimmed = chain.length > CAP, shownChain = trimmed ? chain.slice(chain.length - CAP) : chain;
+      var chainHtml = chain.length
+        ? (trimmed ? '<span class="obsub">+' + (chain.length - CAP) + ' earlier</span> <span class="obarrow">\\u2192</span> ' : "") +
+          shownChain.map(function(a, i){ return (i ? ' <span class="obarrow">\\u2192</span> ' : "") + '<span class="obchip">' + esc(a) + "</span>"; }).join("")
+        : '<span class="obsub">no handoffs yet</span>';
+      var rows = agents.map(function(a){
+        var c = byAgent[a.id] || {}, baton = a.id === p.holder, cls = a.busy ? "busy" : baton ? "baton" : "idle";
+        return '<div class="obrow"><span class="obdot ' + cls + '"></span><span class="obname">' + esc(a.id) + "</span>" +
+          '<span class="obkind">' + esc(a.kind || "") + (a.role ? " \\u00b7 " + esc(a.role) : "") + "</span>" +
+          '<span class="obspend">' + money(c.usd || 0) + '</span><span class="obturns">' + (c.turns || 0) + " turns</span>" +
+          '<span class="obtok">' + tokfmt((c.tokensIn || 0) + (c.tokensOut || 0)) + " tok</span></div>";
+      }).join("") || '<div class="obsub" style="padding:10px 2px">No agents.</div>';
+      function mini(l, v){ return '<div class="obminicard"><div class="obcl">' + l + '</div><div class="obcv sm">' + v + "</div></div>"; }
+      return '<div class="obmsec"><div class="obmlabel">Baton path</div><div class="obchain">' + chainHtml + "</div></div>" +
+        '<div class="obmgrid">' + mini("Handoffs", handoffs) + mini("Routes", routes) + mini("Events", (events || []).length) + "</div>" +
         '<div class="obagents"><div class="obagentshead">Fleet</div>' + rows + "</div>";
-      wireObservatoryDrag(el);
     }
     function observatoryCanvas(agents, holder, byAgent){
       var n = agents.length, W = 680, H = Math.max(260, 80 + n * 62);
