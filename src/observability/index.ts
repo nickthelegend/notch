@@ -12,9 +12,24 @@
  */
 
 import type { LoomEvent } from "../types.js";
-import { NotchTelemetry, resolveTelemetryConfig, type SpanInput } from "./signoz.js";
+import { NotchTelemetry, newTraceId, resolveTelemetryConfig, type SpanInput } from "./signoz.js";
 
 let singleton: NotchTelemetry | null = null;
+
+// One trace per agent turn: minted when a turn starts, reused by every span in
+// that turn (tool calls, the completion), cleared when it ends — so SigNoz shows
+// a real span tree per turn instead of one orphan span per event.
+const turnTrace = new Map<string, string>();
+
+/** The trace id a span belongs to, advancing the per-agent turn as it goes. */
+function traceIdFor(event: LoomEvent): string {
+  const agent = event.agentId ?? "";
+  const isTurnStart = event.kind === "status" && (event.payload as Record<string, unknown>)?.state === "turn_started";
+  if (isTurnStart || !turnTrace.has(agent)) turnTrace.set(agent, newTraceId());
+  const id = turnTrace.get(agent)!;
+  if (event.kind === "run_complete") turnTrace.delete(agent); // this span closes the turn
+  return id;
+}
 
 export function telemetry(): NotchTelemetry {
   if (!singleton) singleton = new NotchTelemetry(resolveTelemetryConfig());
@@ -123,8 +138,9 @@ export function recordAgentEvent(event: LoomEvent, ctx: EventContext = {}): void
   try {
     const t = telemetry();
     if (!t.enabled) return;
+    const traceId = traceIdFor(event); // advance the per-agent turn trace for every event
     const span = eventToSpan(event, ctx);
-    if (span) t.span(span);
+    if (span) t.span({ ...span, traceId });
   } catch {
     /* never let telemetry throw into the agent loop */
   }
