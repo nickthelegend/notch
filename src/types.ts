@@ -162,6 +162,20 @@ export interface ProjectConfig {
   routes?: Record<string, RouteStepSpec[]>;
   projection?: ProjectionConfig;
   brain?: BrainConfig;
+  /** Which SKILL.md skills are injected into the briefing, by skill id. */
+  skills?: Record<string, boolean>;
+  /** MCP servers this project can offer agents (mirrors the Anthropic API shape). */
+  mcps?: McpServerConfig[];
+}
+
+/** One MCP server, in the shape the Anthropic API's `mcp_servers` accepts. */
+export interface McpServerConfig {
+  name: string;
+  url: string;
+  description?: string;
+  icon?: string;
+  connected?: boolean;
+  enabledForSession?: boolean;
 }
 
 // ---------------------------------------------------------------------------
