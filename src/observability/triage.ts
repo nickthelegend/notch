@@ -1,0 +1,230 @@
+/**
+ * Agent self-triage — "why did I fail?"
+ *
+ * Agent-native observability: an agent (or you, on its behalf) reads its OWN
+ * OpenTelemetry traces back out of SigNoz and gets a root cause. We query the
+ * agent's recent spans from ClickHouse (SigNoz's store), derive a deterministic
+ * root cause + fix from them, and — when Claude is reachable (an Anthropic key,
+ * or the `claude` CLI you're already signed into) — have Claude phrase it. The
+ * local event log is a fallback source so triage still works if SigNoz is down.
+ */
+
+import { spawn } from "node:child_process";
+import type { LoomEvent } from "../types.js";
+
+const CH_URL = process.env.NOTCH_CLICKHOUSE_URL || "http://localhost:8123";
+
+export type TriageSpan = {
+  ts: number;
+  name: string;
+  ms: number;
+  code: number; // OTel status: 2 = error
+  msg: string;
+  kind: string;
+  cost: number;
+  tin: number;
+  tout: number;
+};
+
+export type TriageResult = {
+  agent: string;
+  spanCount: number;
+  errorCount: number;
+  evidence: TriageSpan[];
+  rootCause: string;
+  suggestedFix: string;
+  source: "llm" | "heuristic" | "no-data";
+  from: "signoz" | "local-log" | "none";
+};
+
+function safeId(id: string): string {
+  return id.replace(/[^\w.\-:]/g, "");
+}
+
+async function chQuery(sql: string): Promise<Record<string, unknown>[]> {
+  if (typeof globalThis.fetch !== "function") throw new Error("no fetch");
+  const res = await fetch(`${CH_URL}/?default_format=JSONEachRow`, { method: "POST", body: sql });
+  if (!res.ok) throw new Error(`clickhouse ${res.status}`);
+  const text = await res.text();
+  return text.trim().split("\n").filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>);
+}
+
+/** Pull the agent's own spans (its turns + the handoffs it's part of) from SigNoz. */
+async function fetchAgentSpans(agent: string, limit = 40): Promise<TriageSpan[]> {
+  const a = safeId(agent);
+  const sql = `
+    SELECT toUnixTimestamp64Milli(timestamp) AS ts, name,
+           round(duration_nano / 1e6) AS ms, status_code AS code, status_message AS msg,
+           attributes_string['notch.event.kind'] AS kind,
+           attributes_number['gen_ai.usage.cost_usd'] AS cost,
+           toUInt32(attributes_number['gen_ai.usage.input_tokens']) AS tin,
+           toUInt32(attributes_number['gen_ai.usage.output_tokens']) AS tout
+    FROM signoz_traces.distributed_signoz_index_v3
+    WHERE \`resource_string_service$$name\` = 'notch'
+      AND (attributes_string['gen_ai.agent.id'] = '${a}'
+           OR attributes_string['notch.handoff.to'] = '${a}'
+           OR attributes_string['notch.handoff.from'] = '${a}')
+    ORDER BY timestamp DESC
+    LIMIT ${Math.min(120, limit)}`;
+  const rows = await chQuery(sql);
+  return rows.map((r) => ({
+    ts: Number(r.ts),
+    name: String(r.name),
+    ms: Number(r.ms),
+    code: Number(r.code),
+    msg: String(r.msg ?? ""),
+    kind: String(r.kind ?? ""),
+    cost: Number(r.cost ?? 0),
+    tin: Number(r.tin ?? 0),
+    tout: Number(r.tout ?? 0),
+  }));
+}
+
+/** Fallback: derive trace-shaped rows from the local event log (same data SigNoz gets). */
+function spansFromLog(agent: string, events: LoomEvent[]): TriageSpan[] {
+  const out: TriageSpan[] = [];
+  for (const e of events) {
+    const p = e.payload ?? {};
+    const mine =
+      e.agentId === agent || p.to === agent || p.from === agent || p.agent === agent;
+    if (!mine) continue;
+    if (e.kind === "run_complete") {
+      out.push({ ts: e.ts, name: "gen_ai.agent.turn", ms: Number(p.durationMs ?? 0), code: p.error ? 2 : 1,
+        msg: String(p.error ?? ""), kind: e.kind, cost: 0, tin: Number(p.inputTokens ?? 0), tout: Number(p.outputTokens ?? 0) });
+    } else if (e.kind === "error") {
+      out.push({ ts: e.ts, name: "notch.error", ms: 0, code: 2, msg: String(p.message ?? "error"), kind: e.kind, cost: 0, tin: 0, tout: 0 });
+    } else if (e.kind === "route_failed") {
+      out.push({ ts: e.ts, name: "notch.route.failed", ms: 0, code: 2, msg: String(p.error ?? p.reason ?? "route failed"), kind: e.kind, cost: 0, tin: 0, tout: 0 });
+    } else if (e.kind === "handoff") {
+      out.push({ ts: e.ts, name: "notch.baton.handoff", ms: 0, code: 1, msg: `${p.from ?? "?"} -> ${p.to ?? "?"}`, kind: e.kind, cost: 0, tin: 0, tout: 0 });
+    } else if (e.kind === "needs_input") {
+      out.push({ ts: e.ts, name: "notch.needs_input", ms: 0, code: 1, msg: String(p.question ?? "needs input"), kind: e.kind, cost: 0, tin: 0, tout: 0 });
+    }
+  }
+  return out.sort((a, b) => b.ts - a.ts).slice(0, 40);
+}
+
+const isError = (s: TriageSpan): boolean => s.code === 2 || s.name === "notch.error" || s.name === "notch.route.failed";
+
+function humanAgo(ms: number): string {
+  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+}
+
+/** Deterministic root cause from the spans — reliable, no model required. */
+function heuristic(agent: string, spans: TriageSpan[]): { rootCause: string; suggestedFix: string } {
+  const errors = spans.filter(isError);
+  const turns = spans.filter((s) => s.name === "gen_ai.agent.turn");
+  if (!spans.length) {
+    return { rootCause: `No traces for ${agent} yet.`, suggestedFix: "Run a turn so it emits telemetry, then triage again." };
+  }
+  if (!errors.length) {
+    const slow = [...turns].sort((a, b) => b.ms - a.ms)[0];
+    return {
+      rootCause: `${agent} looks healthy — ${turns.length} turn(s), no error spans in its last ${spans.length} events${slow ? `, slowest turn ${slow.ms}ms` : ""}.`,
+      suggestedFix: "Nothing to fix; the agent completed its turns cleanly.",
+    };
+  }
+  const last = errors[0]!;
+  const ago = humanAgo(last.ts);
+  const where =
+    last.name === "notch.route.failed" ? "a route step" : last.name === "notch.error" ? "the agent itself" : `a ${last.name}`;
+  // upstream: the handoff that last passed the baton INTO this agent
+  const upstream = spans.find((s) => s.name === "notch.baton.handoff" && s.msg.endsWith(`-> ${agent}`));
+  const upTxt = upstream ? ` Upstream: the baton reached it via ${upstream.msg.replace(" -> ", " → ")}.` : "";
+  const rootCause = `${agent} hit ${errors.length} error(s); the most recent (${ago}) was on ${where}: "${(last.msg || "unknown").slice(0, 220)}".${upTxt}`;
+  const m = last.msg.toLowerCase();
+  let fix = "Open the failing span in SigNoz for the full context, then retry the turn.";
+  if (/exited|crash|serve exited|killed|sigterm|sigkill|process/.test(m)) fix = "The agent process crashed — restart the agent (or its CLI/daemon) and re-hand the baton.";
+  else if (/timeout|timed out|deadline/.test(m)) fix = "A call timed out — raise the tool/turn timeout or check the upstream service, then re-hand the baton.";
+  else if (/permission|denied|unauthor|not signed|401|403/.test(m)) fix = "Auth/permission failure — re-sign-in the agent's CLI (or refresh its API key) and retry.";
+  else if (/json|parse|malformed|unexpected token|bad request/.test(m)) fix = "Malformed input, likely from the upstream handoff — validate the briefing/JSON before passing the baton.";
+  else if (/rate|429|quota|limit/.test(m)) fix = "Rate-limited — back off and retry, or route the turn to a fallback agent.";
+  else if (/model .* (not )?support|no public api/.test(m)) fix = "The model/endpoint isn't supported — switch the agent's model in .loom/config.json.";
+  return { rootCause, suggestedFix: fix };
+}
+
+/** Ask Claude to phrase the root cause: Anthropic API key first, then the local `claude` CLI. */
+async function llmPhrase(agent: string, spans: TriageSpan[]): Promise<string | null> {
+  // Deterministic escape hatch (tests, or an operator who wants heuristic only).
+  if (process.env.NOTCH_TRIAGE_NO_LLM === "1") return null;
+  const lines = spans
+    .slice(0, 30)
+    .map((s) => `${new Date(s.ts).toISOString()} ${s.name} ${s.ms}ms status=${s.code}${s.msg ? ` "${s.msg.slice(0, 160)}"` : ""}`)
+    .join("\n");
+  const prompt =
+    `You are triaging a coding agent named "${agent}" from its OpenTelemetry traces (newest first):\n\n${lines}\n\n` +
+    `In 2-3 sentences: the root cause of any failure, the specific span/turn, any upstream handoff, and one concrete fix. If healthy, say so plainly.`;
+
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (key && typeof globalThis.fetch === "function") {
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
+        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 320, messages: [{ role: "user", content: prompt }] }),
+      });
+      if (res.ok) {
+        const j = (await res.json()) as { content?: Array<{ text?: string }> };
+        const text = (j.content ?? []).map((c) => c.text ?? "").join("").trim();
+        if (text) return text;
+      }
+    } catch {
+      /* fall through to CLI */
+    }
+  }
+  return await claudeCli(prompt);
+}
+
+/** Best-effort: pipe the prompt through the signed-in `claude` CLI (print mode). */
+function claudeCli(prompt: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn("claude", ["-p", prompt], { stdio: ["ignore", "pipe", "ignore"] });
+    } catch {
+      resolve(null);
+      return;
+    }
+    let out = "";
+    const kill = setTimeout(() => { try { child.kill(); } catch { /* ignore */ } resolve(null); }, 25_000);
+    child.stdout?.on("data", (d: Buffer) => (out += d.toString()));
+    child.on("error", () => { clearTimeout(kill); resolve(null); });
+    child.on("close", () => { clearTimeout(kill); resolve(out.trim() || null); });
+  });
+}
+
+/**
+ * Triage one agent. `fallbackEvents` (the local log) is used only when SigNoz
+ * has nothing, so triage always returns something useful.
+ */
+export async function triageAgent(agent: string, fallbackEvents: LoomEvent[] = []): Promise<TriageResult> {
+  let spans: TriageSpan[] = [];
+  let from: TriageResult["from"] = "none";
+  try {
+    spans = await fetchAgentSpans(agent);
+    if (spans.length) from = "signoz";
+  } catch {
+    /* SigNoz/ClickHouse unreachable — fall back to the local log */
+  }
+  if (!spans.length && fallbackEvents.length) {
+    spans = spansFromLog(agent, fallbackEvents);
+    if (spans.length) from = "local-log";
+  }
+  const errorCount = spans.filter(isError).length;
+  const base = heuristic(agent, spans);
+  const llm = spans.length ? await llmPhrase(agent, spans) : null;
+  return {
+    agent,
+    spanCount: spans.length,
+    errorCount,
+    evidence: spans.slice(0, 12),
+    rootCause: llm ?? base.rootCause,
+    suggestedFix: base.suggestedFix,
+    source: llm ? "llm" : spans.length ? "heuristic" : "no-data",
+    from,
+  };
+}
