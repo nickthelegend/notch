@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "author": "nickthelegend",
   "description": "Notch desktop — an Electron shell around the Notch daemon's web app. See BUILD.md for why the build config looks like this.",
   "main": "main.js",
   "repository": {
