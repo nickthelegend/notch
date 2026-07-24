@@ -1152,7 +1152,7 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
   .obcard{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px}
   .obcard.accent{border-color:color-mix(in srgb, var(--primary) 40%, transparent)}
   .obcl{font-size:11px;color:var(--muted-foreground);font-family:var(--font-mono);letter-spacing:.04em;text-transform:uppercase}
-  .obcv{font-size:22px;font-weight:650;letter-spacing:-.02em;margin-top:4px;font-variant-numeric:tabular-nums}
+  .obcv{font-size:22px;font-weight:650;letter-spacing:-.02em;margin-top:4px;font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .obcard.accent .obcv{color:var(--primary)}
   .obcv .live{color:var(--thread-ink)}
   .obcs{font-size:11px;color:var(--muted-foreground);margin-top:2px}
@@ -1179,10 +1179,16 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
   .obturns,.obtok{color:var(--muted-foreground);font-size:12px;font-variant-numeric:tabular-nums;min-width:64px;text-align:right}
   .obempty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;height:100%;text-align:center}
   /* sub-view tabs (Canvas / Graph / Timeline / Metrics) */
-  .obtabs{display:inline-flex;gap:2px;background:var(--secondary);border:1px solid var(--border);
-    border-radius:var(--radius);padding:3px;margin-bottom:16px}
-  .obtab{appearance:none;background:none;border:0;color:var(--muted-foreground);font:inherit;font-size:12.5px;
+  /* Scrolls rather than clips when the pane is narrow (file tree open, small
+     window) — all eight views stay reachable; keyboard/arrow nav scrolls the
+     focused tab into view. Scrollbar hidden for the pill look. */
+  .obtabs{display:flex;gap:2px;background:var(--secondary);border:1px solid var(--border);
+    border-radius:var(--radius);padding:3px;margin-bottom:16px;max-width:100%;overflow-x:auto;
+    overscroll-behavior-x:contain;scrollbar-width:none}
+  .obtabs::-webkit-scrollbar{display:none}
+  .obtab{appearance:none;background:none;border:0;color:var(--muted-foreground);font:inherit;font-size:12.5px;flex:none;white-space:nowrap;
     font-weight:500;padding:6px 14px;border-radius:var(--radius-sm);cursor:pointer;transition:background .15s,color .15s}
+  .obtab:focus-visible{outline:2px solid var(--ring);outline-offset:1px}
   .obtab:hover{color:var(--foreground)}
   .obtab.on{background:var(--card);color:var(--foreground);box-shadow:0 1px 0 rgb(0 0 0 / .12)}
   .obbody{min-height:200px}
@@ -1336,7 +1342,7 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
   /* KAIRO dense metrics */
   .kmgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px}
   .kmcard{position:relative;overflow:hidden;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);padding:12px 14px}
-  .kmlabel{font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted-foreground);margin-bottom:5px}
+  .kmlabel{font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted-foreground);margin-bottom:5px;padding-right:46px}
   .kmvalue{font-size:24px;font-weight:800;line-height:1;color:var(--foreground)}
   .kmvalue .kmcost{color:var(--primary)}
   .kmvalue .kmsm{font-size:13px;font-weight:600;display:inline-block;line-height:1.3}
@@ -1414,7 +1420,7 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
   .ttevdesc{font-size:15px;font-weight:600;margin-bottom:8px}
   .ttevmeta{font-size:11.5px;color:var(--muted-foreground);font-family:var(--font-mono)}
   .ttprogbar{height:6px;background:var(--secondary);border-radius:99px;overflow:hidden;margin-bottom:4px}
-  .ttprogfill{height:100%;background:var(--primary);border-radius:99px;transition:width .3s}
+  .ttprogfill{height:100%;width:100%;background:var(--primary);border-radius:99px;transform-origin:left;transform:scaleX(0);transition:transform .3s ease-out}
   /* per-project settings: gear button + modal */
   .psetbtn{appearance:none;flex:none;margin-left:6px;width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;
     border:none;background:none;color:var(--muted-foreground);cursor:pointer;opacity:0;border-radius:6px;transition:opacity .12s,color .12s,background .12s}
@@ -2702,19 +2708,20 @@ ${BRAND_SPRITE}
       var active = agents.filter(function(a){ return a.busy; }).length;
       var totalUsd = m.totalUsd != null ? m.totalUsd : (p.costUsd || 0);
       var turns = m.turns || 0, tin = m.tokensIn || 0, tout = m.tokensOut || 0;
-      function card(label, val, sub, accent){
+      function card(label, val, sub, accent, titleText){
         return '<div class="obcard' + (accent ? " accent" : "") + '"><div class="obcl">' + label +
-          '</div><div class="obcv">' + val + '</div><div class="obcs">' + sub + "</div></div>";
+          '</div><div class="obcv"' + (titleText ? ' title="' + esc(titleText) + '"' : "") + ">" + val + '</div><div class="obcs">' + sub + "</div></div>";
       }
       var cards =
         card("Agents", '<span class="live">' + active + "</span> / " + agents.length, "active / in fleet") +
-        card("Baton", esc(p.holder || "\\u2014"), "who holds it now") +
+        card("Baton", esc(p.holder || "\\u2014"), "who holds it now", false, p.holder || "") +
         card("Spend", money(totalUsd), "across all agents", true) +
         card("Turns", String(turns), "completed") +
         card("Tokens", tokfmt(tin + tout), tokfmt(tin) + " in \\u00b7 " + tokfmt(tout) + " out");
       var VIEWS = [["canvas", "Canvas"], ["graph", "Graph"], ["timeline", "Timeline"], ["metrics", "Metrics"], ["decisions", "Decisions"], ["burn", "Burn"], ["replay", "Replay"], ["travel", "Time Travel"]];
       var tabs = VIEWS.map(function(v){
-        return '<button class="obtab' + (state.obView === v[0] ? " on" : "") + '" data-obv="' + v[0] + '">' + esc(v[1]) + "</button>";
+        var on = state.obView === v[0];
+        return '<button class="obtab' + (on ? " on" : "") + '" role="tab" aria-selected="' + on + '" tabindex="' + (on ? "0" : "-1") + '" data-obv="' + v[0] + '">' + esc(v[1]) + "</button>";
       }).join("");
       var body;
       if (state.obView === "graph") body = observatoryGraph(agents, p.holder, events, byAgent);
@@ -2730,12 +2737,31 @@ ${BRAND_SPRITE}
           '<span>Observatory</span> <span class="obsub">agents in action \\u00b7 the one brain</span></div>' +
           '<a class="obsignoz" href="' + signozBase() + '" target="_blank" rel="noreferrer">' + ICONS.route + " View in SigNoz</a></div>" +
         '<div class="obmetrics">' + cards + "</div>" +
-        '<div class="obtabs">' + tabs + "</div>" +
+        '<div class="obtabs" role="tablist" aria-label="Observatory views">' + tabs + "</div>" +
         obExplain(state.obView) +
         '<div class="obbody">' + body + "</div>";
-      Array.prototype.forEach.call(el.querySelectorAll(".obtab"), function(t){
-        t.onclick = function(){ state.obView = t.getAttribute("data-obv"); renderObservatory(el, p, m, events); };
+      // Tabs follow the ARIA pattern: click or arrow-key to move, the active tab
+      // is the only tab stop (roving tabindex), and it stays scrolled into view.
+      var tabEls = Array.prototype.slice.call(el.querySelectorAll(".obtab"));
+      function selectTab(t, kbd){ if (kbd) state.obTabFocus = true; state.obView = t.getAttribute("data-obv"); renderObservatory(el, p, m, events); }
+      tabEls.forEach(function(t, i){
+        t.onclick = function(){ selectTab(t); };
+        t.onkeydown = function(ev){
+          var d = ev.key === "ArrowRight" ? 1 : ev.key === "ArrowLeft" ? -1 : 0;
+          if (d){ ev.preventDefault(); selectTab(tabEls[(i + d + tabEls.length) % tabEls.length], true); }
+          else if (ev.key === "Home"){ ev.preventDefault(); selectTab(tabEls[0], true); }
+          else if (ev.key === "End"){ ev.preventDefault(); selectTab(tabEls[tabEls.length - 1], true); }
+        };
       });
+      var onTab = el.querySelector(".obtab.on"), strip = el.querySelector(".obtabs");
+      if (onTab && strip){
+        // Only nudge the strip's own horizontal scroll — never the page (a live
+        // refresh must not yank a reader back up to the tabs).
+        var tl = onTab.offsetLeft, tr = tl + onTab.offsetWidth;
+        if (tl < strip.scrollLeft) strip.scrollLeft = tl - 8;
+        else if (tr > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = tr - strip.clientWidth + 8;
+        if (state.obTabFocus){ state.obTabFocus = false; onTab.focus({ preventScroll: true }); }
+      }
       Array.prototype.forEach.call(el.querySelectorAll(".obtriage"), function(b){
         b.onclick = function(ev){ ev.stopPropagation(); openTriage(p, b.getAttribute("data-triage")); };
       });
@@ -2903,7 +2929,7 @@ ${BRAND_SPRITE}
             : '<span class="rpnote">' + ICONS.route + " The trace waterfall + SigNoz link light up once SigNoz is reachable \\u2014 this turn is from the local event log.</span>") +
           "</div></div>";
       var src = state.obReplaySrc === "local-log";
-      var scrub = '<div class="rpscrubwrap"><input class="rpscrub" type="range" min="0" max="' + (turns.length - 1) + '" value="' + ix + '"/>' +
+      var scrub = '<div class="rpscrubwrap"><input class="rpscrub" type="range" aria-label="Scrub turns" aria-valuetext="turn ' + (ix + 1) + " of " + turns.length + (t.agent ? ", " + esc(t.agent) : "") + '" min="0" max="' + (turns.length - 1) + '" value="' + ix + '"/>' +
         '<div class="rpscrubinfo">turn ' + (ix + 1) + " / " + turns.length + " \\u00b7 " + hh + "</div></div>";
       host.innerHTML = '<div class="replaywrap"><div class="obmlabel">Span replay \\u00b7 scrub the fleet\\u2019s turns \\u00b7 ' + (src ? "local event log" : "from SigNoz") + "</div>" + scrub + frame + "</div>";
       var range = host.querySelector(".rpscrub");
@@ -3021,7 +3047,7 @@ ${BRAND_SPRITE}
         var pending = state.obPendingDecision; state.obPendingDecision = null;
         if (pending && state.obDecisions[pending]) selectDecision(pending);
         else if (decisions[0]) selectDecision(decisions[0].id);
-      }).catch(function(){ host.innerHTML = '<div class="obnote">Decisions unavailable.</div>'; });
+      }).catch(function(){ host.innerHTML = '<div class="obnote">Decisions unavailable \\u2014 the daemon didn\\u2019t answer. Switch tabs and back to retry.</div>'; });
     }
     // ---- Time-Travel Replay (KAIRO Replay — the time machine) --------------
     function observatoryTravel(p){
@@ -3041,10 +3067,10 @@ ${BRAND_SPRITE}
         }).join("");
         host.innerHTML =
           '<div class="ttheader"><div class="ttctrls"><button class="ttbtn" id="ttprev">\\u25c0</button><button class="ttbtn ttplay" id="ttplay">\\u25b6 Play</button><button class="ttbtn" id="ttnext">\\u25b6</button></div><div class="ttframe">Frame <span id="ttnum">1</span> / ' + snaps.length + "</div></div>" +
-          '<div class="tttimeline"><input type="range" class="ttscrub" id="ttscrub" min="0" max="' + (snaps.length - 1) + '" value="0"><div class="ttmarkers">' + markers + "</div></div>" +
+          '<div class="tttimeline"><input type="range" class="ttscrub" id="ttscrub" aria-label="Scrub the run timeline" aria-valuetext="frame 1 of ' + snaps.length + '" min="0" max="' + (snaps.length - 1) + '" value="0"><div class="ttmarkers">' + markers + "</div></div>" +
           '<div class="ttbody"><div class="ttstate" id="ttstate"></div><div class="ttevent" id="ttevent"></div></div>';
         var scrub = host.querySelector("#ttscrub");
-        function go(i){ state.obTravel.i = i; scrub.value = i; updateTravelFrame(); }
+        function go(i){ state.obTravel.i = i; scrub.value = i; scrub.setAttribute("aria-valuetext", "frame " + (i + 1) + " of " + snaps.length); updateTravelFrame(); }
         scrub.oninput = function(){ go(Number(scrub.value)); };
         host.querySelector("#ttprev").onclick = function(){ if (state.obTravel.i > 0) go(state.obTravel.i - 1); };
         host.querySelector("#ttnext").onclick = function(){ if (state.obTravel.i < snaps.length - 1) go(state.obTravel.i + 1); };
@@ -3054,7 +3080,7 @@ ${BRAND_SPRITE}
           else { btn.textContent = "\\u23f8 Pause"; t.timer = setInterval(function(){ if (t.i < snaps.length - 1) go(t.i + 1); else { clearInterval(t.timer); t.timer = null; btn.textContent = "\\u25b6 Play"; } }, 800); }
         };
         updateTravelFrame();
-      }).catch(function(){ host.innerHTML = '<div class="obnote">Time-travel unavailable.</div>'; });
+      }).catch(function(){ host.innerHTML = '<div class="obnote">Time-travel unavailable \\u2014 the daemon didn\\u2019t answer. Switch tabs and back to retry.</div>'; });
     }
     function updateTravelFrame(){
       var t = state.obTravel; if (!t) return; var s = t.snaps[t.i]; if (!s) return;
@@ -3081,7 +3107,7 @@ ${BRAND_SPRITE}
         var col = s.triggerEvent.type === "error" ? "var(--err)" : s.triggerEvent.type === "decision" ? "var(--primary)" : "var(--thread)";
         var pct = t.snaps.length > 1 ? Math.round((t.i / (t.snaps.length - 1)) * 100) : 100;
         evEl.innerHTML = '<div class="ttevcard" style="border-color:' + col + '"><div class="ttevtype" style="color:' + col + '">' + esc(String(s.triggerEvent.type).toUpperCase().replace(/_/g, " ")) + '</div><div class="ttevdesc">' + esc(s.triggerEvent.description) + '</div><div class="ttevmeta">Agent: ' + esc(s.triggerEvent.agentId) + " \\u00b7 " + new Date(s.timestampMs).toLocaleTimeString() + "</div></div>" +
-          '<div class="ttprog"><div class="ttsl">RUN PROGRESS</div><div class="ttprogbar"><div class="ttprogfill" style="width:' + pct + '%"></div></div><div class="ttdc">' + pct + "% complete</div></div>";
+          '<div class="ttprog"><div class="ttsl">RUN PROGRESS</div><div class="ttprogbar"><div class="ttprogfill" style="transform:scaleX(' + (pct / 100) + ')"></div></div><div class="ttdc">' + pct + "% complete</div></div>";
       }
     }
     // GRAPH: the baton/handoff DAG — agents in columns by handoff depth, edges
