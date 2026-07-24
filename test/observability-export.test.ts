@@ -88,6 +88,14 @@ describe("Notch -> SigNoz OTLP export (end to end)", () => {
     expect(a["notch.project"]).toBe("obs");
     // the export identifies itself to SigNoz as the `notch` service
     expect(services.has("notch")).toBe(true);
+    // the turn span carries the full GenAI shape, not just tokens: the runtime
+    // stamps the adapter kind (→ gen_ai.system) and correlates the turn's model
+    // and cost onto run_complete so they ride the span.
+    expect(a["gen_ai.system"]).toBe("echo"); // the adapter kind, not the fallback "notch"
+    expect(a["gen_ai.request.model"]).toBe("echo-1");
+    expect(Number(a["gen_ai.usage.cost_usd"])).toBeGreaterThan(0);
+    expect(Number(a["gen_ai.usage.input_tokens"])).toBeGreaterThan(0);
+    expect(Number(a["gen_ai.usage.output_tokens"])).toBeGreaterThan(0);
   });
 
   it("exports a notch.baton.handoff span after the baton moves", async () => {

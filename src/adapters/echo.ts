@@ -73,7 +73,7 @@ export class EchoAdapter extends AdapterBase {
       this.emit({ kind: "status", payload: { state: "turn_cost", costUsd: 0.001 } });
       this.emit({
         kind: "run_complete",
-        payload: { durationMs: Date.now() - started, costUsd: 0.001, inputTokens, outputTokens },
+        payload: { durationMs: Date.now() - started, model: "echo-1", costUsd: 0.001, inputTokens, outputTokens },
       });
     } finally {
       this._busy = false;

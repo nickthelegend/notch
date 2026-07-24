@@ -131,6 +131,10 @@ export class ProjectRuntime {
     string,
     { usd: number; turns: number; ms: number; tokensIn: number; tokensOut: number }
   >();
+  // A turn's cost lands on a `turn_cost` status just before its `run_complete`
+  // (the CLI reports it mid-stream). We hold it here so the completed turn — and
+  // therefore its exported gen_ai span — carries the real cost, not just tokens.
+  private pendingCost = new Map<string, number>();
 
   private rehydrateCosts(): void {
     for (const event of this.log.list({ kinds: ["status", "run_complete"] })) {
@@ -313,11 +317,33 @@ export class ProjectRuntime {
     this.agents.set(cfg.id, agent);
     agent.onEvent((e) => {
       const chat = this.turnChat.get(agent.id);
+      let payload = e.payload;
+      // Enrich the completed turn so its gen_ai span carries system + model +
+      // cost (adapters only put tokens on run_complete). The kind is known here;
+      // the model prefers what the adapter actually used, else the configured
+      // override; the cost is the turn_cost we stashed a moment ago.
+      const p = e.payload as Record<string, unknown>;
+      if (e.kind === "status" && p.state === "turn_cost") {
+        const usd = Number(p.costUsd ?? 0);
+        if (usd > 0) this.pendingCost.set(agent.id, usd);
+      } else if (e.kind === "run_complete") {
+        const model =
+          (typeof p.model === "string" && p.model) ||
+          (typeof cfg.options?.model === "string" ? cfg.options.model : undefined);
+        const cost = this.pendingCost.get(agent.id);
+        this.pendingCost.delete(agent.id);
+        payload = {
+          ...p,
+          adapter: cfg.kind,
+          ...(model ? { model } : {}),
+          ...(cost !== undefined ? { costUsd: cost } : {}),
+        };
+      }
       const event = this.log.append({
         kind: e.kind,
         agentId: agent.id,
         ...(chat ? { chat } : {}),
-        payload: e.payload,
+        payload,
       });
       this.afterAgentEvent(event);
     });
