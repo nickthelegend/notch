@@ -1,0 +1,78 @@
+# Build every native artifact on its own native runner — the reliable path.
+# Desktop dmg/exe/AppImage on macOS/Windows/Linux; the Android apk on Linux.
+# Triggered on a version tag, or manually from the Actions tab.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            build: dmg
+          - os: windows-latest
+            build: nsis
+          - os: ubuntu-latest
+            build: AppImage
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build the daemon
+        run: |
+          npm ci
+          npm run build
+      - name: Build the installer
+        working-directory: desktop
+        run: |
+          npm ci
+          npm run stage
+          npx electron-builder --${{ matrix.build == 'nsis' && 'win' || matrix.build == 'AppImage' && 'linux' || 'mac' }} ${{ matrix.build }} --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: notch-desktop-${{ matrix.os }}
+          path: |
+            desktop/dist/*.dmg
+            desktop/dist/*.exe
+            desktop/dist/*.AppImage
+
+  android-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      # Cloud build (signed) when an Expo token is configured; else local gradle.
+      - name: EAS build (if EXPO_TOKEN set)
+        if: ${{ env.EXPO_TOKEN != '' }}
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        working-directory: app
+        run: |
+          npm ci
+          npx eas-cli build -p android --profile preview --non-interactive --no-wait
+      - name: Local gradle build (fallback)
+        if: ${{ env.EXPO_TOKEN == '' }}
+        working-directory: app
+        run: |
+          npm ci
+          npx expo prebuild -p android --no-install
+          cd android && ./gradlew assembleRelease
+      - uses: actions/upload-artifact@v4
+        if: ${{ env.EXPO_TOKEN == '' }}
+        with:
+          name: notch-android-apk
+          path: app/android/app/build/outputs/apk/**/*.apk
