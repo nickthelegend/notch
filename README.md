@@ -193,6 +193,24 @@ SigNoz Cloud, set `NOTCH_OTEL_ENDPOINT` (and `SIGNOZ_INGESTION_KEY`). Opt out en
 ships at [`docs/signoz-dashboard.json`](docs/signoz-dashboard.json); full details in
 [`docs/observability.md`](docs/observability.md).
 
+**Know which source you are actually reading.** Notch degrades honestly when SigNoz is
+unreachable: `/insights/spans` reports `from: "local-log"`, trace ids come back empty, and the
+Replay tab says *"this turn came from the local event log"* instead of offering a trace
+waterfall. That is real data — it is Notch's own event log, the same turns and token counts the
+CLIs reported — but it is **not** SigNoz, and it is easy to run that way for days without
+noticing. To bring the local stack up and check:
+
+```bash
+./scripts/signoz-up.sh                              # zookeeper → clickhouse → collector → UI
+NOTCH_SIGNOZ_URL=http://localhost:8085 loom up      # so deep links reach that UI
+
+curl -s localhost:7421/api/projects/<id>/insights/spans | jq .from   # must say "signoz"
+```
+
+Start order matters and the script enforces it: ClickHouse needs its keeper first, and a
+collector that booted while ClickHouse was down keeps failing its exporter until it is bounced —
+which looks exactly like "ingestion is broken".
+
 The exporter and the event→span mapping are covered by unit **and** integration tests
 (a stand-in OTLP collector receives real spans from live daemon turns):
 
