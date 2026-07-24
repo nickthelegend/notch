@@ -12,8 +12,7 @@
 import { spawn } from "node:child_process";
 import os from "node:os";
 import type { LoomEvent } from "../types.js";
-
-const CH_URL = process.env.NOTCH_CLICKHOUSE_URL || "http://localhost:8123";
+import { chQuery } from "./clickhouse.js";
 
 /**
  * The `claude` CLI in print mode emits either JSON (`--output-format json`,
@@ -74,14 +73,6 @@ export type TriageResult = {
 
 function safeId(id: string): string {
   return id.replace(/[^\w.\-:]/g, "");
-}
-
-async function chQuery(sql: string): Promise<Record<string, unknown>[]> {
-  if (typeof globalThis.fetch !== "function") throw new Error("no fetch");
-  const res = await fetch(`${CH_URL}/?default_format=JSONEachRow`, { method: "POST", body: sql });
-  if (!res.ok) throw new Error(`clickhouse ${res.status}`);
-  const text = await res.text();
-  return text.trim().split("\n").filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>);
 }
 
 /** Pull the agent's own spans (its turns + the handoffs it's part of) from SigNoz. */

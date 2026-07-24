@@ -22,6 +22,7 @@ import { retrieve } from "../core/brain-index.js";
 import { RouteActiveError } from "../core/routes.js";
 import { recordAgentEvent } from "../observability/index.js";
 import { triageAgent } from "../observability/triage.js";
+import { burnSeries, fetchSpans, healthScore, insightSpansFromLog, traceSpans, type InsightSpan } from "../observability/insights.js";
 import { ADES, buildDefaultRoutes, defaultAgentConfigs, detectAdes } from "../core/ades.js";
 import { logbook, type LogLevel } from "../core/logbook.js";
 import { searchChats, searchCode } from "../core/search.js";
@@ -809,6 +810,71 @@ export class LoomDaemon {
         const agent = String(req.params.agentId ?? "");
         const events = rt.log.list({ limit: 300 });
         res.json({ triage: await triageAgent(agent, events) });
+      }),
+    );
+
+    // Observatory insights, read back from SigNoz's ClickHouse (with a local-log
+    // fallback so the panels still work when SigNoz is empty/down):
+    //   spans  → Span Replay (scrub a turn's spans frame by frame)
+    //   trace  → Trace Waterfall (one trace's span tree + a SigNoz deep link)
+    //   burn   → per-agent cost over time + a linear 24h projection
+    //   health → the 0–100 Agent Health Score with its penalty breakdown
+    app.get(
+      "/api/projects/:id/insights/spans",
+      withRuntime(async (rt, req, res) => {
+        const agent = req.query.agent ? String(req.query.agent) : undefined;
+        const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
+        let spans = await fetchSpans(rt.info.name, { agent, limit }).catch(() => [] as InsightSpan[]);
+        let from: "signoz" | "local-log" = "signoz";
+        if (!spans.length) {
+          spans = insightSpansFromLog(rt.log.list({ limit: 400 }), agent).slice(0, limit);
+          from = "local-log";
+        }
+        res.json({ from, spans });
+      }),
+    );
+    app.get(
+      "/api/projects/:id/insights/trace/:traceId",
+      withRuntime(async (rt, req, res) => {
+        const spans = await traceSpans(String(req.params.traceId ?? "")).catch(() => [] as InsightSpan[]);
+        res.json({ traceId: String(req.params.traceId ?? ""), spans });
+      }),
+    );
+    app.get(
+      "/api/projects/:id/insights/burn",
+      withRuntime(async (rt, req, res) => {
+        const hours = Math.min(720, Math.max(1, Number(req.query.hours) || 24));
+        const buckets = Math.min(60, Math.max(2, Number(req.query.buckets) || 12));
+        const series = await burnSeries(rt.info.name, { hours, buckets }).catch(() => null);
+        res.json({ burn: series, budgets: rt.budgets() });
+      }),
+    );
+    app.get(
+      "/api/projects/:id/insights/health",
+      withRuntime(async (rt, req, res) => {
+        const agent = req.query.agent ? String(req.query.agent) : undefined;
+        let spans = await fetchSpans(rt.info.name, { agent, limit: 200 }).catch(() => [] as InsightSpan[]);
+        let from: "signoz" | "local-log" = "signoz";
+        if (!spans.length) {
+          spans = insightSpansFromLog(rt.log.list({ limit: 400 }), agent);
+          from = "local-log";
+        }
+        res.json({ from, health: healthScore(spans) });
+      }),
+    );
+
+    // Budget CRUD for the burn-rate panel — per-agent USD/day, persisted in state.
+    app.get(
+      "/api/projects/:id/budgets",
+      withRuntime(async (rt, _req, res) => {
+        res.json({ budgets: rt.budgets() });
+      }),
+    );
+    app.put(
+      "/api/projects/:id/budgets/:agentId",
+      withRuntime(async (rt, req, res) => {
+        const usd = Number((req.body as Record<string, unknown>)?.usdPerDay ?? 0);
+        res.json({ budgets: rt.setBudget(String(req.params.agentId ?? ""), usd) });
       }),
     );
 
