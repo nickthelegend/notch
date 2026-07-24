@@ -50,10 +50,17 @@ jobs:
         run: |
           npm ci
           npm run build
+      # `npm install`, not `npm ci`, and deliberately so: electron-builder pulls
+      # platform-gated optional dependencies (squirrel-windows on Windows,
+      # dmg-license on macOS), and npm only records the ones resolvable on the
+      # machine that wrote the lockfile. One committed lock therefore cannot
+      # satisfy `npm ci` on four different runners — it fails with "Missing:
+      # electron-builder-squirrel-windows from lock file" on Linux and Windows.
+      # The daemon above still uses `npm ci`, where the lock is honest.
       - name: Build the installer
         working-directory: desktop
         run: |
-          npm ci
+          npm install --no-audit --no-fund
           npm run stage
           npx electron-builder ${{ matrix.args }} --publish never
       - uses: actions/upload-artifact@v4

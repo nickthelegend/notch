@@ -21,7 +21,7 @@ most tools gloss over.
 
 Notch is **not** another IDE. It's the thin layer *between* your agents — the continuity,
 memory, and **observability** they don't have on their own. It's a fork of
-[loom](https://github.com/nickthelegend/loom) with a purple-dark identity, an in-app
+[loom](https://github.com/nickthelegend/notch) with a purple-dark identity, an in-app
 **[Observatory](#observability--signoz)** (live canvas, handoff graph, event timeline, fleet
 metrics), and end-to-end SigNoz instrumentation built on top.
 
@@ -73,20 +73,21 @@ The write path is the top arrow (fleet → daemon → SigNoz). The two bottom ar
 
 ### The Observatory
 
-A tab next to the Brain — **eight live views** over the running project, all backed by real
+A tab next to the Brain — **six live views** over the running project, all backed by real
 data (SigNoz spans / event log, no mocks). A persistent vitals strip (active agents, baton
-holder, spend, turns, tokens) sits above them, and **View in SigNoz** jumps to the traces.
+holder, spend, turns, tokens) sits above them, **View in SigNoz** jumps to the traces, and
+**Ask Noz** answers questions about the fleet from the same telemetry these views render.
+
+Each view is named for the question it answers, and says so in a line under the tabs.
 
 | View | What it shows | Source |
 |---|---|---|
-| **Canvas** | the *one brain* as a glowing hub linked to every agent, the **baton** drawn to whoever holds it, busy agents pulsing (draggable) | live state |
-| **Graph** | the **baton/handoff DAG** — agents in columns by handoff depth, an arrow per pass of the baton (draggable) | event log |
-| **Timeline** | the chronological trace — turns, handoffs, routes, memory folds, errors, 💡 **decisions**, and the **self-heal** intervention/recovery lines | event log |
-| **Metrics** | a **dense metrics grid** (agents, files, avg turn time, tokens + sparklines, cost, critical path, confidence, retries) + per-agent token bars, over the fleet breakdown with **Health** badge + **⚠ Triage** per agent | `/metrics` + spans |
-| **Decisions** | a filterable **Decision Explorer** — every agent choice as a card (category · confidence), with a detail panel: reason, alternatives, confidence, files, artifacts | decisions store |
-| **Burn** | an SVG sparkline of per-agent cost/24h with a linear projection, and per-agent USD/day **budgets** | ClickHouse |
-| **Replay** | scrub the fleet's real turn **spans** frame by frame — model, tokens, cost, status — and open the **Trace Waterfall** | ClickHouse |
-| **Time Travel** | scrub **every** frame of the run — at each point: who held the baton, per-agent turns/cost, decisions-so-far, brain facts, and the thread. Play / step controls | folded event log |
+| **Metrics** | the dashboard: totals, then what the spend is *made of* (token and turn donuts per agent/model), then behaviour over time (turn duration, token usage, spend), then each agent's 0–100 **Health** with **⚠ Triage**, then the 24h burn with per-agent USD/day **budgets** | `/metrics` + spans + ClickHouse |
+| **Live fleet** | *right now* — who is running, who is idle, who holds the **baton**, and an edge that marches while an agent is reading and writing the one shared brain (draggable) | live state |
+| **Handoffs** | *what already happened* — the baton's actual route between agents, each edge labelled with how many times it was taken, thickest where it was walked most (draggable) | event log |
+| **Timeline** | the chronological trace — turns, handoffs, routes, memory folds, errors, 💡 **decisions**, budget pauses, MCP attach, and the **self-heal** intervention/recovery lines | event log |
+| **Decisions** | a filterable **Decision Explorer** — every agent choice as a card, with reason, alternatives, files, and how each decision was extracted (a measured confidence and a pattern match are not shown as the same claim) | decisions store |
+| **Replay** | scrub the whole run: at any moment, who held the baton, every agent's state, decisions so far, the thread — *and* the turn that was running then, with its model, duration, tokens, cost and trace. Play / step controls | folded event log + spans |
 
 **Decision capture.** After each turn, Notch mines the agent's prose into structured decisions
 (category, reasoning, confidence, alternatives, files) — via the Anthropic API when
@@ -263,13 +264,13 @@ Other paths:
 
 ```bash
 # one-liner from source (clones ~/.loom-src, builds, links; re-run to update)
-curl -fsSL https://raw.githubusercontent.com/nickthelegend/loom/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/nickthelegend/notch/main/scripts/install.sh | bash
 
 # straight from git
-npm install -g github:nickthelegend/loom
+npm install -g github:nickthelegend/notch
 
 # hackable checkout
-git clone https://github.com/nickthelegend/loom.git && cd loom
+git clone https://github.com/nickthelegend/notch.git && cd loom
 npm install && npm run build && npm link
 ```
 
@@ -282,13 +283,13 @@ loom doctor        # checks node, agents, tailscale, daemon, and your project
 Surfaces, all talking to the same daemon:
 - **TUI / CLI** — `loom` (default), `loom chat`, `loom send`, …
 - **Desktop app (Notch Desktop)** — prebuilt for
-  [**macOS**, **Linux**, and **Windows**](https://github.com/nickthelegend/loom/releases/latest)
-  (`.dmg` · `.AppImage` · `.exe`; the macOS dmg is ad-hoc signed, so right-click → **Open**
+  [**macOS**, **Linux**, and **Windows**](https://github.com/nickthelegend/notch/releases/latest)
+  (`.dmg` for Apple Silicon and Intel · `.AppImage` · `.deb` · `.exe`; the macOS dmg is ad-hoc signed, so right-click → **Open**
   the first time), or build from [`desktop/`](desktop/README.md): `cd desktop && npm
   install && npm start`. Either way it opens a native window that starts the daemon and
   pairs itself.
 - **Phone app (LoomPad)** — install the prebuilt
-  [`loompad.apk`](https://github.com/nickthelegend/loom/releases/latest) (allow unknown
+  [`notch-<version>-android.apk`](https://github.com/nickthelegend/notch/releases/latest) (allow unknown
   sources), open **Notch**, and **Scan QR code** from the desktop's *Connect a phone*.
   Voice input, per-prompt diffs, push. Or build from source
   ([`app/`](app/README.md)): `cd app && npx expo install && npx expo start`.
