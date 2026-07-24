@@ -6115,7 +6115,43 @@ ${BRAND_SPRITE}
           } },
         { label: "Pick a model", sub: "for " + (state.selected || "this agent"), icon: ICONS.gear, run: openModelMenu },
         { label: "Attach a file", sub: "image, .md, .txt", icon: ICONS.file, run: function(){ var f = document.getElementById("cfile"); if (f) f.click(); } },
-      ];
+        { label: "Browse skills", sub: "install one, or turn one on", icon: ICONS.spark || ICONS.bolt, run: function(){ openSkillsModal(pid); } },
+        { label: "MCP servers", sub: "browse the registry and install", icon: ICONS.plug || ICONS.route, run: function(){ openMcpModal(pid); } },
+      ].concat(skillSlashItems());
+    }
+    /**
+     * Every skill, right in the "/" menu.
+     *
+     * Enabling a skill is the thing you want mid-sentence — you start typing,
+     * realise this turn needs the triage skill, and you should not have to leave
+     * the composer to say so. The list is the same catalog the modal browses; it
+     * is cached on the composer so typing "/" doesn't refetch on every keystroke.
+     */
+    function skillSlashItems(){
+      var list = state.skillCache || [];
+      return list.map(function(s){
+        return {
+          label: (s.enabled ? "\\u2713 " : "") + (s.name || s.id),
+          sub: s.enabled ? "skill \\u00b7 on \\u2014 select to turn off" : "skill \\u00b7 " + ((s.description || "").slice(0, 54) || "turn on for this project"),
+          icon: ICONS.spark || ICONS.bolt,
+          run: function(){
+            api("/api/projects/" + pid + "/skills/" + encodeURIComponent(s.id), { method: "PUT", body: JSON.stringify({ enabled: !s.enabled }) })
+              .then(function(){
+                s.enabled = !s.enabled;
+                toast((s.enabled ? "enabled " : "disabled ") + (s.name || s.id));
+                refreshSkillCount();
+              })
+              .catch(function(err){ toast(err.message); });
+          }
+        };
+      });
+    }
+    /** Keep the "/" menu's skill list fresh without refetching per keystroke. */
+    function loadSkillCache(){
+      api("/api/projects/" + pid + "/skills/catalog")
+        .catch(function(){ return api("/api/projects/" + pid + "/skills"); })
+        .then(function(r){ state.skillCache = r.skills || []; })
+        .catch(function(){ state.skillCache = []; });
     }
 
     function openFileMenu(q, at){
@@ -6265,6 +6301,7 @@ ${BRAND_SPRITE}
       autosizeBox();
 
       box.addEventListener("input", function(){ autosizeBox(); scanTrigger(); scheduleSkillSuggest(box.value); });
+      loadSkillCache(); // so "/" can offer every skill without a fetch per keystroke
       box.addEventListener("keydown", function(e){
         // Menu open: arrows move, Enter/Tab accept, Esc closes.
         if (menuState && menuState.items && menuState.items.length && (menuState.kind === "file" || menuState.kind === "cmd")) {
