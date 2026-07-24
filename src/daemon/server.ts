@@ -23,6 +23,7 @@ import { RouteActiveError } from "../core/routes.js";
 import { recordAgentEvent } from "../observability/index.js";
 import { triageAgent } from "../observability/triage.js";
 import { burnSeries, fetchSpans, healthScore, insightSpansFromLog, recentAgentErrors, traceSpans, type InsightSpan } from "../observability/insights.js";
+import { buildSnapshots } from "../observability/snapshots.js";
 import { ADES, buildDefaultRoutes, defaultAgentConfigs, detectAdes } from "../core/ades.js";
 import { logbook, type LogLevel } from "../core/logbook.js";
 import { searchChats, searchCode } from "../core/search.js";
@@ -193,6 +194,49 @@ function asPaths(v: unknown): string[] {
   return v.filter((x): x is string => typeof x === "string" && x.length > 0).slice(0, 500);
 }
 
+
+/** KAIRO-style dense fleet metrics for the Observatory Metrics tab. */
+function kairoMetrics(rt: ProjectRuntime): Record<string, unknown> {
+  const cs = rt.costSummary();
+  const decisions = rt.getDecisions();
+  const stats = rt.decisionStats();
+  const events = rt.log.list({ limit: 2000 });
+  const runs = events.filter((e) => e.kind === "run_complete");
+  const recent = runs.slice(-10);
+  const num = (v: unknown): number => Number(v) || 0;
+  const filePaths = new Set<string>();
+  let fileChanges = 0;
+  for (const e of events) {
+    if (e.kind !== "turn_diff") continue;
+    const files = Array.isArray(e.payload.files) ? (e.payload.files as Array<{ path?: string }>) : [];
+    fileChanges += files.length;
+    for (const f of files) if (f.path) filePaths.add(f.path);
+  }
+  const tokensByAgent: Record<string, number> = {};
+  const costByAgent: Record<string, number> = {};
+  for (const a of cs.byAgent) {
+    tokensByAgent[a.agentId] = a.tokensIn + a.tokensOut;
+    costByAgent[a.agentId] = a.usd;
+  }
+  return {
+    agentsSpawned: new Set(runs.map((e) => e.agentId).filter(Boolean)).size,
+    turnsCompleted: cs.turns,
+    avgReasoningTimeMs: cs.turns ? Math.round(cs.totalMs / cs.turns) : 0,
+    filesCreated: filePaths.size,
+    filesModified: fileChanges,
+    decisionsRecorded: decisions.length,
+    avgConfidence: stats.avgConfidence,
+    totalCostUsd: cs.totalUsd,
+    totalTokensIn: cs.tokensIn,
+    totalTokensOut: cs.tokensOut,
+    costByAgent,
+    tokensByAgent,
+    criticalPath: stats.criticalPath,
+    retriesTotal: events.filter((e) => e.kind === "error" || e.kind === "route_failed").length,
+    tokenSparkline: recent.map((e) => num(e.payload.inputTokens) + num(e.payload.outputTokens)),
+    costSparkline: recent.map((e) => num(e.payload.costUsd)),
+  };
+}
 
 export class LoomDaemon {
   private app = express();
@@ -801,7 +845,29 @@ export class LoomDaemon {
     app.get(
       "/api/projects/:id/metrics",
       withRuntime(async (rt, _req, res) => {
-        res.json({ metrics: rt.costSummary() });
+        res.json({ metrics: rt.costSummary(), kairo: kairoMetrics(rt) });
+      }),
+    );
+
+    // KAIRO-style decision explorer: structured decisions mined from agent turns.
+    app.get(
+      "/api/projects/:id/decisions",
+      withRuntime(async (rt, req, res) => {
+        const agent = req.query.agent ? String(req.query.agent) : undefined;
+        const category = req.query.category ? String(req.query.category) : undefined;
+        const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
+        let decisions = rt.getDecisions();
+        if (agent) decisions = decisions.filter((d) => d.agentId === agent);
+        if (category) decisions = decisions.filter((d) => d.category === category);
+        res.json({ decisions: decisions.slice(0, limit), stats: rt.decisionStats() });
+      }),
+    );
+
+    // Time-Travel Replay: snapshots folded from the event log, on demand.
+    app.get(
+      "/api/projects/:id/snapshots",
+      withRuntime(async (rt, _req, res) => {
+        res.json({ snapshots: buildSnapshots(rt.log.list({ limit: 2000 })) });
       }),
     );
 

@@ -4,6 +4,7 @@
  * the single source of truth.
  */
 
+import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type {
@@ -49,6 +50,7 @@ import {
   type BoardTask,
 } from "../core/registry.js";
 import { suggestHandoff } from "../core/suggestions.js";
+import { decisionStats, extractDecisions, type AgentDecision, type DecisionStats } from "../observability/decisions.js";
 import {
   diffSinceSnapshot,
   porcelainStatus,
@@ -135,6 +137,9 @@ export class ProjectRuntime {
   // (the CLI reports it mid-stream). We hold it here so the completed turn — and
   // therefore its exported gen_ai span — carries the real cost, not just tokens.
   private pendingCost = new Map<string, number>();
+  // Turn text accumulated per agent (from its message events) so we can extract
+  // KAIRO-style decisions once the turn completes. Reset after each run_complete.
+  private turnText = new Map<string, string>();
 
   private rehydrateCosts(): void {
     for (const event of this.log.list({ kinds: ["status", "run_complete"] })) {
@@ -774,8 +779,14 @@ export class ProjectRuntime {
   private afterAgentEvent(event: LoomEvent): void {
     this.trackCost(event);
     this.routes.handleAgentEvent(event);
+    // Accumulate the turn's prose so decisions can be mined when it completes.
+    if (event.kind === "message" && event.agentId && !event.payload.reasoning) {
+      const prev = this.turnText.get(event.agentId) ?? "";
+      this.turnText.set(event.agentId, `${prev}\n${String(event.payload.text ?? "")}`.slice(-8000));
+    }
     if (event.kind === "run_complete" && event.agentId) {
       this.captureTurnDiff(event.agentId);
+      void this.captureAgentDecisions(event.agentId).catch(() => {});
     }
     if (event.kind === "needs_input") {
       notify({
@@ -810,6 +821,91 @@ export class ProjectRuntime {
       this.log.append({
         kind: "decision",
         payload: { text: m[1]!.trim(), author: event.agentId, auto: true },
+      });
+    }
+  }
+
+  // ── KAIRO-style agent decisions (Observatory Decision Explorer + Replay) ──
+
+  private decisionsFile(): string {
+    return path.join(projectLoomDir(this.info.dir), "decisions.json");
+  }
+
+  /** An agent's declared role from config (planner/builder/reviewer/…), else its kind. */
+  agentRole(agentId: string): string {
+    const cfg = this.config.agents.find((a) => a.id === agentId);
+    return cfg?.role ?? cfg?.kind ?? "agent";
+  }
+
+  /** How many turns this agent has completed (for the decision's turnIndex). */
+  private turnCountFor(agentId: string): number {
+    return this.log.list({ kinds: ["run_complete"] }).filter((e) => e.agentId === agentId).length;
+  }
+
+  /** All captured decisions for this project, newest first. */
+  getDecisions(): AgentDecision[] {
+    try {
+      const raw = fs.readFileSync(this.decisionsFile(), "utf8");
+      const arr = JSON.parse(raw) as AgentDecision[];
+      return Array.isArray(arr) ? [...arr].sort((a, b) => b.timestamp - a.timestamp) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  decisionStats(): DecisionStats {
+    return decisionStats(this.getDecisions());
+  }
+
+  /** Append decisions to the persisted store (kept oldest→newest on disk). */
+  storeDecisions(decisions: AgentDecision[]): void {
+    if (!decisions.length) return;
+    const existing = this.getDecisions().sort((a, b) => a.timestamp - b.timestamp);
+    const all = [...existing, ...decisions].slice(-1000); // bound the file
+    try {
+      fs.mkdirSync(projectLoomDir(this.info.dir), { recursive: true });
+      fs.writeFileSync(this.decisionsFile(), JSON.stringify(all, null, 2));
+    } catch {
+      /* best-effort: decisions are an enrichment, never break the loop */
+    }
+  }
+
+  /** Mine decisions from a completed turn, persist them, surface on the Timeline. */
+  private async captureAgentDecisions(agentId: string): Promise<void> {
+    const turnText = this.turnText.get(agentId) ?? "";
+    this.turnText.delete(agentId);
+    if (turnText.trim().length < 100) return;
+    const lastTurn = this.log.list({ kinds: ["run_complete"] }).filter((e) => e.agentId === agentId).slice(-1)[0];
+    const p = (lastTurn?.payload ?? {}) as Record<string, unknown>;
+    let filesChanged: string[] = [];
+    try {
+      filesChanged = execSync("git diff --name-only HEAD", { cwd: this.info.dir, encoding: "utf8" })
+        .trim().split("\n").filter(Boolean);
+    } catch { /* not a git repo, or nothing changed */ }
+    const decisions = await extractDecisions({
+      agentId,
+      agentRole: this.agentRole(agentId),
+      projectId: this.info.id,
+      chatId: this.turnChat.get(agentId) ?? MAIN_CHAT,
+      turnIndex: this.turnCountFor(agentId),
+      traceId: "",
+      turnText,
+      tokensUsed: Number(p.inputTokens ?? 0) + Number(p.outputTokens ?? 0),
+      costUsd: Number(p.costUsd ?? 0),
+      durationMs: Number(p.durationMs ?? 0),
+      filesChanged,
+      anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+    });
+    if (!decisions.length) return;
+    this.storeDecisions(decisions);
+    // Surface each on the Timeline / snapshots via a status event (no new EventKind,
+    // and no collision with the brain's memory `decision` events).
+    for (const d of decisions) {
+      this.log.append({
+        kind: "status",
+        agentId: d.agentId,
+        ...(d.chatId && d.chatId !== MAIN_CHAT ? { chat: d.chatId } : {}),
+        payload: { state: "agent_decision", decisionId: d.id, title: d.title, category: d.category, confidence: d.confidence },
       });
     }
   }
