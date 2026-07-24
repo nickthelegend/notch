@@ -315,7 +315,13 @@ export class LoomDaemon {
       if (origin && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
         res.setHeader("Access-Control-Allow-Origin", origin);
         res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
-        res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+        // PUT and PATCH belong here: toggling a skill, switching an agent on or
+        // off, and updating an MCP server all use them, and a cross-origin
+        // client (the Expo web build, a paired browser on another port) had
+        // those requests refused at the preflight while the same-origin console
+        // worked — which makes it look like the feature is broken only on
+        // mobile.
+        res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
         res.setHeader("Vary", "Origin");
         if (req.method === "OPTIONS") return void res.sendStatus(204);
       }
