@@ -1,9 +1,9 @@
 {
   "expo": {
-    "name": "Loom",
-    "slug": "loom",
+    "name": "Notch",
+    "slug": "notch",
     "version": "0.1.0",
-    "scheme": "loom",
+    "scheme": "notch",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "backgroundColor": "#111111",
@@ -14,18 +14,18 @@
       "backgroundColor": "#111111"
     },
     "ios": {
-      "bundleIdentifier": "dev.loom.app",
+      "bundleIdentifier": "dev.notch.app",
       "supportsTablet": false,
       "infoPlist": {
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true,
           "NSAllowsLocalNetworking": true
         },
-        "NSLocalNetworkUsageDescription": "Loom talks to the daemon on your own computer, over your tailnet or LAN."
+        "NSLocalNetworkUsageDescription": "Notch talks to the daemon on your own computer, over your tailnet or LAN."
       }
     },
     "android": {
-      "package": "dev.loom.app",
+      "package": "dev.notch.app",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#1B1D21"
