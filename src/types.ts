@@ -103,6 +103,8 @@ export interface AgentConfig {
   options?: Record<string, unknown>;
   /** Override the ADE's native memory files to import into the shared brain. */
   memoryFiles?: string[];
+  /** Off agents stay in the roster but aren't spawned and can't hold the baton. Default on. */
+  enabled?: boolean;
 }
 
 /** One ADE's native memory pulled into the unified brain. */
@@ -273,6 +275,8 @@ export interface AgentStatus {
   holdsBaton: boolean;
   /** The model override in effect, or "" for the CLI's own default. */
   model: string;
+  /** Off agents stay in the roster but are inert (not spawned). Default true. */
+  enabled?: boolean;
 }
 
 export interface ProjectStatus {

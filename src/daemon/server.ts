@@ -1149,6 +1149,20 @@ export class LoomDaemon {
       }),
     );
 
+    // Turn an agent on/off. Off agents stay in the roster but aren't spawned and
+    // can't hold the baton. Refused for the baton holder or a mid-turn agent.
+    app.put(
+      "/api/projects/:id/agents/:agentId/enabled",
+      withRuntime(async (rt, req, res) => {
+        const { enabled } = (req.body ?? {}) as { enabled?: boolean };
+        try {
+          res.json(rt.setAgentEnabled(String(req.params.agentId), enabled !== false));
+        } catch (e) {
+          res.status(409).json({ error: e instanceof Error ? e.message : String(e) });
+        }
+      }),
+    );
+
     // The Settings screen reads its editable knobs here — brain extractor,
     // projection mode, default agent — with the roster the picker chooses from.
     app.get(
