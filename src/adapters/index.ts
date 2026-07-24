@@ -4,6 +4,7 @@
  */
 
 import type { AgentConfig, AnyAgent } from "../types.js";
+import { AntigravityCliAdapter } from "./antigravity-cli.js";
 import { AntigravityBridge } from "./bridges/antigravity.js";
 import { KiroBridge } from "./bridges/kiro.js";
 import { ClaudeCodeAdapter } from "./claude-code.js";
@@ -28,6 +29,7 @@ registerAgentKind("claude-code", (cfg, dir) => new ClaudeCodeAdapter(cfg.id, dir
 registerAgentKind("codex", (cfg, dir) => new CodexAdapter(cfg.id, dir, cfg.options));
 registerAgentKind("opencode", (cfg, dir) => new OpenCodeAdapter(cfg.id, dir, cfg.options));
 registerAgentKind("grok-code", (cfg, dir) => new GrokAdapter(cfg.id, dir, cfg.options));
+registerAgentKind("antigravity-cli", (cfg, dir) => new AntigravityCliAdapter(cfg.id, dir, cfg.options));
 registerAgentKind("antigravity", (cfg, dir) => new AntigravityBridge(cfg.id, dir, cfg.options));
 registerAgentKind("kiro", (cfg, dir) => new KiroBridge(cfg.id, dir, cfg.options));
 
