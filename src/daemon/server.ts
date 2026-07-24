@@ -853,13 +853,19 @@ export class LoomDaemon {
       "/api/projects/:id/insights/health",
       withRuntime(async (rt, req, res) => {
         const agent = req.query.agent ? String(req.query.agent) : undefined;
-        let spans = await fetchSpans(rt.info.name, { agent, limit: 200 }).catch(() => [] as InsightSpan[]);
+        let spans = await fetchSpans(rt.info.name, { agent, limit: 300 }).catch(() => [] as InsightSpan[]);
         let from: "signoz" | "local-log" = "signoz";
         if (!spans.length) {
-          spans = insightSpansFromLog(rt.log.list({ limit: 400 }), agent);
+          spans = insightSpansFromLog(rt.log.list({ limit: 500 }), agent);
           from = "local-log";
         }
-        res.json({ from, health: healthScore(spans) });
+        if (agent) return void res.json({ from, health: healthScore(spans) });
+        // Fleet: one score per agent (its own turns/errors), plus the overall.
+        const byAgent: Record<string, ReturnType<typeof healthScore>> = {};
+        for (const a of [...new Set(spans.map((s) => s.agent).filter(Boolean))]) {
+          byAgent[a] = healthScore(spans.filter((s) => s.agent === a));
+        }
+        res.json({ from, overall: healthScore(spans), byAgent });
       }),
     );
 
