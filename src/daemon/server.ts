@@ -22,7 +22,7 @@ import { retrieve } from "../core/brain-index.js";
 import { RouteActiveError } from "../core/routes.js";
 import { recordAgentEvent } from "../observability/index.js";
 import { triageAgent } from "../observability/triage.js";
-import { burnSeries, fetchSpans, healthScore, insightSpansFromLog, traceSpans, type InsightSpan } from "../observability/insights.js";
+import { burnSeries, fetchSpans, healthScore, insightSpansFromLog, recentAgentErrors, traceSpans, type InsightSpan } from "../observability/insights.js";
 import { ADES, buildDefaultRoutes, defaultAgentConfigs, detectAdes } from "../core/ades.js";
 import { logbook, type LogLevel } from "../core/logbook.js";
 import { searchChats, searchCode } from "../core/search.js";
@@ -201,6 +201,8 @@ export class LoomDaemon {
   private auth: AuthManager;
   private runtimes = new Map<string, ProjectRuntime>();
   private sockets = new Map<WebSocket, { project?: string }>();
+  /** In-flight self-heal recheck timers, cleared on close. */
+  private healTimers = new Set<ReturnType<typeof setTimeout>>();
   /** Terminal shells — a real pty when node-pty loaded, else plain pipes. */
   private terminals = new TerminalManager({
     onData: (projectId, term, chunk) =>
@@ -943,6 +945,9 @@ export class LoomDaemon {
             rt.quarantine(String(agent), alertName, displaced);
             rt.log.append({ kind: "status", agentId: String(agent),
               payload: { state: "signoz_intervention", alert: alertName, holder, fallback: fallback ?? null } });
+            // Start the recheck loop: pause → recheck → return the baton if the
+            // agent stops erroring, retrying a few times before giving up.
+            this.startHealLoop(rt, String(agent), alertName, Date.now());
             if (displaced) {
               await rt.handoff(fallback!);
               actions.push({ project: info.name, agent, alert: alertName, action: `quarantined; baton handed to ${fallback}` });
@@ -2218,7 +2223,59 @@ export class LoomDaemon {
     return [...this.extra.keys()];
   }
 
+  /**
+   * The self-heal recheck loop: after a firing alert fails the baton over, wait
+   * NOTCH_HEAL_RECHECK_MS, ask SigNoz (or the local log) whether the agent has
+   * errored since it was quarantined, and if not, hand the baton back — retrying
+   * up to NOTCH_HEAL_MAX_RETRIES times before giving up. Best-effort and unref'd:
+   * a daemon restart simply forgets the loop.
+   */
+  private startHealLoop(rt: ProjectRuntime, agent: string, alert: string, since: number): void {
+    if (process.env.NOTCH_HEAL_DISABLED === "1") return;
+    const recheckMs = Math.max(1, Number(process.env.NOTCH_HEAL_RECHECK_MS) || 60_000);
+    const maxRetries = Math.max(1, Number(process.env.NOTCH_HEAL_MAX_RETRIES) || 3);
+    let attempt = 0;
+    const tick = async (): Promise<void> => {
+      attempt += 1;
+      if (!rt.quarantined()[agent]) return; // lifted already (a resolved alert, say)
+      const recovered = await this.agentRecovered(rt, agent, since).catch(() => false);
+      if (recovered) {
+        rt.unquarantine(agent);
+        const retried = rt.baton.holder() !== agent;
+        if (retried) await rt.handoff(agent).catch(() => {});
+        rt.log.append({ kind: "status", agentId: agent, payload: { state: "signoz_recovery", alert, retried, attempt, via: "recheck" } });
+        return;
+      }
+      if (attempt >= maxRetries) {
+        rt.log.append({ kind: "status", agentId: agent, payload: { state: "signoz_heal_exhausted", alert, attempts: attempt } });
+        return; // stays quarantined for a human
+      }
+      schedule();
+    };
+    const schedule = (): void => {
+      const t = setTimeout(() => { this.healTimers.delete(t); void tick(); }, recheckMs);
+      if (typeof t.unref === "function") t.unref();
+      this.healTimers.add(t);
+    };
+    schedule();
+  }
+
+  /** Recovered = no error spans since it was quarantined (SigNoz first, local log fallback). */
+  private async agentRecovered(rt: ProjectRuntime, agent: string, sinceMs: number): Promise<boolean> {
+    try {
+      return (await recentAgentErrors(rt.info.name, agent, sinceMs)) === 0;
+    } catch {
+      const errs = rt.log.list({ limit: 400 }).filter(
+        (e) => e.ts > sinceMs && e.agentId === agent &&
+          (e.kind === "error" || (e.kind === "run_complete" && (e.payload as Record<string, unknown>).error)),
+      );
+      return errs.length === 0;
+    }
+  }
+
   async close(): Promise<void> {
+    for (const t of this.healTimers) clearTimeout(t);
+    this.healTimers.clear();
     this.unstreamLogs?.();
     this.unstreamLogs = null;
     this.terminals.closeAll();
