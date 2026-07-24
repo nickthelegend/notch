@@ -2751,12 +2751,14 @@ ${BRAND_SPRITE}
         route_completed: ["ok", 1], route_failed: ["err", 1], memory_add: ["mem", 1], memory_update: ["mem", 1],
         memory_forget: ["mem", 1], needs_input: ["warn", 1], error: ["err", 1], decision: ["info", 1] };
       var isHeal = function(e){ return e.kind === "status" && (e.payload || {}).state === "signoz_intervention"; };
-      var evs = (events || []).filter(function(e){ return KINDS[e.kind] || isHeal(e); }).sort(function(a, b){ return a.ts - b.ts; });
+      var isRecover = function(e){ return e.kind === "status" && (e.payload || {}).state === "signoz_recovery"; };
+      var evs = (events || []).filter(function(e){ return KINDS[e.kind] || isHeal(e) || isRecover(e); }).sort(function(a, b){ return a.ts - b.ts; });
       if (!evs.length) return '<div class="obnote">No fleet events yet. Run a turn and the trace fills in.</div>';
       var base = evs[0].ts;
       var rows = evs.map(function(e){
-        var p = e.payload || {}, cls = isHeal(e) ? "heal" : KINDS[e.kind][0], label;
+        var p = e.payload || {}, cls = isHeal(e) ? "heal" : isRecover(e) ? "ok" : KINDS[e.kind][0], label;
         if (isHeal(e)) label = "\\u26a1 SigNoz alert \\u00b7 " + esc(p.alert || "alert") + " \\u2192 baton forced off " + esc(e.agentId || "agent") + (p.fallback ? " to " + esc(p.fallback) : "");
+        else if (isRecover(e)) label = "\\u2713 SigNoz recovery \\u00b7 " + esc(p.alert || "alert") + " resolved \\u2192 " + (p.retried ? "baton retried on " + esc(e.agentId || "agent") : "quarantine lifted on " + esc(e.agentId || "agent"));
         else if (e.kind === "run_complete") label = esc(e.agentId || "agent") + " finished a turn" + (p.durationMs ? " \\u00b7 " + (Math.round(p.durationMs / 100) / 10) + "s" : "");
         else if (e.kind === "handoff") label = "baton \\u00b7 " + esc(p.from || "?") + " \\u2192 " + esc(p.to || "?");
         else if (e.kind.indexOf("route_") === 0) label = "route " + e.kind.slice(6) + (p.error ? " \\u00b7 " + esc(p.error) : "");

@@ -884,9 +884,12 @@ export class LoomDaemon {
       }),
     );
 
-    // Self-healing: a SigNoz alert (cost budget breached, error rate too high)
-    // posts its firing payload here, and Notch forces the baton off the failing
-    // agent onto a fallback — closing the loop from metric to intervention.
+    // Self-healing loop: a SigNoz alert posts here.
+    //   firing   → quarantine the failing agent and fail the baton over to a
+    //              fallback (Notch keeps working while the agent is degraded).
+    //   resolved → lift the quarantine and hand the baton BACK to the original
+    //              agent — a real pause-then-retry, not a one-way failover.
+    // Closing the loop from metric breach → intervention → recovery → retry.
     app.post("/api/webhooks/signoz", (req, res) => {
       void (async () => {
         const secret = process.env.NOTCH_WEBHOOK_SECRET;
@@ -902,10 +905,10 @@ export class LoomDaemon {
           const al = (raw ?? {}) as Record<string, unknown>;
           const labels = { ...common, ...((al.labels ?? {}) as Record<string, string>) };
           const status = String(al.status ?? body.status ?? "firing");
-          if (status !== "firing") { actions.push({ skipped: "not firing" }); continue; }
           const projectRef = labels["notch.project"] ?? labels.notch_project ?? q.project;
           const agent = labels["gen_ai.agent.id"] ?? labels.gen_ai_agent_id ?? labels.agent ?? q.agent;
           const alertName = String(labels.alertname ?? body.title ?? "SigNoz alert");
+          if (status !== "firing" && status !== "resolved") { actions.push({ skipped: `status "${status}"` }); continue; }
           if (!agent) { actions.push({ skipped: "no agent label on alert" }); continue; }
           const infos = listProjects();
           // A project ref must actually match — never silently act on an arbitrary
@@ -919,17 +922,33 @@ export class LoomDaemon {
           }
           try {
             const rt = await this.runtime(info.id);
+            if (status === "resolved") {
+              // Recovery: retry the original agent if we had quarantined it.
+              const q0 = rt.unquarantine(String(agent));
+              if (!q0) { actions.push({ project: info.name, agent, alert: alertName, action: "resolved (was not quarantined)" }); continue; }
+              const holder = rt.baton.holder();
+              const retried = q0.displaced && holder !== agent;
+              if (retried) await rt.handoff(String(agent));
+              rt.log.append({ kind: "status", agentId: String(agent),
+                payload: { state: "signoz_recovery", alert: alertName, retried, pausedMs: Date.now() - q0.since } });
+              actions.push({ project: info.name, agent, alert: alertName,
+                action: retried ? `recovered — baton handed back to ${agent}` : "recovered — quarantine lifted" });
+              continue;
+            }
+            // Firing: pause the agent and fail the baton over.
             const holder = rt.baton.holder();
             const agents = (await rt.status()).agents;
             const fallback = agents.find((a) => a.id !== agent)?.id;
+            const displaced = holder === agent && !!fallback;
+            rt.quarantine(String(agent), alertName, displaced);
             rt.log.append({ kind: "status", agentId: String(agent),
               payload: { state: "signoz_intervention", alert: alertName, holder, fallback: fallback ?? null } });
-            if (holder === agent && fallback) {
-              await rt.handoff(fallback);
-              actions.push({ project: info.name, agent, alert: alertName, action: `baton handed to ${fallback}` });
+            if (displaced) {
+              await rt.handoff(fallback!);
+              actions.push({ project: info.name, agent, alert: alertName, action: `quarantined; baton handed to ${fallback}` });
             } else {
               actions.push({ project: info.name, agent, alert: alertName,
-                action: fallback ? "logged (agent isn't holding the baton)" : "logged (no fallback agent)" });
+                action: fallback ? "quarantined (agent wasn't holding the baton)" : "quarantined (no fallback agent)" });
             }
           } catch (e) {
             actions.push({ agent, error: e instanceof Error ? e.message : String(e) });

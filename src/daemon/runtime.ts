@@ -200,6 +200,31 @@ export class ProjectRuntime {
     return budgets;
   }
 
+  /** Agents currently paused by a firing SigNoz alert (self-heal quarantine). */
+  quarantined(): Record<string, { reason: string; since: number; displaced: boolean }> {
+    return readProjectState(this.info.dir).quarantine ?? {};
+  }
+
+  /** Pause an agent (a firing alert). `displaced` marks that it lost the baton to a fallback. */
+  quarantine(agentId: string, reason: string, displaced: boolean, now = Date.now()): void {
+    const state = readProjectState(this.info.dir);
+    const quarantine = { ...(state.quarantine ?? {}) };
+    quarantine[agentId] = { reason, since: now, displaced };
+    writeProjectState(this.info.dir, { ...state, quarantine });
+  }
+
+  /** Lift an agent's quarantine (its alert resolved); returns what it was, or null. */
+  unquarantine(agentId: string): { reason: string; since: number; displaced: boolean } | null {
+    const state = readProjectState(this.info.dir);
+    const quarantine = { ...(state.quarantine ?? {}) };
+    const prev = quarantine[agentId] ?? null;
+    if (prev) {
+      delete quarantine[agentId];
+      writeProjectState(this.info.dir, { ...state, quarantine });
+    }
+    return prev;
+  }
+
   /** Has .loom/config.json changed since this runtime was opened? */
   configStale(): boolean {
     return configMtimeOf(this.info.dir) > this.configMtime;
