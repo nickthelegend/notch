@@ -2743,7 +2743,22 @@ ${BRAND_SPRITE}
       // Tabs follow the ARIA pattern: click or arrow-key to move, the active tab
       // is the only tab stop (roving tabindex), and it stays scrolled into view.
       var tabEls = Array.prototype.slice.call(el.querySelectorAll(".obtab"));
-      function selectTab(t, kbd){ if (kbd) state.obTabFocus = true; state.obView = t.getAttribute("data-obv"); renderObservatory(el, p, m, events); }
+      // Focus ownership is tracked, not fired once. Selecting re-renders (which
+      // destroys the focused button), and so does every live event arriving from
+      // the stream — a one-shot "restore focus now" flag survives the first and
+      // loses to the second, leaving the arrow keys dead mid-session. So the
+      // strip remembers it owns focus until focus genuinely moves somewhere
+      // else. Destroying the focused node sends focus to <body>, which fires no
+      // focusin, so the claim survives a re-render; clicking the composer fires
+      // one, which releases it.
+      if (!state.obFocusWired){
+        state.obFocusWired = true;
+        document.addEventListener("focusin", function(ev){
+          var t = ev.target;
+          state.obTabFocus = !!(t && t.classList && t.classList.contains("obtab"));
+        });
+      }
+      function selectTab(t){ state.obTabFocus = true; state.obView = t.getAttribute("data-obv"); renderObservatory(el, p, m, events); }
       tabEls.forEach(function(t, i){
         t.onclick = function(){ selectTab(t); };
         t.onkeydown = function(ev){
@@ -2760,7 +2775,17 @@ ${BRAND_SPRITE}
         var tl = onTab.offsetLeft, tr = tl + onTab.offsetWidth;
         if (tl < strip.scrollLeft) strip.scrollLeft = tl - 8;
         else if (tr > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = tr - strip.clientWidth + 8;
-        if (state.obTabFocus){ state.obTabFocus = false; onTab.focus({ preventScroll: true }); }
+        // Deferred a frame on purpose. Re-rendering inside a click destroys the
+        // button the browser is mid-way through focusing, and its own fixup runs
+        // after the handler returns — landing focus on <body> and undoing a
+        // synchronous restore. The flag is re-checked inside, so a user who
+        // clicked away in the meantime keeps the focus they asked for.
+        if (state.obTabFocus && document.activeElement !== onTab){
+          requestAnimationFrame(function(){
+            var live = el.querySelector(".obtab.on");
+            if (live && state.obTabFocus && document.activeElement !== live) live.focus({ preventScroll: true });
+          });
+        }
       }
       Array.prototype.forEach.call(el.querySelectorAll(".obtriage"), function(b){
         b.onclick = function(ev){ ev.stopPropagation(); openTriage(p, b.getAttribute("data-triage")); };
