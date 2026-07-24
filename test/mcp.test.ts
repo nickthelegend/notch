@@ -16,17 +16,30 @@ import { afterAll, describe, expect, it } from "vitest";
 import { ClaudeCodeAdapter } from "../src/adapters/claude-code.js";
 import { CodexAdapter } from "../src/adapters/codex.js";
 import { codexMcpArgs, mcpKey, probeMcpServer, resolveMcpServers, writeMcpSession } from "../src/core/mcp.js";
+import { ProjectRuntime } from "../src/daemon/runtime.js";
 import type { McpServerConfig, McpTurnConfig } from "../src/types.js";
-import { makeProjectDir, tmpDir } from "./helpers.js";
+import { makeProjectDir, tmpDir, waitUntil } from "./helpers.js";
 
-/** A stand-in CLI that records its argv and exits cleanly. */
+/**
+ * A stand-in CLI that records its argv, snapshots any --mcp-config file it was
+ * handed, and exits cleanly.
+ *
+ * The snapshot is the point: the config lives for exactly one turn and is
+ * deleted afterwards, so the only honest place to read it is from inside the
+ * process that was given it — which is also the only place that proves the file
+ * was really there when the CLI ran.
+ */
 function fakeBin(name: string, stdout: string[] = []): string {
   const dir = tmpDir(`fake-${name}`);
   const bin = path.join(dir, name);
   fs.writeFileSync(
     bin,
     `#!/usr/bin/env node
-require("node:fs").writeFileSync(${JSON.stringify(path.join(dir, "argv.json"))}, JSON.stringify(process.argv.slice(2)));
+const fs = require("node:fs");
+const argv = process.argv.slice(2);
+fs.writeFileSync(${JSON.stringify(path.join(dir, "argv.json"))}, JSON.stringify(argv));
+const i = argv.indexOf("--mcp-config");
+if (i >= 0 && argv[i + 1]) fs.copyFileSync(argv[i + 1], ${JSON.stringify(path.join(dir, "mcp-seen.json"))});
 ${stdout.map((l) => `console.log(${JSON.stringify(l)});`).join("\n")}
 `,
     { mode: 0o755 },
@@ -36,6 +49,12 @@ ${stdout.map((l) => `console.log(${JSON.stringify(l)});`).join("\n")}
 
 const argvOf = (bin: string): string[] =>
   JSON.parse(fs.readFileSync(path.join(path.dirname(bin), "argv.json"), "utf8")) as string[];
+
+/** The MCP document the fake CLI actually received, as it saw it. */
+const mcpSeenBy = (bin: string): { mcpServers: Record<string, unknown> } =>
+  JSON.parse(fs.readFileSync(path.join(path.dirname(bin), "mcp-seen.json"), "utf8")) as {
+    mcpServers: Record<string, unknown>;
+  };
 
 /** The stream-json a fake `claude` needs to print for a turn to complete. */
 const CLAUDE_STREAM = [
@@ -180,6 +199,60 @@ describe("what the adapters put on the command line", () => {
     const agent = new CodexAdapter("codex", makeProjectDir({ name: "mcp" }), { bin });
     await agent.send({ text: "go" });
     expect(argvOf(bin).some((a) => a.startsWith("mcp_servers."))).toBe(false);
+  });
+});
+
+describe("through the runtime", () => {
+  /**
+   * The whole point: a server typed into the composer reaches the CLI. This
+   * drives the real dispatch path — config → session → adapter → argv — with a
+   * fake `claude` standing in for the one that costs money.
+   */
+  it("hands a configured server to an adapter whose CLI takes one", async () => {
+    const bin = fakeBin("claude", CLAUDE_STREAM);
+    const dir = makeProjectDir({
+      name: "wired",
+      agents: [{ id: "cc", kind: "claude-code", role: "builder", options: { bin } }],
+      mcps: [{ name: "SigNoz", url: "http://127.0.0.1:8080/mcp" }],
+    });
+    const rt = await ProjectRuntime.open({ id: "wired", name: "wired", dir });
+    try {
+      await rt.sendMessage("go", "cc");
+      await waitUntil(() => fs.existsSync(path.join(path.dirname(bin), "argv.json")));
+      await waitUntil(() => rt.log.list({ kinds: ["run_complete"] }).length > 0);
+      expect(argvOf(bin)).toContain("--mcp-config");
+      expect(mcpSeenBy(bin).mcpServers.signoz).toEqual({ type: "http", url: "http://127.0.0.1:8080/mcp" });
+      // The config was a temp file for that turn and nothing else: it's gone.
+      const argv = argvOf(bin);
+      expect(fs.existsSync(argv[argv.indexOf("--mcp-config") + 1]!)).toBe(false);
+      // …and it's announced in the thread, so "which servers did that turn get"
+      // is answerable after the fact rather than a claim on a settings screen.
+      const attached = rt.log.list({ kinds: ["status"] }).find((e) => e.payload.state === "mcp_attached");
+      expect(attached!.payload.servers).toEqual(["SigNoz"]);
+    } finally {
+      await rt.close();
+    }
+  });
+
+  /**
+   * An adapter whose CLI has no MCP flag must not be told it got servers.
+   * Announcing an attachment that the adapter drops on the floor is the same
+   * lie in a new place.
+   */
+  it("says nothing about MCP for an adapter whose CLI has no flag for it", async () => {
+    const dir = makeProjectDir({
+      name: "unwired",
+      agents: [{ id: "echobot", kind: "echo", role: "builder" }],
+      mcps: [{ name: "SigNoz", url: "http://127.0.0.1:8080/mcp" }],
+    });
+    const rt = await ProjectRuntime.open({ id: "unwired", name: "unwired", dir });
+    try {
+      await rt.sendMessage("go", "echobot");
+      await waitUntil(() => rt.log.list({ kinds: ["run_complete"] }).length > 0);
+      expect(rt.log.list({ kinds: ["status"] }).some((e) => e.payload.state === "mcp_attached")).toBe(false);
+    } finally {
+      await rt.close();
+    }
   });
 });
 

@@ -189,10 +189,22 @@ export interface McpServerConfig {
    * meaningful alongside `url`.
    */
   transport?: "http" | "sse";
+  /**
+   * Extra HTTP headers for a remote server — an `Authorization: Bearer …` for a
+   * hosted endpoint that needs one. Only meaningful alongside `url`; see
+   * core/mcp.ts for which CLIs are known to honour them.
+   */
+  headers?: Record<string, string>;
   /** A local (stdio) server instead of a remote one: the process to run. */
   command?: string;
   args?: string[];
   env?: Record<string, string>;
+  /**
+   * The catalog provider this row was installed from ("github", "linear", …),
+   * when it came from one. A stable key for a bundled logo — NOT a claim about
+   * the server, and absent for anything typed in by hand.
+   */
+  slug?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -268,7 +280,7 @@ export interface McpTurnConfig {
  * `command`) so a generated file reads unambiguously.
  */
 export type McpServerEntry =
-  | { type: "http" | "sse"; url: string }
+  | { type: "http" | "sse"; url: string; headers?: Record<string, string> }
   | { type: "stdio"; command: string; args?: string[]; env?: Record<string, string> };
 
 /** A configured server that survived selection, keyed for the config document. */
