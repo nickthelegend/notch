@@ -182,17 +182,38 @@ function heuristic(agent: string, spans: TriageSpan[]): { rootCause: string; sug
   return { rootCause, suggestedFix: fix };
 }
 
-/** Ask Claude to phrase the root cause: Anthropic API key first, then the local `claude` CLI. */
-async function llmPhrase(agent: string, spans: TriageSpan[]): Promise<string | null> {
-  // Deterministic escape hatch (tests, or an operator who wants heuristic only).
-  if (process.env.NOTCH_TRIAGE_NO_LLM === "1") return null;
+/** The triage model, overridable so an operator isn't pinned to one release. */
+const TRIAGE_MODEL = process.env.NOTCH_TRIAGE_MODEL || "claude-haiku-4-5-20251001";
+
+/** Concatenate the text blocks of an Anthropic /v1/messages response. */
+export function parseAnthropicText(json: unknown): string | null {
+  const j = json as { content?: Array<{ type?: string; text?: string }> };
+  const text = (j?.content ?? []).map((c) => (typeof c.text === "string" ? c.text : "")).join("").trim();
+  return text || null;
+}
+
+/** The triage prompt — the agent's spans, newest first, and what to answer. */
+export function triagePrompt(agent: string, spans: TriageSpan[]): string {
   const lines = spans
     .slice(0, 30)
     .map((s) => `${new Date(s.ts).toISOString()} ${s.name} ${s.ms}ms status=${s.code}${s.msg ? ` "${s.msg.slice(0, 160)}"` : ""}`)
     .join("\n");
-  const prompt =
+  return (
     `You are triaging a coding agent named "${agent}" from its OpenTelemetry traces (newest first):\n\n${lines}\n\n` +
-    `In 2-3 sentences: the root cause of any failure, the specific span/turn, any upstream handoff, and one concrete fix. If healthy, say so plainly.`;
+    `In 2-3 sentences: the root cause of any failure, the specific span/turn, any upstream handoff, and one concrete fix. If healthy, say so plainly.`
+  );
+}
+
+/**
+ * Ask Claude to phrase the root cause. Two independent paths so LLM prose works
+ * in ANY environment: the Anthropic API (an ANTHROPIC_API_KEY, works headless /
+ * in CI / behind a server) first, then the signed-in `claude` CLI. Either one
+ * returning text wins; null (→ deterministic heuristic) only if both are absent.
+ */
+async function llmPhrase(agent: string, spans: TriageSpan[]): Promise<string | null> {
+  // Deterministic escape hatch (tests, or an operator who wants heuristic only).
+  if (process.env.NOTCH_TRIAGE_NO_LLM === "1") return null;
+  const prompt = triagePrompt(agent, spans);
 
   const key = process.env.ANTHROPIC_API_KEY;
   if (key && typeof globalThis.fetch === "function") {
@@ -200,11 +221,10 @@ async function llmPhrase(agent: string, spans: TriageSpan[]): Promise<string | n
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
-        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 320, messages: [{ role: "user", content: prompt }] }),
+        body: JSON.stringify({ model: TRIAGE_MODEL, max_tokens: 320, messages: [{ role: "user", content: prompt }] }),
       });
       if (res.ok) {
-        const j = (await res.json()) as { content?: Array<{ text?: string }> };
-        const text = (j.content ?? []).map((c) => c.text ?? "").join("").trim();
+        const text = parseAnthropicText(await res.json());
         if (text) return text;
       }
     } catch {

@@ -6,7 +6,7 @@
 
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { LoomEvent } from "../src/types.js";
-import { parseCliOutput, triageAgent } from "../src/observability/triage.js";
+import { parseAnthropicText, parseCliOutput, triageAgent } from "../src/observability/triage.js";
 
 beforeAll(() => {
   process.env.NOTCH_TRIAGE_NO_LLM = "1"; // deterministic: heuristic only
@@ -64,6 +64,44 @@ describe("agent self-triage", () => {
     const r = await triageAgent("ghost");
     expect(r.source).toBe("no-data");
     expect(r.from).toBe("none");
+  });
+});
+
+describe("triage LLM prose via the Anthropic API (works headless, no CLI needed)", () => {
+  it("uses the ANTHROPIC_API_KEY path and returns source=llm", async () => {
+    const prev = { key: process.env.ANTHROPIC_API_KEY, noLlm: process.env.NOTCH_TRIAGE_NO_LLM };
+    process.env.ANTHROPIC_API_KEY = "sk-ant-test";
+    delete process.env.NOTCH_TRIAGE_NO_LLM; // allow the LLM path for this test
+    // URL-aware fetch: ClickHouse gets rows; the Anthropic endpoint gets prose.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (String(url).includes("api.anthropic.com")) {
+          return {
+            ok: true,
+            json: async () => ({ content: [{ type: "text", text: "opencode timed out on turn 5; raise the deadline." }] }),
+          } as unknown as Response;
+        }
+        const rows = [{ ts: Date.now(), name: "gen_ai.agent.turn", ms: 61000, code: 2, msg: "deadline exceeded", kind: "run_complete", cost: 0, tin: 5, tout: 0 }];
+        return { ok: true, text: async () => rows.map((r) => JSON.stringify(r)).join("\n") } as unknown as Response;
+      }),
+    );
+    const r = await triageAgent("opencode");
+    expect(r.source).toBe("llm");
+    expect(r.rootCause).toMatch(/timed out on turn 5/);
+    if (prev.key === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = prev.key;
+    if (prev.noLlm !== undefined) process.env.NOTCH_TRIAGE_NO_LLM = prev.noLlm;
+  });
+});
+
+describe("parseAnthropicText — reading an Anthropic /v1/messages reply", () => {
+  it("concatenates text blocks", () => {
+    expect(parseAnthropicText({ content: [{ type: "text", text: "root " }, { type: "text", text: "cause." }] })).toBe("root cause.");
+  });
+  it("returns null when there is no text", () => {
+    expect(parseAnthropicText({ content: [] })).toBeNull();
+    expect(parseAnthropicText({})).toBeNull();
   });
 });
 
