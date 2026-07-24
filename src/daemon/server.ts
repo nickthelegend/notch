@@ -836,8 +836,15 @@ export class LoomDaemon {
           const alertName = String(labels.alertname ?? body.title ?? "SigNoz alert");
           if (!agent) { actions.push({ skipped: "no agent label on alert" }); continue; }
           const infos = listProjects();
-          const info = infos.find((p) => p.name === projectRef || p.id === projectRef) ?? infos[0];
-          if (!info) { actions.push({ skipped: "no project" }); continue; }
+          // A project ref must actually match — never silently act on an arbitrary
+          // project. Only auto-pick when there's exactly one project and no ref.
+          const info = projectRef
+            ? infos.find((p) => p.name === projectRef || p.id === projectRef)
+            : infos.length === 1 ? infos[0] : undefined;
+          if (!info) {
+            actions.push({ skipped: projectRef ? `no project matching "${projectRef}"` : "project label required (multiple projects)" });
+            continue;
+          }
           try {
             const rt = await this.runtime(info.id);
             const holder = rt.baton.holder();
