@@ -12,8 +12,9 @@ decisions, and context become a single shared thread that flows from one agent t
 and **every turn, handoff, route, and memory fold is traced to SigNoz** as OpenTelemetry
 `gen_ai` spans, so you can watch the fleet, its cost, and its tokens in real time.
 
-Today that means **Claude Code, Codex, OpenCode and Grok Code** as full agents, each
-verified against a real version, plus **Antigravity and Kiro** driven through their own
+Today that means **Claude Code, Codex, OpenCode, Grok Code and the Antigravity CLI**
+(offload a turn to Gemini to save tokens) as full agents, each verified against a real
+version, plus the **Antigravity IDE and Kiro** driven through their own
 windows — see [Supported agents](#supported-agents) for exactly how far each one goes, and
 [How memory actually reaches a model](#how-memory-actually-reaches-a-model) for the part
 most tools gloss over.
@@ -517,11 +518,12 @@ detects at least two roles.
 | Codex | adapter (full-duplex) | `codex exec --json` (JSONL), `exec resume <thread>`; found on PATH **or inside Codex.app** | ✅ verified against codex-cli 0.142.4 |
 | OpenCode | adapter (full-duplex) | `opencode serve` HTTP + SSE (`/prompt`, `/interrupt`, `/event`) | ✅ verified against 1.17.20 |
 | Grok Code | adapter (full-duplex) | `grok -p --output-format json`, `-r <session>` | 🔶 verified against 0.2.54 — **answers only, no tool or edit events** (see below) |
+| Antigravity CLI | adapter (full-duplex) | `agy --print`, `--conversation <id>` resume; runs on Gemini / hosted Claude / GPT | 🔶 verified against agy 1.1.6 — **final message + file edits, no token counts** (see below) |
 | Echo | adapter (demo/tests) | in-process | ✅ |
-| Antigravity | **bridge** (driveable) | Chromium debug port — types into the real chat panel and reads the panel back | 🔶 mechanism verified; its selectors are not (see below) |
+| Antigravity IDE | **bridge** (driveable) | Chromium debug port — types into the real chat panel and reads the panel back | 🔶 mechanism verified; its selectors are not (see below) |
 | Kiro | **bridge** (driveable) | same, via the same driver | 🔶 mechanism verified; its selectors are not |
 
-Three of those need their asterisks spelled out, because the table row is
+Four of those need their asterisks spelled out, because the table row is
 shorter than the truth:
 
 **Codex reports tokens, never money.** Its `turn.completed` carries
@@ -537,6 +539,18 @@ is what it said, and `git status` is what it did. Inferring the edits by diffing
 the tree would put guesses in the event log dressed as facts. Its permission
 mode also defaults to `bypassPermissions`, because headless with no TTY to ask,
 every other mode ends the turn `Cancelled` having written nothing.
+
+**The Antigravity CLI is the token-saving offload path — and it reports what it
+can.** `agy --print` runs a turn to completion on Gemini (or hosted Claude/GPT)
+with no GUI in the loop, so any project can hand work off your orchestrator's
+budget. Print mode emits only the final markdown message — no event stream — so
+a turn in the thread is its answer plus the files it touched (recovered from the
+`[name](file://…)` links `agy` writes), the model, and a duration. Like Codex it
+reports **no dollar cost**, because the CLI hands none and a made-up number is
+worse than silence. Continuity is real: the conversation id `agy` keys by
+workspace is captured after the first turn and replayed with `--conversation`,
+so follow-ups remember. This is the headless sibling of the Antigravity **IDE**
+bridge below — same product, one holds the baton, the other you watch.
 
 **Antigravity and Kiro are driven, not routed.** Both are Electron apps with no
 API; Notch connects to the debugging port, finds the chat box, types through the
