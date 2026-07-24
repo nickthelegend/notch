@@ -382,6 +382,50 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
   .cagent .brand{width:13.5px;height:13.5px;flex:none}
   .cagent .can{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .cagent .cchev{width:11px;height:11px;opacity:.55;flex:none;margin-right:-1px}
+  .cagent.dim{opacity:.45}
+  .cadot{width:6px;height:6px;border-radius:50%;background:var(--primary);flex:none}
+  /* AUTO chip — accent blue, a system action (not an agent) */
+  .cauto{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 8px;border-radius:99px;flex:none;cursor:pointer;
+    font:inherit;font-size:11px;font-weight:700;letter-spacing:.04em;border:1px solid var(--border);background:transparent;color:var(--muted-foreground);transition:all .12s}
+  .cauto:hover{border-color:var(--accentBlue);color:var(--accentBlue)}
+  .cauto.on{background:color-mix(in srgb, var(--accentBlue) 16%, transparent);border-color:color-mix(in srgb, var(--accentBlue) 42%, transparent);color:var(--accentBlue)}
+  .cauto .autodot{width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
+  .cauto.on .autodot{animation:autopulse 2s ease-in-out infinite}
+  .cauto.routing .autodot{animation:autopulse .7s ease-in-out infinite}
+  .cauto .cchev{width:10px;height:10px;opacity:.6;flex:none}
+  @keyframes autopulse{0%,100%{opacity:1}50%{opacity:.35}}
+  .cor{font-size:11px;color:var(--muted-foreground);flex:none}
+  .cdiv{width:1px;height:18px;background:var(--border);flex:none;margin:0 1px}
+  /* MCP + Skills slot buttons */
+  .cslot{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 9px;border-radius:8px;flex:none;cursor:pointer;
+    font:inherit;font-size:11.5px;font-weight:500;border:1px dashed color-mix(in srgb,var(--border) 90%,var(--foreground));background:transparent;color:var(--muted-foreground);transition:all .12s}
+  .cslot:hover{color:var(--foreground);border-color:var(--foreground)}
+  .cslot.active{border-style:solid;color:var(--foreground);border-color:var(--border)}
+  .cslot .cslotico,.cslot svg{width:13px;height:13px;flex:none;opacity:.85}
+  .skcount{font-size:9.5px;font-weight:700;background:var(--accentBlue);color:#fff;border-radius:99px;min-width:15px;text-align:center;padding:0 4px;line-height:15px}
+  /* skill-suggestion banner */
+  .cskillsug{display:flex;align-items:center;gap:9px;padding:8px 10px;margin-bottom:6px;border-radius:10px;
+    background:color-mix(in srgb,var(--accentBlue) 10%,var(--card));border:1px solid color-mix(in srgb,var(--accentBlue) 30%,transparent)}
+  .cskillsug .sugico{color:var(--accentBlue);flex:none;display:inline-flex;width:15px;height:15px}
+  .cskillsug .sugtx{flex:1;font-size:12px;min-width:0;overflow:hidden}
+  .cskillsug .sugadd{flex:none;font:inherit;font-size:11px;font-weight:600;color:var(--accentBlue);background:none;border:1px solid color-mix(in srgb,var(--accentBlue) 40%,transparent);border-radius:7px;padding:3px 9px;cursor:pointer}
+  .cskillsug .sugx{flex:none}
+  /* composer growth panel (MCP / Skills) */
+  .cpanel{max-height:280px;overflow:auto;margin-bottom:6px;border:1px solid var(--border);border-radius:12px;background:var(--card)}
+  .cpanelhd{display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding:11px 13px 6px;font-size:12px;font-weight:600}
+  .cpanelft{padding:8px 13px 11px;font-size:10.5px;color:var(--muted-foreground)}
+  .skrows{display:flex;flex-direction:column;gap:5px;padding:2px 10px}
+  .skrow{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--border);border-radius:9px;background:var(--secondary)}
+  .skrow.on{background:color-mix(in srgb,var(--accentBlue) 10%,transparent);border-color:color-mix(in srgb,var(--accentBlue) 34%,transparent)}
+  .skinfo{flex:1;min-width:0}
+  .skname{font-size:12.5px;font-weight:600}
+  .skrow.on .skname{color:var(--accentBlue)}
+  .skdesc{font-size:10.5px;color:var(--muted-foreground);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mcprow{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--border);border-radius:9px;background:var(--secondary)}
+  .mcpico{width:26px;height:26px;flex:none;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;background:var(--card);color:var(--muted-foreground)}
+  .mcpico.on{background:color-mix(in srgb,var(--ok) 22%,transparent);color:var(--ok)}
+  .mcpbadge{flex:none;font-size:10px;color:var(--ok);font-weight:600}
+  .mcpconn{flex:none;font:inherit;font-size:11px;font-weight:600;color:var(--accentBlue);background:none;border:none;cursor:pointer}
   /* attachment chips */
   .cchips{display:flex;flex-wrap:wrap;gap:6px;padding:2px 2px 6px}
   .cchip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 6px 0 8px;
@@ -2421,10 +2465,18 @@ ${BRAND_SPRITE}
       '<div class="cmenu" id="cmenu" style="display:none"></div>' +
       '<div class="cchips" id="cchips" style="display:none"></div>' +
       '<textarea id="box" class="cinput" rows="2" placeholder="Message&hellip;  @ for files, / for actions" autocomplete="off"></textarea>' +
+      '<div class="cskillsug" id="cskillsug" style="display:none"></div>' +
+      '<div class="cpanel" id="cpanel" style="display:none"></div>' +
       '<div class="crow">' +
       '<button class="ctool iconly" id="attach" type="button" title="attach an image or file" aria-label="attach a file">' + ICONS.plus + '</button>' +
-      '<button class="cagent" id="cagent" type="button" title="switch the agent this chat talks to" aria-label="switch agent" style="display:none"><span class="can">agent</span><span class="cchev">' + ICONS.chevron + "</span></button>" +
+      '<span class="cdiv"></span>' +
+      '<button class="cauto" id="cauto" type="button" title="let the system pick the agent (smart routing)" aria-label="auto routing"><span class="autodot"></span><span class="autolbl">AUTO</span><span class="cchev">' + ICONS.chevron + "</span></button>" +
+      '<span class="cor">or</span>' +
+      '<button class="cagent" id="cagent" type="button" title="switch the agent this chat talks to" aria-label="switch agent"><span class="cadot" id="cadot"></span><span class="can">agent</span><span class="cchev">' + ICONS.chevron + "</span></button>" +
       '<button class="ctool" id="modelpick" type="button" title="pick a model" aria-label="pick a model">' + '<span class="cmodel" id="cmodellabel">model</span>' + '<span class="cchev">' + ICONS.chevron + "</span></button>" +
+      '<span class="cdiv"></span>' +
+      '<button class="cslot" id="mcpbtn" type="button" title="connect MCP servers"><span class="cslotico">' + (ICONS.plug || ICONS.route) + '</span>MCPs</button>' +
+      '<button class="cslot" id="skillbtn" type="button" title="enable skills">' + (ICONS.bolt || ICONS.spark || ICONS.route) + 'Skills<span class="skcount" id="skcount" style="display:none">0</span></button>' +
       '<span style="flex:1"></span>' +
       '<button class="sendbtn" id="send" type="submit" title="send">' + ICONS.up + "</button>" +
       '<button class="sendbtn stopbtn" id="stop" type="button" title="interrupt" aria-label="interrupt" style="display:none">' +
@@ -5265,6 +5317,17 @@ ${BRAND_SPRITE}
         return;
       }
 
+      // AUTO mode: don't pick an agent — let the dynamic router decide who takes
+      // this turn (planner/builder/reviewer) based on the prompt + hop history.
+      if (state.auto) {
+        var chip = document.getElementById("cauto");
+        if (chip) chip.classList.add("routing");
+        api("/api/projects/" + pid + "/route", { method: "POST", body: JSON.stringify({ task: full, spec: "auto" }) })
+          .then(refresh).catch(function(err){ toast(err.message); })
+          .then(function(){ if (chip) chip.classList.remove("routing"); });
+        return;
+      }
+
       var chain = Promise.resolve();
       if (state.selected && state.selected !== p.holder) {
         chain = api("/api/projects/" + pid + "/handoff", { method: "POST", body: JSON.stringify({ to: state.selected }) });
@@ -5537,7 +5600,7 @@ ${BRAND_SPRITE}
       box.setAttribute("data-bound", "1");
       autosizeBox();
 
-      box.addEventListener("input", function(){ autosizeBox(); scanTrigger(); });
+      box.addEventListener("input", function(){ autosizeBox(); scanTrigger(); scheduleSkillSuggest(box.value); });
       box.addEventListener("keydown", function(e){
         // Menu open: arrows move, Enter/Tab accept, Esc closes.
         if (menuState && menuState.items && menuState.items.length && (menuState.kind === "file" || menuState.kind === "cmd")) {
@@ -5579,9 +5642,19 @@ ${BRAND_SPRITE}
       };
       var ap = document.getElementById("cagent");
       if (ap) ap.onclick = function(){
+        setAuto(false);
         if (menuState && menuState.kind === "agentmenu") { closeMenu(); return; }
         openAgentMenu();
       };
+      // AUTO: hand the turn to the dynamic router instead of a chosen agent.
+      var autoBtn = document.getElementById("cauto");
+      if (autoBtn) autoBtn.onclick = function(){ setAuto(!state.auto); };
+      var mcpB = document.getElementById("mcpbtn");
+      if (mcpB) mcpB.onclick = function(){ toggleComposerPanel("mcp"); };
+      var skB = document.getElementById("skillbtn");
+      if (skB) skB.onclick = function(){ toggleComposerPanel("skills"); };
+      setAuto(state.auto);
+      refreshSkillCount();
 
       // Drag a file straight onto the card.
       var cbox = document.querySelector(".cbox");
@@ -5607,8 +5680,85 @@ ${BRAND_SPRITE}
           chip.style.display = "";
           chip.innerHTML = brandMark(cur.kind) + '<span class="can">' + esc(cur.id) + "</span>" +
             '<span class="cchev">' + ICONS.chevron + "</span>";
-        } else { chip.style.display = "none"; }
+          if (state.auto) chip.classList.add("dim");
+        } else if (!state.auto) { chip.style.display = "none"; }
       }
+    }
+
+    // AUTO ⇄ specific-agent: mutually exclusive, reflected on the two chips.
+    function setAuto(on){
+      state.auto = !!on;
+      var ab = document.getElementById("cauto"), ag = document.getElementById("cagent");
+      if (ab) ab.classList.toggle("on", state.auto);
+      if (ag) { ag.classList.toggle("dim", state.auto); if (state.auto) ag.style.display = ""; }
+    }
+    function refreshSkillCount(){
+      api("/api/projects/" + pid + "/skills").then(function(r){
+        var skills = r.skills || [], on = skills.filter(function(s){ return s.enabled; }).length;
+        var b = document.getElementById("skcount"); if (b){ b.textContent = on; b.style.display = on ? "" : "none"; }
+        var btn = document.getElementById("skillbtn"); if (btn){ btn.classList.toggle("active", on > 0); btn.classList.toggle("empty", !skills.length); }
+      }).catch(function(){});
+    }
+    function toggleComposerPanel(kind){
+      var panel = document.getElementById("cpanel"); if (!panel) return;
+      if (state.cpanel === kind){ closeComposerPanel(); return; }
+      state.cpanel = kind;
+      panel.style.display = ""; panel.innerHTML = '<div class="loader"><i></i><i></i><i></i><i></i></div>';
+      if (kind === "skills") renderSkillsPanel(panel); else renderMcpPanel(panel);
+      setTimeout(function(){ document.addEventListener("mousedown", cpanelAway); }, 0);
+    }
+    function closeComposerPanel(){ state.cpanel = null; var p = document.getElementById("cpanel"); if (p){ p.style.display = "none"; p.innerHTML = ""; } document.removeEventListener("mousedown", cpanelAway); }
+    function cpanelAway(ev){ var p = document.getElementById("cpanel"); if (!p) return; if (p.contains(ev.target)) return; if (ev.target.closest && (ev.target.closest("#skillbtn") || ev.target.closest("#mcpbtn"))) return; closeComposerPanel(); }
+    function renderSkillsPanel(panel){
+      api("/api/projects/" + pid + "/skills").then(function(r){
+        var skills = r.skills || [];
+        if (!skills.length){ panel.innerHTML = '<div class="cpanelhd"><span>Active skills</span></div><div class="obsub" style="padding:10px 12px">No skills yet. Add a <code>SKILL.md</code> under <code>skills/</code> to get started.</div>'; return; }
+        var rows = skills.map(function(s){
+          return '<div class="skrow' + (s.enabled ? " on" : "") + '"><div class="skinfo"><div class="skname">' + esc(s.name || s.id) + '</div><div class="skdesc">' + esc((s.description || "").slice(0, 130)) + '</div></div><label class="psswitch" aria-label="toggle ' + esc(s.id) + '"><input type="checkbox" class="sken" data-skill="' + esc(s.id) + '"' + (s.enabled ? " checked" : "") + '><span class="pssl"></span></label></div>';
+        }).join("");
+        panel.innerHTML = '<div class="cpanelhd"><span>Active skills</span><span class="obsub">injected into every prompt</span></div><div class="skrows">' + rows + '</div><div class="cpanelft">Context blocks prepended to the agent\\u2019s system prompt \\u00b7 from <code>skills/</code></div>';
+        Array.prototype.forEach.call(panel.querySelectorAll(".sken"), function(cb){
+          cb.onchange = function(){
+            api("/api/projects/" + pid + "/skills/" + encodeURIComponent(cb.getAttribute("data-skill")), { method: "PUT", body: JSON.stringify({ enabled: cb.checked }) })
+              .then(function(){ refreshSkillCount(); var row = cb.closest(".skrow"); if (row) row.classList.toggle("on", cb.checked); })
+              .catch(function(err){ toast(err.message); cb.checked = !cb.checked; });
+          };
+        });
+      }).catch(function(){ panel.innerHTML = '<div class="obsub" style="padding:10px">Skills unavailable.</div>'; });
+    }
+    function renderMcpPanel(panel){
+      api("/api/projects/" + pid + "/mcps").then(function(r){
+        var mcps = r.mcps || [];
+        var rows = mcps.map(function(m){
+          var connected = !!m.url;
+          return '<div class="mcprow"><div class="mcpico' + (connected ? " on" : "") + '">' + esc((m.name || "?").slice(0, 1)) + '</div><div class="skinfo"><div class="skname">' + esc(m.name) + '</div><div class="skdesc">' + esc(m.description || "") + "</div></div>" +
+            (connected ? '<span class="mcpbadge">connected</span>' : '<button class="mcpconn" data-mcp="' + esc(m.name) + '">Connect</button>') + "</div>";
+        }).join("");
+        panel.innerHTML = '<div class="cpanelhd"><span>MCP connections</span><span class="obsub">passed to the agent each turn</span></div><div class="skrows">' + rows + '</div><div class="cpanelft">Connect a server to give agents its tools.</div>';
+        Array.prototype.forEach.call(panel.querySelectorAll(".mcpconn"), function(btn){
+          btn.onclick = function(){
+            var name = btn.getAttribute("data-mcp"), url = window.prompt("MCP server URL for " + name + ":", "https://");
+            if (!url) return;
+            api("/api/projects/" + pid + "/mcps", { method: "PATCH", body: JSON.stringify({ mcp: { name: name, url: url, enabledForSession: true } }) })
+              .then(function(){ renderMcpPanel(panel); }).catch(function(err){ toast(err.message); });
+          };
+        });
+      }).catch(function(){ panel.innerHTML = '<div class="obsub" style="padding:10px">MCPs unavailable.</div>'; });
+    }
+    var _sugT = null;
+    function scheduleSkillSuggest(text){ if (_sugT) clearTimeout(_sugT); _sugT = setTimeout(function(){ doSkillSuggest(text); }, 300); }
+    function doSkillSuggest(text){
+      var bar = document.getElementById("cskillsug"); if (!bar) return;
+      if (!text || text.trim().length < 4){ bar.style.display = "none"; return; }
+      api("/api/projects/" + pid + "/skills?suggest=" + encodeURIComponent(text.slice(0, 200))).then(function(r){
+        var s = r.suggestion;
+        if (!s){ bar.style.display = "none"; return; }
+        bar.style.display = "";
+        bar.innerHTML = '<span class="sugico">' + (ICONS.bolt || ICONS.spark || "\\u26a1") + '</span><span class="sugtx"><b>Skill: ' + esc(s.name || s.id) + '</b> <span class="obsub">' + esc((s.description || "").slice(0, 90)) + '</span></span><button class="sugadd" data-skill="' + esc(s.id) + '">+ Enable</button><button class="sugx iconbtn" aria-label="dismiss">' + ICONS.x + "</button>";
+        var add = bar.querySelector(".sugadd");
+        if (add) add.onclick = function(){ api("/api/projects/" + pid + "/skills/" + encodeURIComponent(s.id), { method: "PUT", body: JSON.stringify({ enabled: true }) }).then(function(){ refreshSkillCount(); bar.style.display = "none"; toast("enabled " + (s.name || s.id)); }); };
+        var x = bar.querySelector(".sugx"); if (x) x.onclick = function(){ bar.style.display = "none"; };
+      }).catch(function(){});
     }
 
     bindComposer();
