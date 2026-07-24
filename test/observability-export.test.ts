@@ -106,8 +106,8 @@ describe("Notch -> SigNoz OTLP export (end to end)", () => {
     expect(r.status).toBe(200);
     const { metrics } = (await r.json()) as { metrics: { totalUsd: number; tokensIn: number; tokensOut: number; byAgent: Array<Record<string, number>> } };
     expect(metrics.totalUsd).toBeGreaterThan(0);
-    expect(metrics.tokensIn).toBe(0); // echo adapters report cost only, so tokens stay honestly 0
-    expect(metrics.tokensOut).toBe(0);
+    expect(metrics.tokensIn).toBeGreaterThan(0); // echo now reports deterministic tokens too
+    expect(metrics.tokensOut).toBeGreaterThan(0);
     expect(Array.isArray(metrics.byAgent)).toBe(true);
     expect(metrics.byAgent[0]).toHaveProperty("tokensIn");
     expect(metrics.byAgent[0]).toHaveProperty("usd");
