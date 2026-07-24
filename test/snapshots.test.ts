@@ -46,6 +46,28 @@ describe("buildSnapshots", () => {
     expect(last.turnIndex).toBe(2); // two turns completed total
   });
 
+  /**
+   * `filesCreatedSoFar` was initialised to 0, never incremented, and shipped
+   * through the API as a count of created files — structurally always zero. It
+   * counts something now: git porcelain calls an untracked file "??", and a
+   * turn touching one is the only "created" this log can support.
+   */
+  it("counts a created file only when the turn touched an untracked one", () => {
+    const snaps = buildSnapshots([
+      ev("handoff", undefined, { to: "builder" }),
+      ev("turn_diff", "builder", {
+        files: [
+          { status: "??", path: "src/new.ts" },
+          { status: " M", path: "src/old.ts" },
+        ],
+      }),
+      ev("run_complete", "builder", { durationMs: 10 }),
+    ]);
+    const last = snaps[snaps.length - 1]!;
+    expect(last.filesCreatedSoFar).toBe(1);
+    expect(last.filesModifiedSoFar).toBe(2); // both files were changed by the turn
+  });
+
   it("marks an errored agent in the frame it errors", () => {
     const snaps = buildSnapshots([
       ev("handoff", undefined, { to: "codex" }),

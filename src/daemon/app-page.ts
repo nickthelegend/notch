@@ -1199,6 +1199,46 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
   .obtab:hover{color:var(--foreground)}
   .obtab.on{background:var(--card);color:var(--foreground);box-shadow:0 1px 0 rgb(0 0 0 / .12)}
   .obbody{min-height:200px}
+  /* Ask Noz — a docked assistant over the Observatory, not a modal: you keep
+     reading the dashboard while it answers. */
+  .obask{appearance:none;display:inline-flex;align-items:center;gap:6px;background:var(--primary);color:var(--primary-foreground);
+    border:1px solid var(--primary);border-radius:var(--radius-sm);padding:6px 12px;font:inherit;font-size:12px;font-weight:600;cursor:pointer;margin-right:8px}
+  .obask:hover{filter:brightness(1.08)}
+  .obask svg{width:13px;height:13px}
+  .obaskpanel{position:fixed;top:0;right:0;bottom:0;width:min(420px,92vw);background:var(--card);border-left:1px solid var(--border);
+    display:none;flex-direction:column;z-index:60;box-shadow:-18px 0 42px -22px rgb(0 0 0 / .55)}
+  .obaskpanel.open{display:flex}
+  .askhd{display:flex;align-items:center;gap:8px;padding:12px 12px 10px 16px;border-bottom:1px solid var(--border)}
+  .askt{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;font-weight:700;flex:1}
+  .askt svg{width:15px;height:15px;color:var(--primary)}
+  .askempty{flex:1;overflow-y:auto;padding:28px 18px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:9px}
+  .askmark{width:42px;height:42px;border-radius:12px;background:color-mix(in srgb,var(--primary) 14%,transparent);
+    display:flex;align-items:center;justify-content:center;color:var(--primary)}
+  .askmark svg{width:21px;height:21px}
+  .askh{font-size:16px;font-weight:700}
+  .asksub{font-size:12px;line-height:1.55;color:var(--muted-foreground);max-width:34ch}
+  .asksugs{display:flex;flex-direction:column;gap:7px;width:100%;margin-top:8px}
+  .asksug{appearance:none;text-align:left;background:var(--secondary);border:1px solid var(--border);border-radius:var(--radius-sm);
+    padding:9px 12px;font:inherit;font-size:12px;color:var(--foreground);cursor:pointer;transition:border-color .15s}
+  .asksug:hover{border-color:var(--primary)}
+  .askmsgs{flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:11px}
+  .askm{font-size:12.5px;line-height:1.6;border-radius:var(--radius);padding:9px 12px;max-width:100%;overflow-wrap:break-word}
+  .askm.user{background:var(--secondary);align-self:flex-end;max-width:85%}
+  .askm.noz{background:transparent;border:1px solid var(--border);align-self:stretch}
+  .askm.pending{display:flex;align-items:center;gap:8px;color:var(--muted-foreground)}
+  .askdots{display:inline-flex;gap:3px}
+  .askdots i{width:4px;height:4px;border-radius:50%;background:var(--primary);animation:askd 1s ease-in-out infinite}
+  .askdots i:nth-child(2){animation-delay:.15s}.askdots i:nth-child(3){animation-delay:.3s}
+  @keyframes askd{0%,100%{opacity:.3}50%{opacity:1}}
+  @media (prefers-reduced-motion:reduce){.askdots i{animation:none;opacity:.7}}
+  .askvia{margin-top:7px;padding-top:6px;border-top:1px solid var(--border);font-size:10px;color:var(--muted-foreground);font-family:var(--font-mono)}
+  .askform{display:flex;gap:8px;align-items:flex-end;padding:11px 12px;border-top:1px solid var(--border)}
+  .askform textarea{flex:1;resize:none;background:var(--secondary);border:1px solid var(--border);border-radius:var(--radius-sm);
+    padding:9px 11px;font:inherit;font-size:12.5px;color:var(--foreground);max-height:120px;min-height:38px}
+  .askform textarea:focus{outline:none;border-color:var(--primary)}
+  .asksend{appearance:none;flex:none;width:38px;height:38px;border-radius:var(--radius-sm);border:0;background:var(--primary);
+    color:var(--primary-foreground);cursor:pointer;display:flex;align-items:center;justify-content:center}
+  .asksend svg{width:15px;height:15px}
   /* dashboard charts — donuts for composition, lines for behaviour over time */
   .obchartgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;margin:14px 0}
   .obchart{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px 10px;min-width:0}
@@ -2764,6 +2804,84 @@ ${BRAND_SPRITE}
       return E[view] ? '<div class="obexplain">' + E[view] + "</div>" : "";
     }
 
+    // ---- Ask Noz — the fleet's own telemetry, asked in English --------------
+    // Backed by POST /observatory/ask, which assembles the evidence from the
+    // same sources this screen renders (status, metrics, health, spans,
+    // decisions) and hands any configured SigNoz MCP server to the model. So an
+    // answer can only ever cite numbers that are also on the screen.
+    var ASK_SUGGESTIONS = [
+      "Which agent is costing me the most, and why?",
+      "Is anything unhealthy right now?",
+      "What did the fleet decide so far?",
+      "Where did the baton spend most of its time?",
+      "Show me the slowest turns and what they were doing."
+    ];
+    function askPanelHtml(){
+      var st = state.obAsk || { msgs: [], busy: false };
+      var body;
+      if (!st.msgs.length){
+        body = '<div class="askempty"><div class="askmark">' + (ICONS.spark || "") + "</div>" +
+          '<div class="askh">Ask Noz</div>' +
+          '<div class="asksub">Questions about this fleet\\u2019s traces, spend, health and decisions \\u2014 answered from its own telemetry.</div>' +
+          '<div class="asksugs">' + ASK_SUGGESTIONS.map(function(s){
+            return '<button class="asksug" type="button" data-q="' + esc(s) + '">' + esc(s) + "</button>";
+          }).join("") + "</div></div>";
+      } else {
+        body = '<div class="askmsgs" id="askmsgs">' + st.msgs.map(function(m){
+          if (m.role === "user") return '<div class="askm user">' + esc(m.text) + "</div>";
+          if (m.role === "pending") return '<div class="askm noz pending"><span class="askdots"><i></i><i></i><i></i></span>reading the fleet\\u2019s telemetry\\u2026</div>';
+          return '<div class="askm noz">' + esc(m.text).replace(/\\n/g, "<br>") +
+            (m.via ? '<div class="askvia">answered by ' + esc(m.via) + (m.mcp && m.mcp.length ? " \\u00b7 via SigNoz MCP: " + esc(m.mcp.join(", ")) : "") +
+              (m.spanSource === "local-log" ? " \\u00b7 local event log (SigNoz unreachable)" : m.spanSource === "signoz" ? " \\u00b7 SigNoz spans" : "") + "</div>" : "") + "</div>";
+        }).join("") + "</div>";
+      }
+      return '<div class="askhd"><span class="askt">' + (ICONS.spark || "") + "Noz</span>" +
+        '<button class="iconbtn" id="askclear" title="new conversation" aria-label="new conversation">' + (ICONS.plus || "+") + "</button>" +
+        '<button class="iconbtn" id="askclose" title="close" aria-label="close">' + ICONS.x + "</button></div>" +
+        body +
+        '<div class="askform"><textarea id="askinput" rows="1" placeholder="Ask anything about this fleet\\u2026"></textarea>' +
+        '<button class="asksend" id="asksend" type="button" aria-label="send">' + (ICONS.arrowUp || ICONS.chevron || "\\u2191") + "</button></div>";
+    }
+    function renderAskPanel(){
+      var el = document.getElementById("obaskpanel"); if (!el) return;
+      var st = state.obAsk || { msgs: [], busy: false };
+      el.className = "obaskpanel" + (st.open ? " open" : "");
+      if (!st.open){ el.innerHTML = ""; return; }
+      el.innerHTML = askPanelHtml();
+      var msgs = el.querySelector("#askmsgs"); if (msgs) msgs.scrollTop = msgs.scrollHeight;
+      var input = el.querySelector("#askinput");
+      Array.prototype.forEach.call(el.querySelectorAll(".asksug"), function(b){
+        b.onclick = function(){ sendAsk(b.getAttribute("data-q")); };
+      });
+      el.querySelector("#askclose").onclick = function(){ state.obAsk.open = false; renderAskPanel(); };
+      el.querySelector("#askclear").onclick = function(){ state.obAsk.msgs = []; renderAskPanel(); };
+      el.querySelector("#asksend").onclick = function(){ if (input) sendAsk(input.value); };
+      if (input){
+        input.onkeydown = function(ev){
+          if (ev.key === "Enter" && !ev.shiftKey){ ev.preventDefault(); sendAsk(input.value); }
+        };
+        if (!st.busy) input.focus();
+      }
+    }
+    function sendAsk(q){
+      q = (q || "").trim(); if (!q) return;
+      var st = state.obAsk; if (!st || st.busy) return;
+      st.msgs.push({ role: "user", text: q });
+      st.msgs.push({ role: "pending" });
+      st.busy = true; renderAskPanel();
+      var pid = state.project && state.project.id;
+      api("/api/projects/" + pid + "/observatory/ask", { method: "POST", body: JSON.stringify({ question: q }) })
+        .then(function(r){
+          st.msgs.pop(); // drop the pending bubble
+          st.msgs.push({ role: "noz", text: r.answer || "(no answer)", via: r.via, mcp: r.mcpServers, spanSource: r.spanSource });
+        })
+        .catch(function(err){
+          st.msgs.pop();
+          st.msgs.push({ role: "noz", text: "Couldn\\u2019t reach the daemon \\u2014 " + (err && err.message ? err.message : "unknown error") + ". Try again." });
+        })
+        .then(function(){ st.busy = false; renderAskPanel(); });
+    }
+
     // ---- Dashboard charts ---------------------------------------------------
     // Donuts for composition ("what is the spend made of"), lines for behaviour
     // over time. Every value here comes from /metrics byAgent or the real event
@@ -2910,11 +3028,13 @@ ${BRAND_SPRITE}
       el.innerHTML =
         '<div class="obhead"><div class="obtitle">' + ICONS.telescope +
           '<span>Observatory</span> <span class="obsub">agents in action \\u00b7 the one brain</span></div>' +
+          '<button class="obask" id="obaskbtn" type="button">' + (ICONS.spark || ICONS.route) + " Ask Noz</button>" +
           '<a class="obsignoz" href="' + signozBase() + '" target="_blank" rel="noreferrer">' + ICONS.route + " View in SigNoz</a></div>" +
         '<div class="obmetrics">' + cards + "</div>" +
         '<div class="obtabs" role="tablist" aria-label="Observatory views">' + tabs + "</div>" +
         obExplain(state.obView) +
-        '<div class="obbody">' + body + "</div>";
+        '<div class="obbody">' + body + "</div>" +
+        '<div id="obaskpanel" class="obaskpanel"></div>';
       // Tabs follow the ARIA pattern: click or arrow-key to move, the active tab
       // is the only tab stop (roving tabindex), and it stays scrolled into view.
       var tabEls = Array.prototype.slice.call(el.querySelectorAll(".obtab"));
@@ -2973,6 +3093,12 @@ ${BRAND_SPRITE}
       Array.prototype.forEach.call(el.querySelectorAll(".obtl.decision[data-decid]"), function(li){
         li.onclick = function(){ state.obPendingDecision = li.getAttribute("data-decid"); state.obView = "decisions"; renderObservatory(el, p, m, events); };
       });
+      // Ask Noz survives a redraw: the Observatory repaints on every live event,
+      // and a chat that vanished mid-answer would be unusable.
+      state.obAsk = state.obAsk || { open: false, msgs: [], busy: false };
+      var askBtn = el.querySelector("#obaskbtn");
+      if (askBtn) askBtn.onclick = function(){ state.obAsk.open = !state.obAsk.open; renderAskPanel(); };
+      renderAskPanel();
       if (state.obView === "canvas" || state.obView === "graph") wireObservatoryDrag(el);
       if (state.obView === "metrics") observatoryBurn(p);
       if (state.obView === "decisions") observatoryDecisions(p);
@@ -3195,7 +3321,13 @@ ${BRAND_SPRITE}
         c("Token usage", tokfmt(totalTok), tokfmt(k.totalTokensIn) + "\\u2191 " + tokfmt(k.totalTokensOut) + "\\u2193", '<div class="kmsparkwrap blue">' + kmSpark(k.tokenSparkline, "blue") + "</div>") +
         c("Est. cost", '<span class="kmcost">' + money(k.totalCostUsd || 0) + "</span>", "from CLI usage") +
         c("Critical path", '<span class="kmsm">' + (k.criticalPath && k.criticalPath.length ? esc(k.criticalPath.join(" \\u2192 ")) : "\\u2014") + "</span>", (k.decisionsRecorded || 0) + " decisions") +
-        c("Avg confidence", (k.avgConfidence || 0) + "%", (k.decisionsRecorded || 0) + " decisions", '<div class="kmbar"><div class="kmbarfill" style="width:' + (k.avgConfidence || 0) + '%"></div></div>') +
+        // A fleet whose decisions were pattern-matched has no average confidence
+        // to report. "0%" would read as "the agents were completely unsure",
+        // which is a different and false claim from "nothing measured this".
+        c("Avg confidence",
+          k.avgConfidence ? k.avgConfidence + "%" : '<span class="kmsm">not measured</span>',
+          (k.decisionsRecorded || 0) + " decisions",
+          k.avgConfidence ? '<div class="kmbar"><div class="kmbarfill" style="width:' + k.avgConfidence + '%"></div></div>' : "") +
         c("Retries", k.retriesTotal || 0, "errors + route fails") + "</div>";
       var tba = k.tokensByAgent || {}, names = Object.keys(tba).sort(function(a, b){ return tba[b] - tba[a]; });
       var bars = names.map(function(a){
