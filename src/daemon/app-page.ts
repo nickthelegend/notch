@@ -1260,6 +1260,11 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
   .obasync{min-height:180px}
   .burnwrap{display:flex;flex-direction:column}
   .burnsvg{width:100%;height:150px;display:block;margin:4px 0 8px}
+  .burnempty{display:flex;align-items:center;gap:10px;margin:4px 0 10px;padding:14px 16px;
+    border:1px dashed var(--border);border-radius:var(--radius);color:var(--muted-foreground);
+    font-size:12.5px;line-height:1.45;background:color-mix(in oklab,var(--card) 60%,transparent)}
+  .burnempty svg{width:16px;height:16px;flex:none;opacity:.6}
+  .burnempty b{color:var(--foreground);font-weight:600}
   .burnstats{display:flex;gap:10px;flex-wrap:wrap}
   .budgets{display:flex;flex-direction:column;gap:6px}
   .budrow{display:flex;align-items:center;gap:10px;padding:7px 10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card)}
@@ -2019,7 +2024,10 @@ ${BRAND_SPRITE}
     });
   })();
   function hue(id){ var h = 0; for (var i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) % 360; return h; }
-  function money(n){ return "$" + (n >= 0.01 ? n.toFixed(2) : n.toFixed(4)); }
+  // Zero is "$0", not "$0.0000" — four decimals of nothing reads as fake
+  // precision (and free-model turns genuinely cost nothing). Sub-cent but real
+  // costs still show four places; anything that would round to $0.0000 is $0.
+  function money(n){ n = Number(n) || 0; if (n < 0.00005) return "$0"; return "$" + (n >= 0.01 ? n.toFixed(2) : n.toFixed(4)); }
   /** A tiny action menu anchored under a button (the SCM commit split, etc.). */
   function openScmMenu(anchor, items){
     var ex = document.getElementById("scmmenu"); if (ex) ex.remove();
@@ -2812,20 +2820,30 @@ ${BRAND_SPRITE}
     }
     function burnView(p, burn, budgets){
       var bk = burn.buckets || [], n = bk.length, W = 680, H = 150, PADL = 6, PADR = 6, PADT = 12, PADB = 8;
-      var max = 0.0000001; bk.forEach(function(b){ if (b.total > max) max = b.total; });
-      var pts = bk.map(function(b, i){
-        var x = PADL + (n <= 1 ? (W - PADL - PADR) / 2 : i * ((W - PADL - PADR) / (n - 1)));
-        var y = (H - PADB) - (b.total / max) * (H - PADT - PADB);
-        return [x, y];
-      });
-      var line = pts.map(function(pt, i){ return (i ? "L" : "M") + pt[0].toFixed(1) + " " + pt[1].toFixed(1); }).join(" ");
-      var area = pts.length > 1 ? line + " L " + pts[pts.length - 1][0].toFixed(1) + " " + (H - PADB) + " L " + pts[0][0].toFixed(1) + " " + (H - PADB) + " Z" : "";
-      var dots = pts.map(function(pt){ return '<circle cx="' + pt[0].toFixed(1) + '" cy="' + pt[1].toFixed(1) + '" r="2.5" fill="var(--primary)"/>'; }).join("");
-      var svg = '<svg viewBox="0 0 ' + W + " " + H + '" class="obsvg burnsvg" preserveAspectRatio="none">' +
-        '<defs><linearGradient id="burnfill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--primary)" stop-opacity="0.35"/><stop offset="100%" stop-color="var(--primary)" stop-opacity="0"/></linearGradient></defs>' +
-        (area ? '<path d="' + area + '" fill="url(#burnfill)"/>' : "") +
-        (line ? '<path d="' + line + '" fill="none" stroke="var(--primary)" stroke-width="2"/>' : "") + dots + "</svg>";
-      var empty = burn.totalUsd > 0 ? "" : '<div class="obnote" style="margin-top:0">No spend yet in this window \\u2014 free-model turns cost $0. The curve fills in as paid turns run.</div>';
+      var hasData = (burn.totalUsd || 0) > 0 || bk.some(function(b){ return (b.total || 0) > 0; });
+      var chart;
+      if (hasData) {
+        var max = 0.0000001; bk.forEach(function(b){ if (b.total > max) max = b.total; });
+        var pts = bk.map(function(b, i){
+          var x = PADL + (n <= 1 ? (W - PADL - PADR) / 2 : i * ((W - PADL - PADR) / (n - 1)));
+          var y = (H - PADB) - (b.total / max) * (H - PADT - PADB);
+          return [x, y];
+        });
+        var line = pts.map(function(pt, i){ return (i ? "L" : "M") + pt[0].toFixed(1) + " " + pt[1].toFixed(1); }).join(" ");
+        var area = pts.length > 1 ? line + " L " + pts[pts.length - 1][0].toFixed(1) + " " + (H - PADB) + " L " + pts[0][0].toFixed(1) + " " + (H - PADB) + " Z" : "";
+        var dots = pts.map(function(pt){ return '<circle cx="' + pt[0].toFixed(1) + '" cy="' + pt[1].toFixed(1) + '" r="2.5" fill="var(--primary)"/>'; }).join("");
+        chart = '<svg viewBox="0 0 ' + W + " " + H + '" class="obsvg burnsvg" preserveAspectRatio="none">' +
+          '<defs><linearGradient id="burnfill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--primary)" stop-opacity="0.35"/><stop offset="100%" stop-color="var(--primary)" stop-opacity="0"/></linearGradient></defs>' +
+          (area ? '<path d="' + area + '" fill="url(#burnfill)"/>' : "") +
+          (line ? '<path d="' + line + '" fill="none" stroke="var(--primary)" stroke-width="2"/>' : "") + dots + "</svg>";
+      } else {
+        // No spend → a compact empty state, not a blank 150px chart box that
+        // reads as broken. The flat curve says nothing; a sentence says it all.
+        chart = '<div class="burnempty">' + ICONS.spark +
+          "<span>No spend in the last 24h. Free-model turns (Gemini, local) cost <b>$0</b>; the curve fills in as paid turns run.</span></div>";
+      }
+      var empty = "";
+      var svg = chart;
       var summary = '<div class="burnstats">' +
         '<div class="obminicard"><div class="obcl">Spent (24h)</div><div class="obcv sm">' + money(burn.totalUsd || 0) + "</div></div>" +
         '<div class="obminicard"><div class="obcl">Rate</div><div class="obcv sm">' + money(burn.ratePerHour || 0) + "/h</div></div>" +
@@ -3131,14 +3149,20 @@ ${BRAND_SPRITE}
         else if (isRecover(e)) label = "\\u2713 SigNoz recovery \\u00b7 " + esc(p.alert || "alert") + " resolved \\u2192 " + (p.retried ? "baton retried on " + esc(e.agentId || "agent") : "quarantine lifted on " + esc(e.agentId || "agent"));
         else if (isDecision(e)){ label = "\\ud83d\\udca1 " + esc(e.agentId || "agent") + " decided: <strong>" + esc(p.title || "decision") + '</strong> <span class="obtlconf">' + (p.confidence || 0) + "%</span>"; extra = ' data-decid="' + esc(p.decisionId || "") + '"'; }
         else if (e.kind === "run_complete") label = esc(e.agentId || "agent") + " finished a turn" + (p.durationMs ? " \\u00b7 " + (Math.round(p.durationMs / 100) / 10) + "s" : "");
-        else if (e.kind === "handoff") label = "baton \\u00b7 " + esc(p.from || "?") + " \\u2192 " + esc(p.to || "?");
+        else if (e.kind === "handoff") label = p.from ? "baton \\u00b7 " + esc(p.from) + " \\u2192 " + esc(p.to || "\\u2014") : "baton \\u00b7 " + esc(p.to || "agent") + " takes it first";
         else if (e.kind.indexOf("route_") === 0) label = "route " + e.kind.slice(6) + (p.error ? " \\u00b7 " + esc(p.error) : "");
         else if (e.kind.indexOf("memory_") === 0) label = "brain \\u00b7 " + e.kind.slice(7) + (p.kind ? " (" + esc(p.kind) + ")" : "");
         else if (e.kind === "needs_input") label = esc(e.agentId || "agent") + " needs input";
         else if (e.kind === "error") label = esc(p.message || "error");
         else label = "decision \\u00b7 " + esc(trunc(p.text || "", 56));
         var secs = Math.max(0, Math.round((e.ts - base) / 1000));
-        var t = secs < 60 ? secs + "s" : Math.floor(secs / 60) + "m " + (secs % 60) + "s";
+        // Roll up so a run that spans hours or days stays readable — "2133m 37s"
+        // means nothing to a person; "1d 11h" does.
+        var t;
+        if (secs < 60) t = secs + "s";
+        else if (secs < 3600) t = Math.floor(secs / 60) + "m " + (secs % 60) + "s";
+        else if (secs < 86400) t = Math.floor(secs / 3600) + "h " + Math.round((secs % 3600) / 60) + "m";
+        else t = Math.floor(secs / 86400) + "d " + Math.round((secs % 86400) / 3600) + "h";
         return '<li class="obtl ' + cls + '"' + extra + '><span class="obtldot"></span><span class="obtllabel">' + label + '</span><span class="obtltime">' + t + "</span></li>";
       }).join("");
       return '<ol class="obtimeline">' + rows + "</ol>";
