@@ -98,6 +98,13 @@ describe("codex · a normal turn", () => {
     expect(of(events, "status").some((p) => "costUsd" in p)).toBe(false);
   });
 
+  it("carries the model it ran + summed tokens onto run_complete (for the gen_ai span)", async () => {
+    const THREAD_M = JSON.stringify({ type: "thread.started", thread_id: "t", model: "gpt-5.6" });
+    const { events } = await run([THREAD_M, MSG("hi"), TURN_DONE]);
+    // run_complete tokens are input+cached / output+reasoning, so they can ride the span.
+    expect(of(events, "run_complete")[0]).toMatchObject({ model: "gpt-5.6", inputTokens: 52831 + 44672, outputTokens: 120 });
+  });
+
   it("resumes the thread on the next turn", async () => {
     const dir = makeProjectDir({ name: "cx" });
     await run([THREAD("019f-keep"), MSG("one"), TURN_DONE], {}, dir);
