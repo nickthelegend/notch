@@ -5,6 +5,62 @@ All notable changes to Loom are documented here.
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] — 2026-07-25
+
+### Added
+
+- **Antigravity CLI adapter** — drives Google's headless `agy`, so a turn can be
+  offloaded to a flash-tier Gemini instead of the orchestrator's budget. Holds
+  the baton, resumes conversations across turns. Verified against `agy 1.1.6`.
+- **Ask Noz** — an assistant docked in the Observatory, answering from the same
+  telemetry the dashboard renders, with any configured MCP servers attached. No
+  API key of its own; the cheapest signed-in CLI answers.
+- **MCP marketplace** — browses the official registry with search, plus curated
+  providers whose endpoints were each verified against a live `initialize`.
+  Install persists, the reachability badge is a real probe, and the server
+  reaches the CLI (`claude --mcp-config`, `codex -c mcp_servers.*`).
+- **Skills browser** — discovers the project, `~/.claude/skills` and plugin
+  caches (1 visible skill became 74), installs from a git URL or a folder, and
+  can be enabled mid-sentence from the composer's `/` menu.
+- **Mobile parity** — the phone app gained the full Observatory, Decisions,
+  Replay, Ask Noz, the Skills and MCP browsers, and project settings.
+
+### Changed
+
+- **The Observatory is six views, not eight.** Metrics leads and is a real
+  dashboard (composition donuts, behaviour-over-time, health, burn). Canvas and
+  Graph became *Live fleet* (right now) and *Handoffs* (history), each answering
+  a stated question. Replay absorbed the separate span-replay tab, which scrubbed
+  the same run on a second slider.
+- Charts have their own categorical palette; they were drawn from two tokens that
+  are both violet, so a donut's three biggest slices were indistinguishable.
+
+### Fixed — four features that were lying
+
+An honest audit found them, and all four are implemented rather than hidden:
+
+- **MCP servers never reached any agent.** `config.mcps` was written and read
+  back by its own endpoint and consumed by nothing. They are now passed to the
+  CLIs that support them.
+- **Decision confidence was a hardcoded constant** (70/75/78/80) on the default
+  install, rendered as a measured percentage with a progress bar. Confidence is
+  now measured by a real extractor, is optional, and each decision records how it
+  was extracted; nothing unmeasured shows a number.
+- **Per-decision cost was the whole turn's cost, repeated** for every decision
+  mined from that turn. Totals are attributed to the turn that spent them.
+- **Per-agent budgets were write-only.** They enforce: an agent over its daily cap
+  is paused before dispatch, and un-pauses itself once back under.
+
+### Fixed — accessibility and craft
+
+- The Observatory tab strip scrolls instead of clipping when the pane is narrow
+  (two views were unreachable), is a proper ARIA tablist with arrow/Home/End
+  navigation, and keeps keyboard focus alive across the live re-render.
+- Range scrubbers gained accessible names and live value text; the run-progress
+  bar animates `transform` instead of `width`.
+- `dmg-license` is recorded as an optional dependency — without it the macOS
+  installer build fails outright.
+
 ## [Unreleased]
 
 ### Hardening (production-readiness pass)

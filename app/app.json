@@ -2,7 +2,7 @@
   "expo": {
     "name": "Notch",
     "slug": "notch",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "scheme": "notch",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
@@ -22,14 +22,16 @@
           "NSAllowsLocalNetworking": true
         },
         "NSLocalNetworkUsageDescription": "Notch talks to the daemon on your own computer, over your tailnet or LAN."
-      }
+      },
+      "buildNumber": "0.2.0"
     },
     "android": {
       "package": "dev.notch.app",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#1B1D21"
-      }
+      },
+      "versionCode": 2
     },
     "web": {
       "favicon": "./assets/favicon.png"

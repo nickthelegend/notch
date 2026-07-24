@@ -9,8 +9,10 @@
  */
 
 import fs from "node:fs";
+import http from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { clearCatalogCache } from "../src/core/mcp-catalog.js";
 import { readDaemonConfig, readProjectConfig } from "../src/core/registry.js";
 import { DaemonClient } from "../src/daemon/client.js";
 import { LoomDaemon } from "../src/daemon/server.js";
@@ -21,6 +23,9 @@ let baseUrl: string;
 let token: string;
 let projectId: string;
 let projectDir: string;
+/** A stand-in registry, so the suite never calls the public one. */
+let registry: http.Server;
+let registryQueries: string[] = [];
 
 const H = () => ({ authorization: `Bearer ${token}`, "content-type": "application/json" });
 const get = async (p: string) => (await fetch(`${baseUrl}${p}`, { headers: H() })).json();
@@ -28,6 +33,37 @@ const get = async (p: string) => (await fetch(`${baseUrl}${p}`, { headers: H() }
 beforeAll(async () => {
   process.env.LOOM_HOME = tmpDir("home");
   process.env.LOOM_NO_NOTIFY = "1";
+
+  // A local registry rather than the real one. Not just for speed: a unit suite
+  // that reaches the public registry is one that fails on a plane, and one whose
+  // assertions depend on what somebody else published this week.
+  registry = http.createServer((req, res) => {
+    registryQueries.push(String(req.url));
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({
+        servers: [
+          {
+            server: {
+              name: "app.linear/linear",
+              title: "Linear",
+              description: "Issues, projects, cycles",
+              version: "1.0.0",
+              remotes: [{ type: "streamable-http", url: "https://mcp.linear.app/mcp" }],
+            },
+            _meta: { "io.modelcontextprotocol.registry/official": { isLatest: true } },
+          },
+          // Not installable: no remote, no package. Must not reach the caller.
+          { server: { name: "app.example/hollow", title: "Hollow", remotes: null, packages: null } },
+        ],
+      }),
+    );
+  });
+  await new Promise<void>((resolve) => registry.listen(0, "127.0.0.1", resolve));
+  const addr = registry.address();
+  process.env.NOTCH_MCP_REGISTRY = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}/v0/servers`;
+  clearCatalogCache();
+
   daemon = new LoomDaemon({ host: "127.0.0.1", port: 0 });
   const { host, port } = await daemon.listen();
   baseUrl = `http://${host}:${port}`;
@@ -38,27 +74,29 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   await daemon.close();
+  await new Promise<void>((resolve) => registry.close(() => resolve()));
+  delete process.env.NOTCH_MCP_REGISTRY;
+  clearCatalogCache();
 });
 
 describe("GET /api/mcp/catalog", () => {
-  it("always serves the curated shelf, whether or not the registry answers", async () => {
-    // Deliberately tolerant about the registry: this suite must pass offline,
-    // and "the network was there" is not a claim worth asserting. What must
-    // hold either way is that featured is real and every row is actionable.
-    const body = (await get("/api/mcp/catalog?limit=5")) as {
-      servers: Array<{ id: string; transport: string; url?: string; command?: string }>;
+  it("serves the registry's installable entries alongside the curated shelf", async () => {
+    registryQueries = [];
+    const body = (await get("/api/mcp/catalog?q=linear&limit=5")) as {
+      servers: Array<{ id: string; title: string; transport: string; url?: string; command?: string }>;
       featured: Array<{ slug: string; url?: string; command?: string; needsUrl?: boolean }>;
       degraded: boolean;
     };
-    expect(Array.isArray(body.servers)).toBe(true);
+    expect(body.degraded).toBe(false);
+    expect(registryQueries[0]).toContain("search=linear");
+    // The hollow entry — a name with nothing behind it — never becomes a row.
+    expect(body.servers.map((s) => s.id)).toEqual(["app.linear/linear"]);
+    for (const s of body.servers) expect(Boolean(s.url) || Boolean(s.command)).toBe(true);
+
     expect(body.featured.map((f) => f.slug)).toEqual(expect.arrayContaining(["github", "linear", "signoz"]));
     for (const f of body.featured) {
       expect(Boolean(f.url) || Boolean(f.command) || f.needsUrl === true).toBe(true);
     }
-    // Whatever the registry did return is installable — that is the filter's
-    // whole job, and a row with neither field would be a dead button.
-    for (const s of body.servers) expect(Boolean(s.url) || Boolean(s.command)).toBe(true);
-    if (body.degraded) expect(body.servers).toEqual([]);
   });
 });
 
