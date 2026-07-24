@@ -314,7 +314,14 @@ export class CodexAdapter extends AdapterBase {
         return;
       }
       case "error": {
-        this.emit({ kind: "error", payload: { message: String(item.message ?? "codex error") } });
+        // Codex emits item-level `error` for non-fatal NOTICES too — a model
+        // falling back to default metadata, "skill descriptions were shortened
+        // to fit the context budget", and the like — not only real failures. A
+        // genuinely failed turn ALSO arrives as `turn.failed` (and a crash as a
+        // non-zero exit), which is what should fail a route. So surface an
+        // item-level error as a visible notice, not a fatal error event, or a
+        // benign warning would sink an otherwise-successful turn mid-route.
+        this.emit({ kind: "status", payload: { state: "notice", message: String(item.message ?? "codex notice") } });
         return;
       }
       default:
