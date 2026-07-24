@@ -360,7 +360,7 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
   .cinput::placeholder{color:color-mix(in srgb, var(--muted-foreground) 55%, transparent)}
   /* the control row under the textarea: small, evenly-spaced pills, all the same
      height and vertically centred with the send button */
-  .crow{display:flex;align-items:center;gap:6px;padding:8px 1px 0}
+  .crow{display:flex;align-items:center;gap:6px;padding:8px 1px 0 0}
   .ctool{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 8px;
     background:transparent;border:1px solid color-mix(in srgb, var(--border) 80%, transparent);border-radius:99px;
     color:var(--muted-foreground);cursor:pointer;font:inherit;font-size:11.5px;transition:background .12s,color .12s,border-color .12s}
@@ -383,7 +383,17 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
   .cagent .can{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .cagent .cchev{width:11px;height:11px;opacity:.55;flex:none;margin-right:-1px}
   .cagent.dim{opacity:.45}
+  /* AUTO state of the unified selector — accent blue, a system action, not an agent */
+  .cagent.auto{background:color-mix(in srgb, var(--accentBlue) 15%, transparent);
+    border-color:color-mix(in srgb, var(--accentBlue) 42%, transparent);color:var(--accentBlue);font-weight:700;letter-spacing:.03em}
+  .cagent.auto:hover{background:color-mix(in srgb, var(--accentBlue) 22%, transparent);border-color:var(--accentBlue)}
+  .cagent .autodot{width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
+  .cagent.auto .autodot{animation:autopulse 2s ease-in-out infinite}
+  .cagent.routing .autodot{animation:autopulse .7s ease-in-out infinite}
   .cadot{width:6px;height:6px;border-radius:50%;background:var(--primary);flex:none}
+  /* AUTO row in the selector menu — its dot carries the same accent-blue cue */
+  .cmi .autodot{width:7px;height:7px;border-radius:50%;background:var(--accentBlue);flex:none}
+  .cmi.cmauto.on{color:var(--accentBlue)}
   /* AUTO chip — accent blue, a system action (not an agent) */
   .cauto{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 8px;border-radius:99px;flex:none;cursor:pointer;
     font:inherit;font-size:11px;font-weight:700;letter-spacing:.04em;border:1px solid var(--border);background:transparent;color:var(--muted-foreground);transition:all .12s}
@@ -2502,10 +2512,7 @@ ${BRAND_SPRITE}
       '<div class="cpanel" id="cpanel" style="display:none"></div>' +
       '<div class="crow">' +
       '<button class="ctool iconly" id="attach" type="button" title="attach an image or file" aria-label="attach a file">' + ICONS.plus + '</button>' +
-      '<span class="cdiv"></span>' +
-      '<button class="cauto" id="cauto" type="button" title="let the system pick the agent (smart routing)" aria-label="auto routing"><span class="autodot"></span><span class="autolbl">AUTO</span><span class="cchev">' + ICONS.chevron + "</span></button>" +
-      '<span class="cor">or</span>' +
-      '<button class="cagent" id="cagent" type="button" title="switch the agent this chat talks to" aria-label="switch agent"><span class="cadot" id="cadot"></span><span class="can">agent</span><span class="cchev">' + ICONS.chevron + "</span></button>" +
+      '<button class="cagent" id="cagent" type="button" title="who runs this turn \\u2014 AUTO routes it, or pick an agent" aria-label="who runs this turn"><span class="cadot" id="cadot"></span><span class="can">agent</span><span class="cchev">' + ICONS.chevron + "</span></button>" +
       '<button class="ctool" id="modelpick" type="button" title="pick a model" aria-label="pick a model">' + '<span class="cmodel" id="cmodellabel">model</span>' + '<span class="cchev">' + ICONS.chevron + "</span></button>" +
       '<span class="cdiv"></span>' +
       '<button class="cslot" id="mcpbtn" type="button" title="connect MCP servers"><span class="cslotico">' + (ICONS.plug || ICONS.route) + '</span>MCPs</button>' +
@@ -5426,7 +5433,7 @@ ${BRAND_SPRITE}
       // AUTO mode: don't pick an agent — let the dynamic router decide who takes
       // this turn (planner/builder/reviewer) based on the prompt + hop history.
       if (state.auto) {
-        var chip = document.getElementById("cauto");
+        var chip = document.getElementById("cagent");
         if (chip) chip.classList.add("routing");
         api("/api/projects/" + pid + "/route", { method: "POST", body: JSON.stringify({ task: full, spec: "auto" }) })
           .then(refresh).catch(function(err){ toast(err.message); })
@@ -5651,21 +5658,28 @@ ${BRAND_SPRITE}
       menuState = { kind: "agentmenu", at: 0, sel: 0, items: [] };
       var m = document.getElementById("cmenu"); if (!m) return;
       m.style.display = "block";
-      m.innerHTML = '<div class="cmhead">talk to</div>' +
+      // AUTO leads the list — it's the "let the system choose" option, not an agent.
+      m.innerHTML = '<div class="cmhead">who runs this turn</div>' +
+        '<div class="cmi cmauto' + (state.auto ? " on" : "") + '" data-auto="1"><span class="ic"><span class="autodot"></span></span><span>AUTO</span>' +
+          (state.auto ? '<span class="tick">' + ICONS.info + "</span>" : '<span class="sub">smart routing</span>') + "</div>" +
         agents.map(function(a, i){
-          var tick = a.id === state.selected;
+          var tick = !state.auto && a.id === state.selected;
           var sub = a.tier === "bridge" ? "bridge" : (a.role || "");
           return '<div class="cmi" data-ai="' + i + '"><span class="ic">' + brandMark(a.kind) + "</span><span>" + esc(a.id) + "</span>" +
             (tick ? '<span class="tick">' + ICONS.info + "</span>" : (sub ? '<span class="sub">' + esc(sub) + "</span>" : "")) + "</div>";
         }).join("");
+      var auto = m.querySelector("[data-auto]");
+      if (auto) auto.onmousedown = function(ev){ ev.preventDefault(); closeMenu(); setAuto(true); var box = document.getElementById("box"); if (box) box.focus(); };
       Array.prototype.forEach.call(m.querySelectorAll("[data-ai]"), function(row){
         row.onmousedown = function(ev){
           ev.preventDefault();
           var a = agents[Number(row.getAttribute("data-ai"))];
           closeMenu();
-          if (!a || a.id === state.selected) return;
+          if (!a) return;
+          if (a.id === state.selected && !state.auto) return;
+          state.auto = false; // picking an agent turns routing off
           state.selected = a.id;
-          drawStatus(); // repaints the chip, the model label, and the hint
+          drawStatus(); // repaints the selector, the model label, and the hint
           var box = document.getElementById("box"); if (box) box.focus();
         };
       });
@@ -5746,15 +5760,13 @@ ${BRAND_SPRITE}
         if (menuState && menuState.kind === "modelmenu") { closeMenu(); return; }
         openModelMenu();
       };
+      // One selector, both jobs: AUTO (the router) sits at the top of the menu,
+      // the agents below it.
       var ap = document.getElementById("cagent");
       if (ap) ap.onclick = function(){
-        setAuto(false);
         if (menuState && menuState.kind === "agentmenu") { closeMenu(); return; }
         openAgentMenu();
       };
-      // AUTO: hand the turn to the dynamic router instead of a chosen agent.
-      var autoBtn = document.getElementById("cauto");
-      if (autoBtn) autoBtn.onclick = function(){ setAuto(!state.auto); };
       var mcpB = document.getElementById("mcpbtn");
       if (mcpB) mcpB.onclick = function(){ toggleComposerPanel("mcp"); };
       var skB = document.getElementById("skillbtn");
@@ -5774,29 +5786,33 @@ ${BRAND_SPRITE}
       updateModelLabel();
     }
 
+    // The one selector that says who runs the turn: AUTO (the router) or a chosen
+    // agent. In AUTO the model is the router's call, so the model pill steps aside.
     function updateModelLabel(){
       var lbl = document.getElementById("cmodellabel");
       var p = state.project || {};
       var cur = (p.agents || []).filter(function(a){ return a.id === state.selected; })[0];
       if (lbl) lbl.textContent = (cur && cur.model) ? cur.model : "model";
-      // The agent chip shows who the composer talks to — brand mark + id.
+      var mp = document.getElementById("modelpick");
+      if (mp) mp.style.display = state.auto ? "none" : "";
       var chip = document.getElementById("cagent");
-      if (chip) {
-        if (cur) {
-          chip.style.display = "";
-          chip.innerHTML = brandMark(cur.kind) + '<span class="can">' + esc(cur.id) + "</span>" +
-            '<span class="cchev">' + ICONS.chevron + "</span>";
-          if (state.auto) chip.classList.add("dim");
-        } else if (!state.auto) { chip.style.display = "none"; }
+      if (!chip) return;
+      chip.style.display = "";
+      chip.classList.remove("dim");
+      chip.classList.toggle("auto", state.auto);
+      if (state.auto) {
+        chip.innerHTML = '<span class="autodot"></span><span class="can">AUTO</span><span class="cchev">' + ICONS.chevron + "</span>";
+      } else if (cur) {
+        chip.innerHTML = brandMark(cur.kind) + '<span class="can">' + esc(cur.id) + "</span>" + '<span class="cchev">' + ICONS.chevron + "</span>";
+      } else {
+        chip.innerHTML = '<span class="cadot"></span><span class="can">agent</span><span class="cchev">' + ICONS.chevron + "</span>";
       }
     }
 
-    // AUTO ⇄ specific-agent: mutually exclusive, reflected on the two chips.
+    // AUTO ⇄ specific-agent: one selector, repainted to whichever is live.
     function setAuto(on){
       state.auto = !!on;
-      var ab = document.getElementById("cauto"), ag = document.getElementById("cagent");
-      if (ab) ab.classList.toggle("on", state.auto);
-      if (ag) { ag.classList.toggle("dim", state.auto); if (state.auto) ag.style.display = ""; }
+      updateModelLabel();
     }
     function refreshSkillCount(){
       api("/api/projects/" + pid + "/skills").then(function(r){
