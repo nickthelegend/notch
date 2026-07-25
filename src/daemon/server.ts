@@ -64,7 +64,10 @@ import {
   writeDaemonConfig,
   writeProjectConfig,
 } from "../core/registry.js";
+import { agyBin } from "../adapters/antigravity-cli.js";
 import { cliAvailable } from "../adapters/base.js";
+import { codexBin } from "../adapters/codex.js";
+import { grokBin } from "../adapters/grok.js";
 import { APP_HTML, APP_MANIFEST } from "./app-page.js";
 import { GEIST_WOFF2 } from "./geist-font.js";
 import { AuthManager, bearerToken } from "./auth.js";
@@ -1800,7 +1803,11 @@ export class LoomDaemon {
             // debug port, so presence is a live question, not a lookup.
             installed: a.tier === "adapter" ? Boolean(availability[a.kind]) : null,
             inProject: inProject.has(a.kind),
-            models: a.models ?? [],
+            // No `models` here. It used to serialise AdeSpec.models and no
+            // client has ever read it — the model picker asks
+            // /agents/:agentId/models, which puts the question to the CLI. Two
+            // answers to one question, one of them never checked, is how the
+            // stale one wins eventually.
           })),
         });
       }),
@@ -1846,15 +1853,22 @@ export class LoomDaemon {
       }),
     );
 
-    // Every real model this agent can run, asked of the underlying tool — not a
-    // hardcoded list. opencode alone reports ~500 across every provider it has.
+    // The models this agent can run, and where the list came from.
+    //
+    // This comment used to promise "every real model this agent can run, asked
+    // of the underlying tool — not a hardcoded list", and for two of the five
+    // kinds that was a hardcoded list. Four are now genuinely asked (`opencode
+    // models` alone reports ~500 across every provider it has, `codex debug
+    // models` a JSON catalog); Claude Code has no way to answer and is served
+    // from a remembered set. `source` says which, per response, so a caller can
+    // report what actually happened instead of what we'd like to have happened.
     app.get(
       "/api/projects/:id/agents/:agentId/models",
       withRuntime(async (rt, req, res) => {
         const agent = rt.config.agents.find((a) => a.id === String(req.params.agentId));
         if (!agent) return void res.status(404).json({ error: "unknown agent" });
-        const models = await listModelsForKind(agent.kind);
-        res.json({ kind: agent.kind, count: models.length, models });
+        const { models, source } = await listModelsForKind(agent.kind);
+        res.json({ kind: agent.kind, count: models.length, models, source });
       }),
     );
 
@@ -2875,16 +2889,44 @@ export function tailscaleFunnel(port: number): Promise<{ url: string }> {
   });
 }
 
-// codex/claude don't list models over the CLI, so these are the current shipped
-// sets (aliases first — they never go stale when a new snapshot ships).
+/**
+ * Fallback ids for a codex too old to have `codex debug models`.
+ *
+ * Not the shipped set — a *previous* shipped set, which is exactly what a codex
+ * without the subcommand would be running. The current one is asked of the CLI;
+ * see codexModelCatalog. Anything served from here is reported as
+ * `source: "builtin"`.
+ */
 const CODEX_MODELS = [
   "gpt-5.5", "gpt-5.5-codex", "gpt-5.2-codex", "gpt-5.1-codex-max",
   "gpt-5.1-codex", "gpt-5.1-codex-mini", "gpt-5-codex", "o4-mini",
 ];
-const CLAUDE_MODELS = [
-  "opus", "sonnet", "haiku", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5",
-];
-const MODEL_LIST_CACHE = new Map<string, { models: string[]; ts: number }>();
+
+/**
+ * Claude Code's model aliases. The only builtin list left, and it is builtin
+ * because the CLI genuinely cannot answer the question.
+ *
+ * `claude --help` has no `models` subcommand and lists none: what it documents
+ * is the shape of the argument — "Provide an alias for the latest model (e.g.
+ * 'fable', 'opus', or 'sonnet') or a model's full name (e.g. 'claude-fable-5')".
+ * And `claude models` is not an error, which is the trap: `models` is taken as a
+ * *prompt*, so the "enumeration" is a billed turn of an LLM writing prose about
+ * models, with whatever ids it believes today. A model list that costs money and
+ * can hallucinate is not a model list.
+ *
+ * So: aliases only. They are what the CLI's own help names, they resolve to the
+ * latest snapshot by definition, and they can't go stale the way a pinned
+ * "claude-sonnet-5" did — an id that used to sit in this array and has never
+ * been a model. Full ids belong in the picker's custom field, where they're your
+ * claim rather than ours.
+ */
+const CLAUDE_MODELS = ["opus", "sonnet", "haiku", "fable"];
+
+/** Where a model list came from, so a caller can say which. */
+export type ModelSource = "cli" | "builtin" | "none";
+export type ModelList = { models: string[]; source: ModelSource };
+
+const MODEL_LIST_CACHE = new Map<string, { list: ModelList; ts: number }>();
 
 /** Model ids a CLI prints (one per line), ANSI stripped. Never throws. */
 function runModelList(cmd: string, args: string[]): Promise<string[]> {
@@ -2911,20 +2953,79 @@ function runModelList(cmd: string, args: string[]): Promise<string[]> {
 }
 
 /**
- * The real models an agent kind can run — asked of the tool itself where it can
- * answer (`opencode models` reports ~500 across every provider it has; `grok
- * models` lists its own), and the shipped set otherwise. Cached 60s.
+ * codex's own model catalog, which it will print as JSON: `codex debug models`.
+ *
+ * Not a documented list command — it's under `debug` — but it is the CLI
+ * answering about itself rather than us remembering, and it's the same catalog
+ * the picker in codex's own TUI is built from. Each entry carries a `slug` (the
+ * value `-m` takes) and a `visibility`; `hide` means internal (codex-auto-review
+ * is one), and offering an agent a model its own UI won't is offering a
+ * failure. ~65ms and 184KB on this machine — the base instructions for every
+ * model ride along in that JSON, hence the buffer.
+ *
+ * Empty on any older codex that has no `debug models`, which is the caller's cue
+ * to fall back and say so.
  */
-export async function listModelsForKind(kind: string): Promise<string[]> {
+function codexModelCatalog(bin: string): Promise<string[]> {
+  return new Promise((resolve) => {
+    execFile(bin, ["debug", "models"], { maxBuffer: 8 * 1024 * 1024, timeout: 20_000 }, (_err, stdout) => {
+      try {
+        const parsed = JSON.parse(String(stdout ?? "")) as {
+          models?: Array<{ slug?: unknown; visibility?: unknown }>;
+        };
+        const slugs = (parsed.models ?? [])
+          .filter((m) => m.visibility !== "hide")
+          .map((m) => String(m.slug ?? "").trim())
+          .filter(Boolean);
+        resolve([...new Set(slugs)]);
+      } catch {
+        resolve([]); // not JSON — an older codex, or one that errored
+      }
+    });
+  });
+}
+
+/**
+ * The models an agent kind can run, and whether Loom asked or remembered.
+ *
+ * Four of the five adapters can be asked, each in its own dialect: `opencode
+ * models` (~500 lines across every provider it has), `grok models`, `agy models`
+ * (the Antigravity CLI — this branch was missing entirely, so its picker offered
+ * "Default" and "Custom…" and nothing else), and `codex debug models`, which
+ * prints a JSON catalog rather than lines. Claude Code cannot be asked at all —
+ * see CLAUDE_MODELS.
+ *
+ * `source` is the point of the return shape. "cli" means the tool answered;
+ * "builtin" means it couldn't and this is Loom's remembered list, which the UI
+ * must be able to say out loud instead of implying a lookup that never
+ * happened. An uninstalled CLI answers with nothing, and an empty answer from a
+ * CLI is still "cli" — an empty picker for a tool you don't have is the honest
+ * result, not a reason to serve it a remembered list behind its back. codex is
+ * the one exception: an empty answer there can equally mean a codex too old to
+ * have `debug models`, so it falls back — and "builtin" is the true label for
+ * whichever of the two it was.
+ *
+ * Cached 60s per kind: the pickers reopen constantly and none of these change
+ * between two clicks.
+ */
+export async function listModelsForKind(kind: string): Promise<ModelList> {
   const hit = MODEL_LIST_CACHE.get(kind);
-  if (hit && Date.now() - hit.ts < 60_000) return hit.models;
-  let models: string[] = [];
-  if (kind === "opencode") models = await runModelList("opencode", ["models"]);
-  else if (kind === "grok-code") models = await runModelList("grok", ["models"]);
-  else if (kind === "codex") models = CODEX_MODELS;
-  else if (kind === "claude-code") models = CLAUDE_MODELS;
-  MODEL_LIST_CACHE.set(kind, { models, ts: Date.now() });
-  return models;
+  if (hit && Date.now() - hit.ts < 60_000) return hit.list;
+  let list: ModelList = { models: [], source: "none" };
+  if (kind === "opencode") {
+    list = { models: await runModelList("opencode", ["models"]), source: "cli" };
+  } else if (kind === "grok-code") {
+    list = { models: await runModelList(grokBin() ?? "grok", ["models"]), source: "cli" };
+  } else if (kind === "antigravity-cli") {
+    list = { models: await runModelList(agyBin() ?? "agy", ["models"]), source: "cli" };
+  } else if (kind === "codex") {
+    const slugs = await codexModelCatalog(codexBin() ?? "codex");
+    list = slugs.length ? { models: slugs, source: "cli" } : { models: CODEX_MODELS, source: "builtin" };
+  } else if (kind === "claude-code") {
+    list = { models: CLAUDE_MODELS, source: "builtin" };
+  }
+  MODEL_LIST_CACHE.set(kind, { list, ts: Date.now() });
+  return list;
 }
 
 /**

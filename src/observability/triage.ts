@@ -115,8 +115,14 @@ function spansFromLog(agent: string, events: LoomEvent[]): TriageSpan[] {
       e.agentId === agent || p.to === agent || p.from === agent || p.agent === agent;
     if (!mine) continue;
     if (e.kind === "run_complete") {
+      // The turn's real cost, the same field the SigNoz path reads into `cost`
+      // and the same one insightSpansFromLog takes. This was a literal 0: every
+      // fallback turn came back free, which is a number nobody measured sitting
+      // in the column where a measured one goes. Nothing renders triage evidence
+      // costs today — but a fabricated zero is only ever one render away from
+      // being believed, and the log has the answer right here.
       out.push({ ts: e.ts, name: "gen_ai.agent.turn", ms: Number(p.durationMs ?? 0), code: p.error ? 2 : 1,
-        msg: String(p.error ?? ""), kind: e.kind, cost: 0, tin: Number(p.inputTokens ?? 0), tout: Number(p.outputTokens ?? 0) });
+        msg: String(p.error ?? ""), kind: e.kind, cost: Number(p.costUsd ?? 0), tin: Number(p.inputTokens ?? 0), tout: Number(p.outputTokens ?? 0) });
     } else if (e.kind === "error") {
       out.push({ ts: e.ts, name: "notch.error", ms: 0, code: 2, msg: String(p.message ?? "error"), kind: e.kind, cost: 0, tin: 0, tout: 0 });
     } else if (e.kind === "route_failed") {

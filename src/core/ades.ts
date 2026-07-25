@@ -17,49 +17,63 @@ import { cliAvailable } from "../adapters/base.js";
 import { codexBin } from "../adapters/codex.js";
 import { grokBin } from "../adapters/grok.js";
 
-export interface AdeSpec {
+interface AdeCommon {
   /** The agent kind, as written in .loom/config.json. */
   kind: string;
   /** Human name, for docs and UI. */
   label: string;
-  /**
-   * adapter — can hold the baton and run a turn headless.
-   * bridge  — a GUI app Loom drives over the DevTools protocol; needs the app
-   *           running with a debugging port, so it is never auto-added.
-   */
-  tier: "adapter" | "bridge";
+}
+
+/** Can hold the baton and run a turn headless. */
+export interface AdeAdapterSpec extends AdeCommon {
+  tier: "adapter";
   /** Is it usable on this machine right now? */
   probe: () => Promise<boolean>;
-  /**
-   * Common model values this ADE's CLI accepts, as the model picker's
-   * suggestions. Not exhaustive and not the truth about what's installed —
-   * the picker always offers "Default" (no --model, the CLI's own choice) and
-   * a custom field, so a stale entry here is a convenience that went out of
-   * date, never a wall. Empty for bridges: a GUI app picks its own model in its
-   * own window, and Loom doesn't get a flag.
-   */
-  models?: string[];
 }
+
+/**
+ * A GUI app Loom drives over the DevTools protocol.
+ *
+ * No `probe`, and that's the point. A bridge needs its app running with a
+ * debugging port, so "installed" answers nothing worth asking — the live
+ * question is whether `GuiChatDriver` can reach it, which only the driver can
+ * say. Kiro used to carry `probe: async () => false` to satisfy a type that
+ * demanded one, and it was unreachable: every caller filters to adapters before
+ * probing anything. Splitting the type deletes the dead code by making it
+ * unwriteable, which is better than deleting it and leaving the hole open.
+ */
+export interface AdeBridgeSpec extends AdeCommon {
+  tier: "bridge";
+}
+
+export type AdeSpec = AdeAdapterSpec | AdeBridgeSpec;
 
 /**
  * Preference order matters: the first three adapters found get the canonical
  * planner/executor/reviewer roles that the default "ship" route is built from.
+ *
+ * There is no `models` list here any more. Each entry used to carry a handful
+ * of model ids "as suggestions", they were serialised by
+ * GET /api/projects/:id/agents/available, and nothing on the other end ever
+ * read them — the picker asks
+ * GET /api/projects/:id/agents/:agentId/models instead, which puts the question
+ * to the CLI. So the field was a maintenance burden that shipped a second,
+ * staler answer to a question already answered properly: codex's read
+ * `gpt-5-codex, gpt-5, o4-mini` while `codex debug models` on the same machine
+ * reported `gpt-5.6-terra, gpt-5.6-luna, gpt-5.5, gpt-5.4-mini`. Wrong is worse
+ * than absent when the right answer is one HTTP call away.
  */
 export const ADES: AdeSpec[] = [
   {
     kind: "claude-code",
     label: "Claude Code",
     tier: "adapter",
-    // The CLI takes short aliases as well as full ids; the aliases don't go
-    // stale when a new snapshot ships, which the full ids do.
-    models: ["opus", "sonnet", "haiku"],
     probe: () => cliAvailable("claude"),
   },
   {
     kind: "codex",
     label: "Codex",
     tier: "adapter",
-    models: ["gpt-5-codex", "gpt-5", "o4-mini"],
     // The CLI ships inside Codex.app as well as on PATH; a Mac with the app and
     // an empty PATH is the common case.
     probe: async () => {
@@ -71,16 +85,12 @@ export const ADES: AdeSpec[] = [
     kind: "opencode",
     label: "OpenCode",
     tier: "adapter",
-    // opencode wants provider/model, and which providers exist is that install's
-    // business — so these are examples, and the custom field is the real path.
-    models: ["anthropic/claude-sonnet-4", "openai/gpt-5", "google/gemini-2.5-pro"],
     probe: () => cliAvailable("opencode"),
   },
   {
     kind: "grok-code",
     label: "Grok Code",
     tier: "adapter",
-    models: ["grok-code-fast-1", "grok-4"],
     probe: async () => {
       const bin = grokBin();
       return bin ? cliAvailable(bin) : false;
@@ -90,16 +100,6 @@ export const ADES: AdeSpec[] = [
     kind: "antigravity-cli",
     label: "Antigravity",
     tier: "adapter",
-    // Gemini flash is the token-saving default the CLI is here for; the pro and
-    // hosted-Claude/GPT ids are offered too, and the custom field is the real
-    // path when Google renames one. `agy models` prints the current list.
-    models: [
-      "gemini-3.6-flash-medium",
-      "gemini-3.6-flash-high",
-      "gemini-3.1-pro-high",
-      "claude-sonnet-4-6",
-      "gpt-oss-120b-medium",
-    ],
     probe: async () => {
       const bin = agyBin();
       return bin ? cliAvailable(bin) : false;
@@ -109,7 +109,6 @@ export const ADES: AdeSpec[] = [
     kind: "kiro",
     label: "Kiro",
     tier: "bridge",
-    probe: async () => false,
   },
 ];
 
@@ -123,9 +122,22 @@ function defaultIdFor(kind: string): string {
   return kind === "antigravity-cli" ? "antigravity" : kind;
 }
 
+/** The adapter entries, narrowed — the only ones that carry a probe. */
+function adapterSpecs(): AdeAdapterSpec[] {
+  return ADES.filter((a): a is AdeAdapterSpec => a.tier === "adapter");
+}
+
 /** Which kinds can hold the baton. */
 export function adapterKinds(): string[] {
-  return ADES.filter((a) => a.tier === "adapter").map((a) => a.kind);
+  return adapterSpecs().map((a) => a.kind);
+}
+
+/**
+ * Every kind Loom offers to add to a project — the exact set
+ * GET /api/projects/:id/agents/available advertises, bridges included.
+ */
+export function offeredKinds(): string[] {
+  return ADES.map((a) => a.kind);
 }
 
 /**
@@ -136,7 +148,7 @@ export function adapterKinds(): string[] {
  * new project should not be born holding an agent that can't answer.
  */
 export async function detectAdes(): Promise<Record<string, boolean>> {
-  const adapters = ADES.filter((a) => a.tier === "adapter");
+  const adapters = adapterSpecs();
   const results = await Promise.all(adapters.map((a) => a.probe().catch(() => false)));
   const out: Record<string, boolean> = {};
   adapters.forEach((a, i) => (out[a.kind] = results[i] ?? false));

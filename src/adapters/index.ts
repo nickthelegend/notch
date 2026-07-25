@@ -33,6 +33,32 @@ registerAgentKind("antigravity-cli", (cfg, dir) => new AntigravityCliAdapter(cfg
 registerAgentKind("antigravity", (cfg, dir) => new AntigravityBridge(cfg.id, dir, cfg.options));
 registerAgentKind("kiro", (cfg, dir) => new KiroBridge(cfg.id, dir, cfg.options));
 
+/**
+ * Kinds Loom will still *build* but no longer *offers*.
+ *
+ * The Antigravity CDP bridge drove the IDE's chat panel over DevTools and could
+ * only watch; `antigravity-cli` replaced it with a real adapter that holds the
+ * baton, so the bridge came out of ADES. Coming out of ADES took it off every
+ * surface that advertises an agent — except one: `addAgent` validated against
+ * this registry, so POST /api/projects/:id/agents accepted `kind:"antigravity"`
+ * from anyone who guessed the name and put a withdrawn thing in your roster
+ * that no view would offer you.
+ *
+ * The registration stays because deleting it would break the projects that
+ * already name it: `createAgent` throws on an unknown kind, and every agent in
+ * .loom/config.json is constructed when the project opens, so a withdrawn
+ * registration is a project that won't open rather than an agent that quietly
+ * stops. Same standing `echo` has — buildable if you ask for it by name, never
+ * handed to anyone who didn't. What changed is that asking is now something you
+ * do by editing your own config, not something the HTTP API will do for you.
+ */
+const WITHDRAWN_KINDS = new Set(["antigravity"]);
+
+/** Is this kind one Loom used to offer and no longer does? */
+export function isWithdrawnKind(kind: string): boolean {
+  return WITHDRAWN_KINDS.has(kind);
+}
+
 export function createAgent(cfg: AgentConfig, projectDir: string): AnyAgent {
   const factory = factories.get(cfg.kind);
   if (!factory) {
