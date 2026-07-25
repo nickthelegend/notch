@@ -59,6 +59,28 @@ describe("agent self-triage", () => {
     expect(r.rootCause).toMatch(/healthy/i);
   });
 
+  /**
+   * The fallback path used to write `cost: 0` on every turn it derived from the
+   * event log — not "we don't know", a measured-looking zero in the column where
+   * the SigNoz path puts a real number. Nothing renders triage evidence costs
+   * today, which is exactly why it survived: a fabricated figure that isn't
+   * drawn yet is one render away from being believed. The log has the answer.
+   */
+  it("takes the turn's real cost from the log, not a zero", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("ECONNREFUSED"); }));
+    const now = Date.now();
+    const events: LoomEvent[] = [
+      { id: 1, ts: now - 3000, kind: "run_complete", agentId: "spender",
+        payload: { durationMs: 4200, costUsd: 0.0731, inputTokens: 900, outputTokens: 120 } } as LoomEvent,
+      { id: 2, ts: now - 1000, kind: "error", agentId: "spender",
+        payload: { message: "tool_call 'bash' timed out after 30s" } } as LoomEvent,
+    ];
+    const r = await triageAgent("spender", events);
+    expect(r.from).toBe("local-log");
+    const turn = r.evidence.find((s) => s.kind === "run_complete");
+    expect(turn?.cost).toBe(0.0731);
+  });
+
   it("returns no-data when SigNoz is empty and there is no fallback", async () => {
     stubCh([]);
     const r = await triageAgent("ghost");

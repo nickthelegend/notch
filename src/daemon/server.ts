@@ -2928,27 +2928,79 @@ export type ModelList = { models: string[]; source: ModelSource };
 
 const MODEL_LIST_CACHE = new Map<string, { list: ModelList; ts: number }>();
 
+/**
+ * Whatever a CLI prints on stdout, or "" if it can't be run. Never throws.
+ *
+ * This is `spawn` and not `execFile` for a reason that cost an afternoon:
+ * `execFile` calls back when the child's *streams* close, and `agy models`
+ * leaves a language-server process holding stdout open after it exits, so
+ * execFile waits out its whole timeout and hands back an empty string — the
+ * Antigravity picker looked exactly like a CLI that reports no models, on a
+ * machine where `agy models` prints eleven. Measured, repeatedly, one fresh
+ * process per attempt: execFile 25s/0 lines, spawn 5.3s/11 lines.
+ *
+ * So: resolve on `exit`, with a short grace period for data still in the pipe,
+ * and take `close` when it comes first (it does for every other CLI here).
+ * stderr is drained and dropped — unread, a chatty CLI can fill its pipe and
+ * block on the write.
+ */
+function runCapture(cmd: string, args: string[], timeoutMs = 20_000): Promise<string> {
+  return new Promise((resolve) => {
+    const MAX = 8 * 1024 * 1024;
+    let out = "";
+    let settled = false;
+    let hard: NodeJS.Timeout | undefined;
+    let drain: NodeJS.Timeout | undefined;
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(hard);
+      clearTimeout(drain);
+      resolve(out);
+    };
+    let child;
+    try {
+      child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
+    } catch {
+      return void resolve(""); // not a runnable path
+    }
+    hard = setTimeout(() => {
+      child.kill("SIGKILL");
+      finish();
+    }, timeoutMs);
+    child.stdout.on("data", (d: Buffer) => {
+      if (out.length < MAX) out += d.toString();
+    });
+    child.stderr.on("data", () => {});
+    child.on("error", finish); // not installed
+    child.on("close", finish); // streams closed — everything it wrote is here
+    child.on("exit", () => {
+      // ...unless something it spawned still holds the pipe. Give the buffered
+      // bytes a moment to arrive, then take what we have.
+      drain = setTimeout(finish, 300);
+    });
+  });
+}
+
 /** Model ids a CLI prints (one per line), ANSI stripped. Never throws. */
 function runModelList(cmd: string, args: string[]): Promise<string[]> {
-  return new Promise((resolve) => {
-    execFile(cmd, args, { maxBuffer: 8 * 1024 * 1024, timeout: 20_000 }, (_err, stdout) => {
-      const models: string[] = [];
-      for (const raw of String(stdout ?? "").split("\n")) {
-        // strip ANSI + leading bullets, take the first token: grok prints
-        // "  * grok-4.5 (default)", opencode a bare "provider/id" per line.
-        // eslint-disable-next-line no-control-regex
-        const cleaned = raw.replace(/\u001b?\[[0-9;]*m/g, "").replace(/^[\s>*+-]+/, "").trim();
-        const tok = cleaned.split(/\s+/)[0] ?? "";
-        if (
-          /^[A-Za-z0-9][\w./:@+-]*$/.test(tok) &&
-          tok.length < 120 &&
-          !/^(you|default|available|logged|models?|none|error)$/i.test(tok)
-        ) {
-          models.push(tok);
-        }
+  return runCapture(cmd, args).then((stdout) => {
+    const models: string[] = [];
+    for (const raw of stdout.split("\n")) {
+      // strip ANSI + leading bullets, take the first token: grok prints
+      // "  * grok-4.5 (default)", opencode a bare "provider/id" per line.
+      // eslint-disable-next-line no-control-regex
+      const cleaned = raw.replace(/\u001b?\[[0-9;]*m/g, "").replace(/^[\s>*+-]+/, "").trim();
+      const tok = cleaned.split(/\s+/)[0] ?? "";
+      if (
+        /^[A-Za-z0-9][\w./:@+-]*$/.test(tok) &&
+        tok.length < 120 &&
+        !/^(you|default|available|logged|models?|none|error)$/i.test(tok)
+      ) {
+        models.push(tok);
       }
-      resolve([...new Set(models)]);
-    });
+    }
+    return [...new Set(models)];
   });
 }
 
@@ -2967,21 +3019,19 @@ function runModelList(cmd: string, args: string[]): Promise<string[]> {
  * to fall back and say so.
  */
 function codexModelCatalog(bin: string): Promise<string[]> {
-  return new Promise((resolve) => {
-    execFile(bin, ["debug", "models"], { maxBuffer: 8 * 1024 * 1024, timeout: 20_000 }, (_err, stdout) => {
-      try {
-        const parsed = JSON.parse(String(stdout ?? "")) as {
-          models?: Array<{ slug?: unknown; visibility?: unknown }>;
-        };
-        const slugs = (parsed.models ?? [])
-          .filter((m) => m.visibility !== "hide")
-          .map((m) => String(m.slug ?? "").trim())
-          .filter(Boolean);
-        resolve([...new Set(slugs)]);
-      } catch {
-        resolve([]); // not JSON — an older codex, or one that errored
-      }
-    });
+  return runCapture(bin, ["debug", "models"]).then((stdout) => {
+    try {
+      const parsed = JSON.parse(stdout) as {
+        models?: Array<{ slug?: unknown; visibility?: unknown }>;
+      };
+      const slugs = (parsed.models ?? [])
+        .filter((m) => m.visibility !== "hide")
+        .map((m) => String(m.slug ?? "").trim())
+        .filter(Boolean);
+      return [...new Set(slugs)];
+    } catch {
+      return []; // not JSON — an older codex, or one that errored
+    }
   });
 }
 

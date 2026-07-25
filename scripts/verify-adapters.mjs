@@ -112,7 +112,7 @@ for (const cfg of BRIDGES) {
 console.log("");
 for (const r of results) {
   const mark = r.status === "WORKS" ? "✓" : r.status === "not installed" ? "·" : "✗";
-  console.log(`  ${mark} ${r.name.padEnd(13)} ${r.kind.padEnd(8)} ${String(r.status).padEnd(16)} ${r.detail ?? ""}`);
+  console.log(`  ${mark} ${r.name.padEnd(16)} ${r.kind.padEnd(8)} ${String(r.status).padEnd(16)} ${r.detail ?? ""}`);
 }
 const working = results.filter((r) => r.status === "WORKS").length;
 console.log(`\n  ${working}/${results.length} working`);
@@ -130,6 +130,6 @@ const FIX = {
 const broken = results.filter((r) => r.status !== "WORKS");
 if (broken.length) {
   console.log("\n  what each one needs:");
-  for (const b of broken) console.log(`    ${b.name.padEnd(13)} ${FIX[b.name] ?? ""}`);
+  for (const b of broken) console.log(`    ${b.name.padEnd(16)} ${FIX[b.name] ?? ""}`);
 }
 process.exit(broken.length ? 1 : 0);
