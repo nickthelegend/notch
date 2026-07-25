@@ -14,7 +14,7 @@ import { ADES, adapterKinds, buildDefaultRoutes, defaultAgentConfigs } from "../
 import { codexBin } from "../src/adapters/codex.js";
 import { grokBin } from "../src/adapters/grok.js";
 import { parseGrokJson } from "../src/adapters/grok.js";
-import { createAgent, isWithdrawnKind, knownAgentKinds } from "../src/adapters/index.js";
+import { createAgent, isWithdrawnKind, knownAgentKinds, tierForKind } from "../src/adapters/index.js";
 import { isAdapter } from "../src/types.js";
 import { tmpDir } from "./helpers.js";
 
@@ -202,5 +202,28 @@ describe("ades · nobody is the planner by default", () => {
   it("doesn't conjure a ship route out of names nobody chose", () => {
     const agents = defaultAgentConfigs({ "claude-code": true, codex: true, opencode: true });
     expect(buildDefaultRoutes(agents)).toBeUndefined();
+  });
+});
+
+describe("tier for kinds the ADES catalog omits", () => {
+  // The roster has to answer "adapter or bridge?" for an agent that is switched
+  // off, which is exactly when there is no instance to ask. It used to default
+  // to "adapter", which is wrong for precisely the kinds ADES leaves out — the
+  // withdrawn `antigravity` bridge and `echo` — so a disabled bridge advertised
+  // itself as an adapter and the composer, which filters chips on that field,
+  // offered it a model picker for a GUI app that takes no model flag.
+  it("reports a bridge as a bridge even when it is not in ADES", () => {
+    expect(tierForKind("antigravity")).toBe("bridge"); // withdrawn, still registered
+    expect(tierForKind("kiro")).toBe("bridge");
+  });
+
+  it("reports adapters as adapters", () => {
+    for (const kind of ["echo", "claude-code", "codex", "opencode", "grok-code", "antigravity-cli"]) {
+      expect(tierForKind(kind)).toBe("adapter");
+    }
+  });
+
+  it("returns null for a kind nothing registers, rather than guessing", () => {
+    expect(tierForKind("not-a-real-kind")).toBeNull();
   });
 });

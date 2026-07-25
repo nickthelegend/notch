@@ -22,7 +22,7 @@ import type {
 } from "../types.js";
 import type { RouteState, RouteStepSpec, RouterKind } from "../types.js";
 import { isAdapter, MAIN_CHAT } from "../types.js";
-import { createAgent, isWithdrawnKind, knownAgentKinds } from "../adapters/index.js";
+import { createAgent, isWithdrawnKind, knownAgentKinds, tierForKind } from "../adapters/index.js";
 import { ADES } from "../core/ades.js";
 import { BatonManager, NotHolderError } from "../core/baton.js";
 import { Brain, CONFIDENCE_FLOOR } from "../core/brain.js";
@@ -1684,8 +1684,14 @@ export class ProjectRuntime {
           // disabled Kiro stayed selectable, was offered a model picker for a GUI
           // app that takes no model flag, and failed with `unknown agent` when
           // sent to. Switching an agent off must not change what it *is*.
+          // ADES first (it is the catalog people pick from), then the factory
+          // registry for kinds ADES deliberately omits — the withdrawn
+          // `antigravity` bridge and `echo`. Defaulting to "adapter" was wrong
+          // for exactly those: a disabled bridge advertised itself as an adapter
+          // and the composer, which filters chips on this field, offered it.
           const spec = ADES.find((a) => a.kind === cfg.kind);
-          return { id: cfg.id, kind: cfg.kind, role: cfg.role, tier: spec?.tier ?? "adapter", available: false, busy: false, holdsBaton: false, model, enabled: cfg.enabled !== false };
+          const tier = spec?.tier ?? tierForKind(cfg.kind) ?? "adapter";
+          return { id: cfg.id, kind: cfg.kind, role: cfg.role, tier, available: false, busy: false, holdsBaton: false, model, enabled: cfg.enabled !== false };
         }
         return {
           id: cfg.id,
