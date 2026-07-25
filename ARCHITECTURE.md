@@ -1,8 +1,11 @@
-# Loom — Architecture & v1 Design
+# Notch — Architecture & v1 Design
 
-> **The name stuck: Loom.** A loom weaves many threads into one fabric — the agents are
-> threads, shared memory is the weave, the tailnet is a literal mesh. It ships on npm as
-> [`@loompad/cli`](https://www.npmjs.com/package/@loompad/cli) (`loom` was taken).
+> **On the name.** This was designed and built as **Loom** — a loom weaves many threads
+> into one fabric: the agents are threads, shared memory is the weave, the tailnet is a
+> literal mesh. The product is now **Notch**, and it ships on npm as
+> [`notch`](https://www.npmjs.com/package/notch). `loom` survives as the command you type,
+> the `.loom/` project directory, and the `LOOM_*` environment variables — renaming those
+> would break every existing install for no gain. This document says Notch throughout.
 
 > **Status — read this as the design record, not the current map.** It's the reasoning the
 > project was built from, and the *decisions* below all held. Some of the plan didn't
@@ -15,7 +18,7 @@
 
 ## What it is
 
-Loom is a **local-first control plane for coding agents**. One daemon runs on your
+Notch is a **local-first control plane for coding agents**. One daemon runs on your
 machine. It boots agent backends as background servers, exposes them behind a single
 chat surface, and gives them a **shared brain** so context flows between them. You reach
 it from your laptop CLI or your phone over a private Tailscale mesh, QR-paired.
@@ -24,8 +27,8 @@ Two headline workflows:
 - **Handoff** — finish with Claude, slide the same context into another agent.
 - **Routing** — Claude plans, another agent executes, Claude reviews.
 
-The hard problem Loom solves: these agents have *incompatible* memory, control
-interfaces, and session models, and Loom makes them behave like one organism.
+The hard problem Notch solves: these agents have *incompatible* memory, control
+interfaces, and session models, and Notch makes them behave like one organism.
 
 ## Glossary
 
@@ -35,7 +38,7 @@ interfaces, and session models, and Loom makes them behave like one organism.
 | **Project** | A working directory + `.loom/` config + its own event log, baton, and agent fleet. |
 | **Event log** | Per-project append-only source of truth (messages, tool calls, edits, decisions). |
 | **Adapter** | Full-duplex integration with a controllable agent (OpenCode, Claude Code). |
-| **Bridge** | Read-mostly integration with a GUI agent (Antigravity). Never holds the baton. |
+| **Bridge** | Read-mostly integration with a GUI agent (Kiro). Never holds the baton. |
 | **Baton** | The write lock. Exactly one agent per project holds it and may edit the tree. |
 | **Projection** | Rendering the log into a target agent's native memory format on handoff. |
 | **Role** | An agent instance's declared function: planner / executor / reviewer / general. |
@@ -59,7 +62,7 @@ interfaces, and session models, and Loom makes them behave like one organism.
 | Runtime | TypeScript / Node (daemon, CLI, web); React Native (phone app) | One language end-to-end, biggest contributor pool |
 
 **[shipped]** The phone app is **Android-first on Expo**, not iOS-first: push goes through
-Expo's service, so Loom manages no APNs/FCM credentials — the same "no accounts, no keys"
+Expo's service, so Notch manages no APNs/FCM credentials — the same "no accounts, no keys"
 bet the rest of the project makes. The v1 wedge row also under-sold itself: manual routing
 shipped *and* so did LLM auto-routing (`src/core/router.ts`).
 
@@ -82,7 +85,7 @@ shipped *and* so did LLM auto-routing (`src/core/router.ts`).
      projections (on handoff)
    ┌─────┴──────┬─────────────┐
 [adapter]   [adapter]      [bridge]
-OpenCode    Claude Code    Antigravity
+OpenCode    Claude Code    Kiro
 serve/HTTP  headless/SDK   debug port (read-mostly)
      └── all edit ONE working tree; baton = write lock ──┘
 ```
@@ -99,7 +102,7 @@ Per-project, append-only, ordered. Suggested store: **SQLite** (one file per pro
 - `handoff` — baton moved from X to Y, with the briefing that was injected
 - `role_change`, `agent_join`, `agent_leave`
 
-The log is the **only** source of truth. Everything an agent "knows" that Loom manages is
+The log is the **only** source of truth. Everything an agent "knows" that Notch manages is
 a *projection* of this log — never the other way around.
 
 ## Adapter contract (full-duplex — mandatory for Adapters)
@@ -108,7 +111,7 @@ An Adapter MUST implement all of:
 
 1. `send(message)` — deliver a user/handoff turn to the agent
 2. `stream()` — live event stream (messages, tool calls, edits) → written to the log
-3. `injectMemory(projection)` — write Loom's namespaced memory block into the agent's
+3. `injectMemory(projection)` — write Notch's namespaced memory block into the agent's
    native store **without touching user-authored files**
 4. `acquireLock()` / `releaseLock()` — baton / write-lock coordination
 5. `diff()` — current working-tree changes attributable to this agent
@@ -122,23 +125,34 @@ streaming JSON, memory files).
 A Bridge implements only a subset and is **explicitly second-class**:
 
 - `stream()` (best-effort capture) and `injectMemory()` / briefing receipt.
-- **Never** acquires the baton; **never** edits the shared tree under Loom's lock.
-- Antigravity (VS Code/Windsurf-class fork) attaches here via its debug port until/unless
-  it exposes a real API — then it can graduate to an Adapter.
+- **Never** acquires the baton; **never** edits the shared tree under Notch's lock.
+- A GUI agent attaches here via its debug port until/unless it exposes a real API — then it
+  can graduate to an Adapter.
+
+**[shipped]** **Kiro** is the only bridge Notch ships. Antigravity (VS Code/Windsurf-class
+fork) was the original one, attached over its DevTools port, and it took the graduation
+path: Google shipped a headless `agy` CLI, `antigravity-cli` was written against it as a
+real adapter that holds the baton, and the CDP bridge was **withdrawn** — still buildable
+so existing projects that name it still open, but offered nowhere
+(`src/adapters/index.ts`, `WITHDRAWN_KINDS`).
 
 ## Handoff & projection
 
 1. You (or a suggested-handoff prompt) pass the baton from X to Y.
-2. Loom distills the log into Y's **namespaced** memory format (a Loom-managed block —
+2. Notch distills the log into Y's **namespaced** memory format (a Notch-managed block —
    e.g. an imported memory file), so it **persists** for Y's later autonomous use.
-3. Loom also prepends a short "you're picking up ___, current state is ___" briefing for
+3. Notch also prepends a short "you're picking up ___, current state is ___" briefing for
    Y's immediate turn (cheap, focused).
 4. Your own `CLAUDE.md` / `AGENTS.md` are never edited.
 
 ## Networking & security
 
-- Daemon binds **only** to the Tailscale interface. Tailscale provides device auth + E2E
-  encryption — that is the trust boundary.
+- **[shipped]** The daemon binds **127.0.0.1 by default**, not the Tailscale interface.
+  Reaching it from a phone is opt-in: `loom daemon --tailnet` (or `loom up --tailnet`)
+  rebinds to this machine's Tailscale IP, and `--host` overrides it outright. The plan
+  below assumed tailnet-only; loopback-by-default is the tighter default, and it means
+  nothing leaves the machine until you ask it to. When you do ask, Tailscale provides
+  device auth + E2E encryption and is the trust boundary.
 - **QR pairing**: encodes a short-lived, one-time pairing **token** bound to the node's
   identity — not raw secrets, never in a URL query string. Enrolls the phone as a known
   client.
@@ -147,7 +161,7 @@ A Bridge implements only a subset and is **explicitly second-class**:
 ## Concurrency & async
 
 - Daemon runs **many projects at once**; each has an independent baton and log.
-- Agents are **long-running/background**. When one **needs input** or **finishes**, Loom
+- Agents are **long-running/background**. When one **needs input** or **finishes**, Notch
   notifies you: a local CLI/desktop notification, and **push to the phone** — **[shipped]**
   through Expo's push service (`src/daemon/push.ts`), not APNs.
 - The primary surface is a **board of projects**, each opening into a shared thread.
@@ -207,5 +221,7 @@ Working name **Loom**. Decide once we see which of {routing, memory, surface} fe
 the soul in practice — Baton if handoff dominates, Choir if it's the shared-context feel,
 Switchboard if it stays a router. Loom is the safe, brandable default.
 
-**[shipped]** Loom it is — the shared-context feel won, which is why the tagline settled on
-*the shared-memory layer*. The npm package is `@loompad/cli`; the command stayed `loom`.
+**[shipped]** Loom won first — the shared-context feel decided it, which is why the tagline
+settled on *the shared-memory layer*. The product later became **Notch** and the npm
+package is `notch`. The command stayed `loom`, and so did `.loom/` and `LOOM_*`: those are
+things people have already typed and configured, and a rename buys nothing.

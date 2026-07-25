@@ -1,6 +1,6 @@
-# Setting up Loom
+# Setting up Notch
 
-Read this before installing. Loom drives other people's coding agents, so most
+Read this before installing. Notch drives other people's coding agents, so most
 of the setup is really *their* setup — and the parts that bite are the ones
 nobody warns you about.
 
@@ -15,12 +15,12 @@ something is a guess, it says so.
 node --version
 ```
 
-Loom's event log uses `node:sqlite`, which arrived in Node 22.5. On anything
-older Loom still runs and **silently falls back to a JSONL store with no
+Notch's event log uses `node:sqlite`, which arrived in Node 22.5. On anything
+older Notch still runs and **silently falls back to a JSONL store with no
 history** — the app looks fine and your past turns aren't there.
 
 > **The installed desktop app has this problem too.** Electron 33 bundles Node
-> 20, so `Loom.app` looks for a real `node` on your machine (`$LOOM_NODE`, then
+> 20, so `Notch Desktop.app` looks for a real `node` on your machine (`$LOOM_NODE`, then
 > the usual install paths, then `PATH`). If it can't find one, it runs on
 > Electron's Node and degrades exactly as above. There is no warning yet. See
 > `desktop/BUILD.md`.
@@ -33,7 +33,7 @@ history** — the app looks fine and your past turns aren't there.
 
 ## 2. Install at least one agent
 
-Loom has nothing to drive on its own. A new project is given whichever of these
+Notch has nothing to drive on its own. A new project is given whichever of these
 it finds — and **an empty roster if it finds none**, which is honest but not
 useful.
 
@@ -49,23 +49,25 @@ Two things worth knowing:
 
 **Codex's CLI hides inside its app.** On a Mac with Codex.app installed and
 nothing on `PATH`, the binary is at
-`/Applications/Codex.app/Contents/Resources/codex`. Loom looks there as well as
+`/Applications/Codex.app/Contents/Resources/codex`. Notch looks there as well as
 on `PATH`, so you don't have to do anything — but that's why `which codex`
 coming up empty doesn't mean it's missing.
 
-**Being logged in is not optional and not detectable in advance.** Loom probes
+**Being logged in is not optional and not detectable in advance.** Notch probes
 whether a CLI *exists*, not whether it's authenticated. An unauthenticated agent
 looks installed, takes your turn, and fails. Run each one once by hand first.
-(The Antigravity CLI is the one exception Loom *can* check — `agy models` only
+(The Antigravity CLI is the one exception Notch *can* check — `agy models` only
 answers when you're signed in — but running it once yourself is still the move.)
 
-**Antigravity comes in two shapes.** The **Antigravity CLI** (`agy`) above is a
-real headless agent: it holds the baton and runs a turn to completion on Gemini
-(or hosted Claude/GPT — `agy models` lists them), which is how you offload work
-off your orchestrator's token budget. The Antigravity **IDE** is a different
-thing — a GUI Loom can only watch — and it lives in section 3.
+**Antigravity comes in two shapes, and only one is on offer.** The **Antigravity
+CLI** (`agy`) above is a real headless agent: it holds the baton and runs a turn
+to completion on Gemini (or hosted Claude/GPT — `agy models` lists them), which
+is how you offload work off your orchestrator's token budget. The Antigravity
+**IDE** is a different thing — a GUI Notch could only watch — and the bridge that
+drove it has been **withdrawn** in favour of the CLI. Section 3 keeps the
+instructions for the record; don't start there.
 
-Then ask Loom what it can see:
+Then ask Notch what it can see:
 
 ```sh
 loom doctor
@@ -73,12 +75,19 @@ loom doctor
 
 ---
 
-## 3. GUI agents: Antigravity IDE and Kiro
+## 3. GUI agents: Kiro (and, for the record, the Antigravity IDE)
 
-These have no API and no headless mode. Loom drives them through the Chrome
+These have no API and no headless mode. Notch drives them through the Chrome
 DevTools port they open *only if you ask*, so they need a launch flag.
 
-### Which Antigravity?
+> **Only Kiro is still on offer.** The Antigravity IDE bridge was withdrawn once
+> the `agy` CLI made a real adapter possible (section 2) — the kind is still
+> buildable so existing projects naming it keep opening, but nothing in Notch
+> offers it to you any more. The Antigravity setup below is kept because the
+> findings cost real time to discover and the same DevTools tricks apply to any
+> VS Code fork; **skip to [Kiro](#kiro) if you're setting up today.**
+
+### Which Antigravity? (withdrawn — historical)
 
 There are two apps and only one of them is the right one.
 
@@ -87,7 +96,7 @@ There are two apps and only one of them is the right one.
 | **Antigravity.app** | the Manager — a web page behind a Google sign-in | ❌ no chat DOM at all |
 | **Antigravity IDE.app** | the VS Code fork with the agent in it | ✅ this one |
 
-Pointing Loom at the Manager finds nothing and reports that Antigravity has no
+Pointing Notch at the Manager finds nothing and reports that Antigravity has no
 chat. It's the wrong app, not a broken bridge.
 
 ### Why port 9333 and not 9222
@@ -153,7 +162,9 @@ or an alias in `~/.bashrc`:
 alias antigravity='antigravity --remote-debugging-port=9333'
 ```
 
-### Kiro
+<a id="kiro"></a>
+
+### Kiro — the one bridge Notch still ships
 
 Same idea, **port 9334** so it can't collide with Antigravity:
 
@@ -162,7 +173,7 @@ open -a "Kiro" --args --remote-debugging-port=9334        # macOS
 ```
 
 Kiro's chat panel must be **open** — on a fresh window its only editable area is
-Monaco, holding your source file, and Loom refuses to type into that on purpose.
+Monaco, holding your source file, and Notch refuses to type into that on purpose.
 
 ### Then check it
 
@@ -170,7 +181,7 @@ Monaco, holding your source file, and Loom refuses to type into that on purpose.
 loom doctor
 ```
 
-Loom distinguishes *reachable* from *driveable*, because a signed-out app
+Notch distinguishes *reachable* from *driveable*, because a signed-out app
 answers the debugger cheerfully and has no usable chat:
 
 - `Antigravity IDE isn't listening — open -a "Antigravity IDE" --args --remote-debugging-port=9333` → the flag didn't take
@@ -185,15 +196,15 @@ answers the debugger cheerfully and has no usable chat:
 
 | What | Needed for | How |
 |---|---|---|
-| **Notifications** | "your agent needs you" while you're elsewhere | First `loom up` asks. Otherwise: System Settings → Notifications → Loom |
-| **Open a downloaded app** | Loom.app isn't notarized yet | **Right-click → Open** the first time. Double-clicking gives "cannot be opened" with no way forward |
+| **Notifications** | "your agent needs you" while you're elsewhere | First `loom up` asks. Otherwise: System Settings → Notifications → Notch Desktop |
+| **Open a downloaded app** | Notch Desktop.app isn't notarized yet | **Right-click → Open** the first time. Double-clicking gives "cannot be opened" with no way forward |
 | **Local Network** | your phone reaching the daemon over LAN | Prompted on first connection. System Settings → Privacy & Security → Local Network |
 
 **Not needed, despite what you might expect:** Accessibility, Screen Recording,
-Automation, Full Disk Access. Loom drives GUI agents through their debugging
+Automation, Full Disk Access. Notch drives GUI agents through their debugging
 port, not by pretending to be a mouse, so it never asks the OS for control of
-another app. If something tells you to grant Accessibility to Loom, that isn't
-Loom.
+another app. If something tells you to grant Accessibility to Notch, that isn't
+Notch.
 
 ### Windows
 
@@ -201,7 +212,7 @@ Loom.
 |---|---|---|
 | **Firewall (private networks)** | your phone reaching the daemon | Windows Defender prompts on first `loom up` — tick **Private networks**. Public: leave off |
 | **SmartScreen** | the installer isn't signed yet | **More info → Run anyway** |
-| **Notifications** | agent alerts | Settings → System → Notifications → Loom |
+| **Notifications** | agent alerts | Settings → System → Notifications → Notch Desktop |
 
 ---
 
@@ -217,13 +228,13 @@ loom down
 
 **Run it at login (optional).** No installer wires this up yet; do it yourself:
 
-- **macOS** — System Settings → General → Login Items → **+** → Loom.app. Or a
+- **macOS** — System Settings → General → Login Items → **+** → Notch Desktop.app. Or a
   LaunchAgent running `loom up`.
-- **Windows** — `Win+R` → `shell:startup` → shortcut to Loom.
+- **Windows** — `Win+R` → `shell:startup` → shortcut to Notch Desktop.
 - **Linux** — a user systemd unit running `loom up`.
 
-**Always on top** is the window manager's job, not Loom's: right-click the title
-bar (Windows), or use a tiling/stage manager (macOS). Loom doesn't ask for it —
+**Always on top** is the window manager's job, not Notch's: right-click the title
+bar (Windows), or use a tiling/stage manager (macOS). Notch doesn't ask for it —
 a tool that forces itself in front of your editor is a tool you'll uninstall.
 
 ---
@@ -234,7 +245,7 @@ The phone app talks to the daemon on your own machine. Nothing goes through a
 server of ours, because there isn't one.
 
 1. **Install Tailscale** on both, sign into the same tailnet: [tailscale.com/download](https://tailscale.com/download)
-2. **Bind Loom to the tailnet** — by default it listens on localhost only and your phone cannot see it:
+2. **Bind Notch to the tailnet** — by default it listens on localhost only and your phone cannot see it:
    ```sh
    loom up --restart --tailnet
    ```
@@ -253,7 +264,7 @@ Two things that will confuse you otherwise:
 ## 7. When it's wrong
 
 ```sh
-loom doctor          # what Loom can see, and what it can't
+loom doctor          # what Notch can see, and what it can't
 tail -f ~/.loom/daemon.log
 ```
 
@@ -271,4 +282,4 @@ loom down && loom up
 
 **An agent takes the turn and nothing happens.** It's almost always
 authentication. Run that agent by hand in a terminal once — it'll tell you what
-Loom can't.
+Notch can't.

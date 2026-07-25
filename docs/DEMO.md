@@ -3,9 +3,21 @@
 The one line: **Notch turns a fleet of coding agents into one observable, self-healing
 system, using SigNoz both as the sink *and* the source of truth.**
 
-**Before you hit record:** `notch up`, SigNoz running (`localhost:8080`), the `loom` project
-open with the `ship` route (`planner=claude-code · builder=codex(gpt-5.5) · reviewer=opencode`).
-Have a terminal ready for the two `curl`s in Beat 4.
+**Before you hit record:** `notch up`, SigNoz running (`scripts/signoz-up.sh` puts the UI on
+`localhost:8085`), the `loom` project open, and a terminal ready for the two `curl`s in Beat 4.
+
+The `ship` route is **not** seeded for you — `loom init` gives every detected agent its own
+kind as its role, so there is no planner/executor/reviewer for a default route to be built
+from. Put it in the project's `.loom/config.json` before you record:
+
+```json
+{ "routes": { "ship": ["claude-code", "codex", "opencode"] } }
+```
+
+Then `loom routes` should list it. (Ad-hoc alternative, no config edit:
+`loom route claude-code,codex,opencode "<task>"`.) Whatever model each agent is on, check it
+in the agent picker before recording rather than trusting a number written here — the picker
+asks the CLI, and the answers move.
 
 ---
 
@@ -14,12 +26,12 @@ Have a terminal ready for the two `curl`s in Beat 4.
 > "Everyone's running fleets of coding agents now. Nobody can *see* them. This is Notch —
 > one baton, one brain, and every agent's every turn traced to SigNoz."
 
-Open the **Observatory → Canvas**. The brain hub, agents around it, the baton on one of them.
+Open the **Observatory → Live fleet**. The brain hub, agents around it, the baton on one of them.
 Point at the vitals strip: **spend, turns, tokens — all real.**
 
 ### Beat 1 — a real multi-agent route (0:15–0:45)
 
-Switch to **Graph**, then run the `ship` route (or show it having just run).
+Switch to **Handoffs**, then run the `ship` route (or show it having just run).
 
 > "planner → builder → reviewer — three *different* real CLIs: Claude Code, Codex, OpenCode.
 > Watch the baton pass."
@@ -42,7 +54,8 @@ Click **⚠ Triage** on an agent that failed.
 
 ### Beat 3 — cost + replay (1:15–1:30)
 
-**Burn** tab: the cost sparkline + 24h projection + per-agent budgets.
+Back on **Metrics**, scroll to the bottom: burn is a panel there, not its own tab — the cost
+sparkline + 24h projection + per-agent budgets.
 **Replay** tab: scrub a turn, open the **Trace Waterfall**, click **View full trace in SigNoz ↗**
 so SigNoz opens in a new tab — proving the loop is real, not a screenshot.
 
@@ -51,7 +64,7 @@ so SigNoz opens in a new tab — proving the loop is real, not a screenshot.
 This is the closer. In the terminal, fire a SigNoz-shaped alert for the baton holder:
 
 ```bash
-curl -s -XPOST localhost:7421/api/webhooks/signoz -H 'content-type: application/json' \
+curl -s -XPOST localhost:7420/api/webhooks/signoz -H 'content-type: application/json' \
   -d '{"alerts":[{"status":"firing","labels":{"alertname":"AgentErrorRateHigh","notch.project":"loom","gen_ai.agent.id":"opencode"}}]}'
 ```
 
@@ -60,7 +73,7 @@ curl -s -XPOST localhost:7421/api/webhooks/signoz -H 'content-type: application/
 Show the **Timeline**: the violet `⚡ SigNoz alert → baton forced off opencode` line. Then resolve it:
 
 ```bash
-curl -s -XPOST localhost:7421/api/webhooks/signoz -H 'content-type: application/json' \
+curl -s -XPOST localhost:7420/api/webhooks/signoz -H 'content-type: application/json' \
   -d '{"alerts":[{"status":"resolved","labels":{"alertname":"AgentErrorRateHigh","notch.project":"loom","gen_ai.agent.id":"opencode"}}]}'
 ```
 

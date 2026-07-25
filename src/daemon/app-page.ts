@@ -3193,8 +3193,16 @@ ${BRAND_SPRITE}
       var totalUsd = m.totalUsd != null ? m.totalUsd : (p.costUsd || 0);
       var turns = m.turns || 0, tin = m.tokensIn || 0, tout = m.tokensOut || 0;
       function card(label, val, sub, accent, titleText){
+        // titleText is the plain-text value where one exists, so it is also the
+        // only honest way to measure length: val itself may carry markup. (No
+        // backticks in this comment — the whole page is one template literal.)
+        // An agent
+        // called "claude-code" rendered as "claude-c…" in the BATON card at 22px,
+        // which is the one card whose entire job is naming who holds the baton.
+        // Ellipsising the answer is worse than setting it a step smaller.
+        var big = !titleText || titleText.length <= 9;
         return '<div class="obcard' + (accent ? " accent" : "") + '"><div class="obcl">' + label +
-          '</div><div class="obcv"' + (titleText ? ' title="' + esc(titleText) + '"' : "") + ">" + val + '</div><div class="obcs">' + sub + "</div></div>";
+          '</div><div class="obcv' + (big ? "" : " sm") + '"' + (titleText ? ' title="' + esc(titleText) + '"' : "") + ">" + val + '</div><div class="obcs">' + sub + "</div></div>";
       }
       var cards =
         card("Agents", '<span class="live">' + active + "</span> / " + agents.length, "active / in fleet") +

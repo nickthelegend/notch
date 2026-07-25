@@ -1,9 +1,59 @@
 # Changelog
 
-All notable changes to Loom are documented here.
+All notable changes to Notch are documented here. Notch was built as **Loom** and
+forked under the new name; entries written before the rename say Loom, and are
+left as written. The CLI is still `loom`.
 
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Changed
+
+- **The Observatory is eight views.** 0.2.0's entry below says six, and that was
+  true when it was written. Two have landed since: **Self-heal**, which shows the
+  quarantine/failover/retry loop that SigNoz cannot render, and **Logs**, so Notch
+  reads back the third signal it emits. The strip is now Metrics · Live fleet ·
+  Handoffs · Self-heal · Timeline · Decisions · Logs · Replay, in that order, on
+  the desktop (`VIEWS` in `src/daemon/app-page.ts`) and on the phone
+  (`OBS_VIEWS` in `app/src/observatory.tsx`), which agree deliberately.
+
+### Fixed — six small lies the audit caught
+
+- **The model picker really does ask the tool now.** The route called itself
+  "every real model this agent can run, asked of the underlying tool — not a
+  hardcoded list" while codex and Claude Code returned constants. codex is asked
+  properly (`codex debug models`, a JSON catalog — the constant had it running
+  `gpt-5-codex`/`o4-mini` where the machine reports `gpt-5.6-terra`), and so is
+  the Antigravity CLI (`agy models`), whose branch was missing entirely so its
+  picker offered nothing but "Default" and "Custom…". Claude Code has no
+  enumeration at all — `claude models` takes "models" as a *prompt* and bills a
+  turn — so its aliases stay builtin and every response now carries
+  `source: "cli" | "builtin" | "none"` saying which. The stale pinned id
+  `claude-sonnet-5`, which was never a model, is gone.
+- **Reading a CLI no longer depends on it closing stdout.** `agy` leaves a
+  language server holding the pipe after it exits, and `execFile` waits for
+  streams rather than exit — 20s to return nothing, for a CLI that answered in
+  five. Model lists are captured with `spawn` and read on exit.
+- **`AdeSpec.models` is gone**, with its serialisation. It was a second, staler
+  answer to a question `/agents/:agentId/models` already answers, and no client
+  ever read it.
+- **Triage's local-log fallback reports the turn's real cost** instead of a
+  literal `cost: 0` in the column where the SigNoz path puts a measured number.
+- **The withdrawn Antigravity CDP bridge can't be created by guessing its name.**
+  It left ADES when the CLI adapter replaced it, but `addAgent` validated against
+  the adapter registry, so the API still accepted `kind:"antigravity"`. It stays
+  registered — projects that already name it must keep opening — and is refused
+  for new agents, pointing at `antigravity-cli`. `verify-adapters` derives its
+  list from ADES now, so it stops exercising the withdrawn bridge and starts
+  exercising the CLI adapter it never covered.
+- **Five of seven `AgentCapabilities` flags removed.** `send`, `stream`,
+  `injectMemory`, `interrupt` and `diff` were set by every adapter and read by
+  nothing; two were constant `true` and two restated `tier === "adapter"`. The
+  `Adapter` interface is the contract, and `isAdapter()` is the check. A bridge's
+  ADE entry can no longer carry a `probe` either — Kiro's returned a hardcoded
+  `false` that nothing could call.
 
 ## [0.2.0] — 2026-07-25
 
@@ -61,43 +111,14 @@ An honest audit found them, and all four are implemented rather than hidden:
 - `dmg-license` is recorded as an optional dependency — without it the macOS
   installer build fails outright.
 
-## [Unreleased]
+## [0.1.0] — 2026-07-24
 
-### Fixed — six small lies the audit caught
-
-- **The model picker really does ask the tool now.** The route called itself
-  "every real model this agent can run, asked of the underlying tool — not a
-  hardcoded list" while codex and Claude Code returned constants. codex is asked
-  properly (`codex debug models`, a JSON catalog — the constant had it running
-  `gpt-5-codex`/`o4-mini` where the machine reports `gpt-5.6-terra`), and so is
-  the Antigravity CLI (`agy models`), whose branch was missing entirely so its
-  picker offered nothing but "Default" and "Custom…". Claude Code has no
-  enumeration at all — `claude models` takes "models" as a *prompt* and bills a
-  turn — so its aliases stay builtin and every response now carries
-  `source: "cli" | "builtin" | "none"` saying which. The stale pinned id
-  `claude-sonnet-5`, which was never a model, is gone.
-- **Reading a CLI no longer depends on it closing stdout.** `agy` leaves a
-  language server holding the pipe after it exits, and `execFile` waits for
-  streams rather than exit — 20s to return nothing, for a CLI that answered in
-  five. Model lists are captured with `spawn` and read on exit.
-- **`AdeSpec.models` is gone**, with its serialisation. It was a second, staler
-  answer to a question `/agents/:agentId/models` already answers, and no client
-  ever read it.
-- **Triage's local-log fallback reports the turn's real cost** instead of a
-  literal `cost: 0` in the column where the SigNoz path puts a measured number.
-- **The withdrawn Antigravity CDP bridge can't be created by guessing its name.**
-  It left ADES when the CLI adapter replaced it, but `addAgent` validated against
-  the adapter registry, so the API still accepted `kind:"antigravity"`. It stays
-  registered — projects that already name it must keep opening — and is refused
-  for new agents, pointing at `antigravity-cli`. `verify-adapters` derives its
-  list from ADES now, so it stops exercising the withdrawn bridge and starts
-  exercising the CLI adapter it never covered.
-- **Five of seven `AgentCapabilities` flags removed.** `send`, `stream`,
-  `injectMemory`, `interrupt` and `diff` were set by every adapter and read by
-  nothing; two were constant `true` and two restated `tier === "adapter"`. The
-  `Adapter` interface is the contract, and `isAdapter()` is the check. A bridge's
-  ADE entry can no longer carry a `probe` either — Kiro's returned a hardcoded
-  `false` that nothing could call.
+Notch's first release, tagged `v0.1.0`. Notch forked Loom at this point, so
+everything below is Loom's work, carried over as written — including the sections
+Loom's own changelog still had under *Unreleased* when the fork happened. All of
+it was present at the `v0.1.0` tag and shipped as Notch 0.1.0; none of it is
+unreleased here, which is what this file used to claim. The entries keep their
+original dates and wording.
 
 ### Hardening (production-readiness pass)
 
@@ -514,9 +535,9 @@ An honest audit found them, and all four are implemented rather than hidden:
   (Electron's bundled Node predates `node:sqlite`, silently degrading the
   event store), and `/app` is served `Cache-Control: no-store`.
 
-## [0.1.0] — 2026-07-15
+### Loom 0.1.0 — 2026-07-15 (the base Notch forked)
 
-### Core engine
+#### Core engine
 
 - Scaffold TypeScript project with verified integration notes.
 - Event log (SQLite + JSONL), agent registry, baton, projections, suggestions, and notify subsystem.
@@ -526,7 +547,7 @@ An honest audit found them, and all four are implemented rather than hidden:
 - Cost telemetry — per-agent ledger rehydrated from the log, route cost attribution, `loom costs`, $ on board/TUI/app.
 - Adapter SDK guide, README, MIT license, and architecture design spec.
 
-### Routing
+#### Routing
 
 - Multi-hop route engine — role/id pipelines, pause-on-question, auto-resume, abort, timeouts, bridge refresh every hop.
 - Dynamic mode — LLM router picks each hop (claude headless, rules fallback), hop budget, reasons in `route_step`; `loom route auto --router --max-hops`.
@@ -535,7 +556,7 @@ An honest audit found them, and all four are implemented rather than hidden:
 - Route picker sheet on the phone app — auto/named/custom dropdown, start+abort, hop reasons in banner.
 - Routing guide covering pipelines, pause/resume, and precedence rules.
 
-### Surfaces (TUI / CLI / phone app)
+#### Surfaces (TUI / CLI / phone app)
 
 - Full-screen TUI as the default command — tab-based agent switching, slash commands, live stream, route progress, in-TUI QR pairing.
 - Ctrl+P command palette — fuzzy filter over shifts/routes/commands, template insertion, arrow+enter.
@@ -544,7 +565,7 @@ An honest audit found them, and all four are implemented rather than hidden:
 - Phone web app served at `/app` — QR deep-link pairing, board, live thread over WebSocket, agent chips with shift-on-send, route banner, interrupt, install-to-home-screen manifest.
 - Form-submit composer for mobile keyboards; phone-over-Tailscale walkthrough.
 
-### Security & operations
+#### Security & operations
 
 - Multi-project daemon with REST + WebSocket server, bearer auth, QR pairing tokens, and tailnet binding.
 - Paired-device management — `loom clients`, admin-only revoke, immediate 401 for revoked tokens.
@@ -554,7 +575,7 @@ An honest audit found them, and all four are implemented rather than hidden:
 - Auto-clear ghost baton holders after agent removal.
 - Sanitize inherited Claude-session env vars (`CLAUDECODE`, `CLAUDE_CODE_*`, `ANTHROPIC_BASE_URL`) when spawning agent CLIs.
 
-### Testing & CI
+#### Testing & CI
 
 - Unit + end-to-end suite (76 tests) covering eventlog, baton, projection, suggestions, auth, costs, and daemon e2e.
 - Routing e2e tests — completion, role/named resolution, pause-on-question + auto-resume, abort, manual-handoff cancel, 409 double-start.
