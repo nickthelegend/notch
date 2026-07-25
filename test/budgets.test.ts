@@ -169,8 +169,13 @@ describe("enforcement", () => {
     const rt = await runtimeWith([]);
     try {
       rt.quarantine("plannerbot", "HighErrorRate", true);
-      rt.setBudget("plannerbot", 5); // under budget, so the guard passes
-      await rt.sendMessage("go", "plannerbot");
+      rt.setBudget("plannerbot", 5); // under budget, so the budget guard passes
+      // The send is refused — by the *alert* pause, not the budget one. This
+      // case used to assert that the send went through, which encoded the bug:
+      // a SigNoz quarantine was written and never read, so a paused agent kept
+      // taking work. What it is really about is that the budget guard must not
+      // lift someone else's pause, and that still holds below.
+      await expect(rt.sendMessage("go", "plannerbot")).rejects.toThrow(/paused by SigNoz/);
       expect(rt.quarantined().plannerbot).toMatchObject({ reason: "HighErrorRate", displaced: true });
     } finally {
       await rt.close();

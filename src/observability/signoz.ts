@@ -230,13 +230,20 @@ export class NotchTelemetry {
  */
 export function postOtlp(url: string, headers: Record<string, string>, payload: unknown): void {
   void Promise.resolve()
-    .then(() =>
-      globalThis.fetch(url, {
+    .then(async () => {
+      const res = await globalThis.fetch(url, {
         method: "POST",
         headers,
         body: JSON.stringify(payload),
-      }),
-    )
+      });
+      // Drain the response even though we don't care what it says. undici keeps
+      // a pooled socket checked out until its body is consumed, so a fire-and-
+      // forget POST that never reads the reply holds a connection open until
+      // GC. One signal got away with that; three signals on a busy event stream
+      // exhaust the pool and start queueing — which shows up as the *agent*
+      // getting slower, i.e. exactly the thing telemetry must never do.
+      await res.arrayBuffer().catch(() => undefined);
+    })
     .catch(() => {
       /* best-effort: an unreachable collector must never surface */
     });

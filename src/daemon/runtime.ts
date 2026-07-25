@@ -116,6 +116,26 @@ export class BudgetExceededError extends Error {
   }
 }
 
+/**
+ * Thrown when a dispatch targets an agent a firing SigNoz alert has paused.
+ *
+ * Separate from BudgetExceededError because the recovery is different and the
+ * UI should say so: a budget pause lifts itself when the day rolls over or you
+ * raise the cap, while this one lifts when SigNoz reports the alert resolved.
+ */
+export class QuarantinedError extends Error {
+  constructor(
+    public readonly agentId: string,
+    public readonly reason: string,
+    public readonly since: number,
+  ) {
+    super(
+      `agent "${agentId}" is paused by SigNoz — ${reason}. It resumes when that alert resolves, or hand the baton to another agent.`,
+    );
+    this.name = "QuarantinedError";
+  }
+}
+
 export class ProjectRuntime {
   readonly info: ProjectInfo;
   readonly config: ProjectConfig;
@@ -306,6 +326,26 @@ export class ProjectRuntime {
    * day rolls over — or you raise the cap — the next attempt clears it and logs
    * the recovery. A budget of 0/unset means no budget, and nothing is enforced.
    */
+  /**
+   * Refuse to dispatch to an agent a firing SigNoz alert has paused.
+   *
+   * The self-heal loop wrote quarantines into state and *nothing read them
+   * back*: the webhook paused an agent, and the very next handoff or message
+   * went straight to it. So the headline feature — SigNoz says an agent is
+   * unhealthy, Notch takes it out of rotation — paused nothing at all. It sat
+   * beside `enforceBudget`, which had exactly the same bug and was fixed; this
+   * is the other half.
+   *
+   * Budget pauses are skipped here because `enforceBudget` owns them and can
+   * lift them on its own (a new day, a raised cap). An alert pause only lifts
+   * when SigNoz says resolved, so there is nothing to re-check.
+   */
+  private enforceQuarantine(agentId: string): void {
+    const q = this.quarantined()[agentId];
+    if (!q || q.reason.startsWith(BUDGET_PAUSE_REASON)) return;
+    throw new QuarantinedError(agentId, q.reason, q.since);
+  }
+
   private enforceBudget(agentId: string, now = Date.now()): void {
     const budgetUsd = this.budgets()[agentId];
     if (!Number.isFinite(budgetUsd) || !budgetUsd || budgetUsd <= 0) {
@@ -1363,6 +1403,7 @@ export class ProjectRuntime {
     // Before anything is committed — the baton, the message in the thread, the
     // process — check the agent can afford the turn. Refusing after the message
     // is logged would leave a prompt in the conversation that nothing answers.
+    this.enforceQuarantine(target);
     this.enforceBudget(target);
 
     const holder = this.validHolder();
@@ -1464,6 +1505,7 @@ export class ProjectRuntime {
     // refusal as sending it one — and it has to be caught HERE, before the
     // current holder is interrupted, or a route would strand the baton on an
     // agent that will refuse every prompt it gets.
+    this.enforceQuarantine(to);
     this.enforceBudget(to);
     if ((opts.source ?? "user") === "user") this.routes.onManualHandoff();
 
@@ -1666,6 +1708,11 @@ export class ProjectRuntime {
       route: this.routes.state(),
       routeNames: ["auto", ...Object.keys(this.config.routes ?? {})],
       costUsd: this.costs.totalUsd,
+      // Paused agents belong in the status payload, not only in state on disk.
+      // Without this the UI cannot show that SigNoz has taken an agent out of
+      // rotation — the pause was real and completely invisible, which reads as
+      // "the self-heal did nothing".
+      quarantine: this.quarantined(),
     };
   }
 

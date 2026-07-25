@@ -386,6 +386,12 @@ export interface ProjectStatus {
   routeNames?: string[];
   /** Lifetime spend across all agents in this project (USD). */
   costUsd?: number;
+  /**
+   * Agents a firing SigNoz alert (or a budget cap) has paused, keyed by agent
+   * id. Exposed so the UI can show a pause that is otherwise only visible in
+   * state on disk — the pause was real and completely invisible before.
+   */
+  quarantine?: Record<string, { reason: string; since: number; displaced: boolean }>;
 }
 
 // ---------------------------------------------------------------------------
