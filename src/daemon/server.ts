@@ -1366,6 +1366,30 @@ export class LoomDaemon {
 
     // Turn an agent on/off. Off agents stay in the roster but aren't spawned and
     // can't hold the baton. Refused for the baton holder or a mid-turn agent.
+    /**
+     * Lift a SigNoz pause by hand.
+     *
+     * The loop lifts itself when the alert resolves or the recheck sees the
+     * agent healthy again, and that is the normal path. This is the override
+     * for when you know better than the alert — a flapping rule, a threshold
+     * set too tight — because otherwise the only way out is editing state on
+     * disk, and an operator with no button will go and do exactly that.
+     */
+    app.delete(
+      "/api/projects/:id/quarantine/:agentId",
+      withRuntime(async (rt, req, res) => {
+        const agentId = String(req.params.agentId);
+        const lifted = rt.unquarantine(agentId);
+        if (!lifted) return void res.status(404).json({ error: `"${agentId}" is not paused` });
+        rt.log.append({
+          kind: "status",
+          agentId,
+          payload: { state: "signoz_recovery", alert: lifted.reason, retried: false, via: "manual" },
+        });
+        res.json({ lifted: true, agentId, was: lifted, quarantine: rt.quarantined() });
+      }),
+    );
+
     app.put(
       "/api/projects/:id/agents/:agentId/enabled",
       withRuntime(async (rt, req, res) => {

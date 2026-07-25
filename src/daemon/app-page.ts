@@ -1489,6 +1489,33 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
   .lgtrace{flex:none;color:var(--ch2);text-decoration:none;font-size:10.5px}
   .lgtrace:hover{text-decoration:underline}
   .lgtrace.none{color:var(--muted-foreground);opacity:.4}
+  /* self-heal — episodes, not a firehose: what fired, what Notch did, how long */
+  .alwrap{display:flex;flex-direction:column}
+  .alsec{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted-foreground);margin:16px 2px 8px}
+  .alsec:first-child{margin-top:4px}
+  .alrow{display:flex;align-items:center;gap:11px;padding:10px 13px;background:var(--card);
+    border:1px solid var(--border);border-radius:var(--radius);margin-bottom:7px}
+  .alrow.paused{border-color:color-mix(in srgb,var(--err) 42%,var(--border))}
+  .aldot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--muted-foreground)}
+  .aldot.firing{background:var(--err);box-shadow:0 0 0 3px color-mix(in srgb,var(--err) 20%,transparent)}
+  .aldot.resolved{background:var(--ok)}
+  .alinfo{flex:1;min-width:0}
+  .alname{font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .alalert{font-family:var(--font-mono);font-size:10px;font-weight:500;color:var(--muted-foreground);
+    border:1px solid var(--border);border-radius:99px;padding:1px 7px}
+  .alwhy{font-size:11.5px;color:var(--muted-foreground);margin-top:2px;font-variant-numeric:tabular-nums}
+  .alstate{flex:none;font-size:9px;font-weight:700;letter-spacing:.05em;padding:2px 7px;border-radius:99px;border:1px solid}
+  .alstate.firing{color:var(--err);border-color:color-mix(in srgb,var(--err) 45%,transparent)}
+  .alstate.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 45%,transparent)}
+  .allift{appearance:none;flex:none;background:var(--secondary);color:var(--foreground);border:1px solid var(--border);
+    border-radius:var(--radius-sm);padding:5px 12px;font:inherit;font-size:11.5px;font-weight:600;cursor:pointer}
+  .allift:hover:not(:disabled){border-color:var(--primary)}
+  .allift:disabled{opacity:.6;cursor:default}
+  .alok{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted-foreground);
+    padding:12px 13px;border:1px dashed var(--border);border-radius:var(--radius)}
+  .alok svg{width:14px;height:14px;color:var(--ok)}
+  .alfoot{font-size:11.5px;color:var(--muted-foreground);margin-top:14px;padding-top:11px;border-top:1px solid var(--border)}
+  .alfoot a{color:var(--ch2)}
   .decsl{font-size:9.5px;letter-spacing:.1em;color:var(--muted-foreground);margin:14px 0 5px}
   .decsl:first-child{margin-top:0}
   .decdt{font-size:15px;font-weight:700}
@@ -2864,6 +2891,7 @@ ${BRAND_SPRITE}
         timeline: "Every fleet event in order \\u2014 turns, handoffs, \\ud83d\\udca1 <b>decisions</b>, and SigNoz self-heal. Click a decision line to open its reasoning.",
         metrics: "<b>The dashboard.</b> Totals up top, then what the spend is made of \\u2014 tokens and calls per model \\u2014 then how it behaved over time, then each agent\\u2019s 0\\u2013100 <b>health score</b> with a <b>\\u26a0 Triage</b> button that root-causes it from its own SigNoz spans, and finally the 24h burn with per-agent budgets.",
         decisions: "What each agent <b>decided and why</b>. Filter by agent on the left; click a card for the reason, the alternatives it weighed, and the files it touched.",
+        alerts: "<b>What SigNoz told Notch, and what Notch did about it.</b> A firing alert takes the named agent out of rotation \\u2014 it is refused the baton until the alert resolves \\u2014 and a resolved one puts it back. This is the part SigNoz cannot show you: it knows the alert fired, only Notch knows the fleet reacted.",
         logs: "The fleet\\u2019s <b>structured logs</b>, read back out of SigNoz \\u2014 every message, tool call, file edit and error, with the severity it was recorded at. A line that belongs to a turn carries its <b>trace</b>, so you can jump straight from a log line to the span that produced it.",
         travel: "<b>Rewind the whole run.</b> Drag the scrubber (or hit Play) to any moment and the whole app rewinds to it: who held the baton, every agent\\u2019s state, the decisions made so far, the thread \\u2014 and the <b>turn running at that instant</b> with its model, tokens, cost and trace. All reconstructed from the event log."
       };
@@ -3126,7 +3154,7 @@ ${BRAND_SPRITE}
       // Six views, ordered by the question people arrive with. "Replay" is the
       // old Time Travel: it absorbed the separate span-replay tab, which scrubbed
       // the same run on a second slider and left everyone asking which was which.
-      var VIEWS = [["metrics", "Metrics"], ["canvas", "Live fleet"], ["graph", "Handoffs"], ["timeline", "Timeline"], ["decisions", "Decisions"], ["logs", "Logs"], ["travel", "Replay"]];
+      var VIEWS = [["metrics", "Metrics"], ["canvas", "Live fleet"], ["graph", "Handoffs"], ["alerts", "Self-heal"], ["timeline", "Timeline"], ["decisions", "Decisions"], ["logs", "Logs"], ["travel", "Replay"]];
       var tabs = VIEWS.map(function(v){
         var on = state.obView === v[0];
         return '<button class="obtab' + (on ? " on" : "") + '" role="tab" aria-selected="' + on + '" tabindex="' + (on ? "0" : "-1") + '" data-obv="' + v[0] + '">' + esc(v[1]) + "</button>";
@@ -3143,6 +3171,7 @@ ${BRAND_SPRITE}
           '<div id="obburn" class="obasync">' + LOADER + "</div>";
       else if (state.obView === "decisions") body = '<div id="obdecisions" class="obasync">' + LOADER + "</div>";
       else if (state.obView === "logs") body = '<div id="oblogs" class="obasync">' + LOADER + "</div>";
+      else if (state.obView === "alerts") body = '<div id="obalerts" class="obasync">' + LOADER + "</div>";
       else if (state.obView === "travel") body = '<div id="obtravel" class="obasync">' + LOADER + "</div>";
       else body = '<div class="obcanvaswrap">' + observatoryCanvas(agents, p.holder, byAgent) + "</div>";
       el.innerHTML =
@@ -3226,6 +3255,7 @@ ${BRAND_SPRITE}
       if (state.obView === "metrics") observatoryBurn(p);
       if (state.obView === "decisions") observatoryDecisions(p);
       if (state.obView === "logs") observatoryLogs(p);
+      if (state.obView === "alerts") observatoryAlerts(p, events);
       if (state.obView === "travel") observatoryTravel(p);
     }
     // "Why did I fail?" — pull the agent's own traces and root-cause them.
@@ -3554,6 +3584,119 @@ ${BRAND_SPRITE}
         else if (decisions[0]) selectDecision(decisions[0].id);
       }).catch(function(){ host.innerHTML = '<div class="obnote">Decisions unavailable \\u2014 the daemon didn\\u2019t answer. Switch tabs and back to retry.</div>'; });
     }
+    /**
+     * Self-heal — what SigNoz said, and what Notch did about it.
+     *
+     * Deliberately built from Notch's OWN record rather than SigNoz's API: the
+     * webhook already tells us every fire and resolve, so this needs no
+     * credentials, no polling of another service, and it keeps working when
+     * SigNoz is down — which is exactly the moment you want to know which
+     * agents are still paused. SigNoz can tell you an alert fired; only this
+     * can tell you the fleet reacted.
+     */
+    function observatoryAlerts(p, events){
+      var host = document.getElementById("obalerts"); if (!host) return;
+      // Fetched fresh, not read off the project object we were handed: a pause
+      // arrives over a webhook from SigNoz, so the cached copy is precisely the
+      // thing that will be stale on the view whose whole job is "right now".
+      api("/api/projects/" + p.id).then(function(r){
+        var proj = (r && r.project) || r || {};
+        p.quarantine = proj.quarantine || {};
+        host.innerHTML = alertsHtml(p.quarantine, events);
+        wireAlertLifts(host, p, events);
+      }).catch(function(){
+        host.innerHTML = '<div class="obnote">Self-heal state unavailable \\u2014 the daemon didn\\u2019t answer. Switch tabs and back to retry.</div>';
+      });
+    }
+    function alertsHtml(q, events){
+      var paused = Object.keys(q || {});
+      q = q || {};
+
+      // Pair each intervention with the recovery that ended it, so the history
+      // reads as episodes with a duration rather than a stream of half-events.
+      var heal = (events || []).filter(function(e){
+        return e.kind === "status" && /^signoz_/.test(String((e.payload || {}).state || ""));
+      }).sort(function(a, b){ return a.ts - b.ts; });
+      // An intervention with no matching recovery is only "still paused" if the
+      // live quarantine map agrees. Otherwise the episode ended and we simply
+      // never saw the recovery event — an old run, a log window that rolled.
+      // Saying "still paused" about an agent that is taking work would be the
+      // screen contradicting itself two sections apart.
+      var open = {}, episodes = [];
+      heal.forEach(function(e){
+        var pay = e.payload || {}, agent = e.agentId || "?";
+        if (pay.state === "signoz_intervention"){
+          open[agent] = { agent: agent, alert: pay.alert || "alert", from: e.ts, fallback: pay.fallback || null, to: null, via: null, retried: false };
+          episodes.push(open[agent]);
+        } else if (pay.state === "signoz_recovery"){
+          var ep = open[agent];
+          if (ep){ ep.to = e.ts; ep.via = pay.via || "resolved"; ep.retried = !!pay.retried; delete open[agent]; }
+          else episodes.push({ agent: agent, alert: pay.alert || "alert", from: null, to: e.ts, via: pay.via || "resolved", retried: !!pay.retried, fallback: null });
+        }
+      });
+      episodes.reverse();
+
+      function dur(ms){
+        if (ms == null) return "";
+        var s = Math.round(ms / 1000);
+        return s < 60 ? s + "s" : Math.floor(s / 60) + "m " + (s % 60) + "s";
+      }
+
+      var nowCard = paused.length
+        ? '<div class="alsec">PAUSED RIGHT NOW</div>' + paused.map(function(a){
+            var it = q[a];
+            return '<div class="alrow paused"><span class="aldot firing"></span>' +
+              '<div class="alinfo"><div class="alname">' + esc(a) + '</div>' +
+              '<div class="alwhy">' + esc(it.reason) + " \\u00b7 paused " + dur(Date.now() - it.since) + " ago" +
+              (it.displaced ? " \\u00b7 the baton was taken off it" : "") + "</div></div>" +
+              '<button class="allift" data-lift="' + esc(a) + '">Lift</button></div>';
+          }).join("")
+        : '<div class="alsec">PAUSED RIGHT NOW</div><div class="alok">' + (ICONS.check || "\\u2713") +
+          " Nothing is paused. Every agent can take the baton.</div>";
+
+      var hist = episodes.length
+        ? episodes.slice(0, 25).map(function(ep){
+            var live = ep.from && !ep.to && Object.prototype.hasOwnProperty.call(q, ep.agent);
+            var lost = ep.from && !ep.to && !live;
+            return '<div class="alrow"><span class="aldot ' + (live ? "firing" : "resolved") + '"></span>' +
+              '<div class="alinfo"><div class="alname">' + esc(ep.agent) +
+                '<span class="alalert">' + esc(ep.alert) + "</span></div>" +
+                '<div class="alwhy">' +
+                  (ep.from ? new Date(ep.from).toLocaleTimeString() : "\\u2014") +
+                  (ep.to ? " \\u2192 " + new Date(ep.to).toLocaleTimeString() + " \\u00b7 held " + dur(ep.to - ep.from)
+                         : live ? " \\u00b7 still paused" : " \\u00b7 ended (no recovery recorded)") +
+                  (ep.fallback ? " \\u00b7 baton moved to " + esc(ep.fallback) : "") +
+                  (ep.retried ? " \\u00b7 baton handed back" : "") +
+                  (ep.via && ep.via !== "resolved" ? " \\u00b7 via " + esc(ep.via) : "") +
+                "</div></div>" +
+              '<span class="alstate ' + (live ? "firing" : lost ? "" : "ok") + '">' + (live ? "FIRING" : lost ? "ENDED" : "RECOVERED") + "</span></div>";
+          }).join("")
+        : '<div class="obnote">No alert has fired yet. Wire the rules up with <b>Set up SigNoz</b> above, and every fire and recovery lands here.</div>';
+
+      return '<div class="alwrap">' + nowCard +
+        '<div class="alsec">HISTORY \\u00b7 ' + episodes.length + " episode" + (episodes.length === 1 ? "" : "s") + "</div>" + hist +
+        '<div class="alfoot">Rules live in SigNoz \\u2014 <a href="' + signozBase() + '/alerts" target="_blank" rel="noreferrer">open them there</a>. ' +
+        "A firing alert refuses that agent the baton; a resolved one gives it back.</div></div>";
+    }
+
+    /** Lift a pause by hand, then redraw from the map the API returns. */
+    function wireAlertLifts(host, p, events){
+      Array.prototype.forEach.call(host.querySelectorAll("[data-lift]"), function(b){
+        b.onclick = function(){
+          var agent = b.getAttribute("data-lift");
+          b.disabled = true; b.textContent = "\u2026";
+          api("/api/projects/" + p.id + "/quarantine/" + encodeURIComponent(agent), { method: "DELETE" })
+            .then(function(r){
+              toast("lifted the pause on " + agent);
+              p.quarantine = (r && r.quarantine) || {};
+              host.innerHTML = alertsHtml(p.quarantine, events);
+              wireAlertLifts(host, p, events);
+            })
+            .catch(function(err){ toast(err.message); b.disabled = false; b.textContent = "Lift"; });
+        };
+      });
+    }
+
     /**
      * The fleet's logs, read back out of SigNoz.
      *
