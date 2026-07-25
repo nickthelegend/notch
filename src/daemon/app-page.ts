@@ -2906,7 +2906,7 @@ ${BRAND_SPRITE}
         canvas: "<b>Right now.</b> Who is running this second, who is idle, and where the " + fx + "baton</b> is \\u2014 the ring pulses on whoever holds it. Every agent hangs off the <b>one shared brain</b> in the middle: that is the memory they all read and write, which is the whole point of the fleet. Updates live as turns start and finish. " + drag,
         graph: "<b>What already happened.</b> The baton\\u2019s actual route through the fleet, left to right, oldest handoff first. Each " + fx + "\\u2192</b> is one real handoff from the event log; <code>19t</code> under a name is turns that agent took. Live view is the <b>Live fleet</b> tab \\u2014 this one is history. " + drag,
         timeline: "Every fleet event in order \\u2014 turns, handoffs, \\ud83d\\udca1 <b>decisions</b>, and SigNoz self-heal. Click a decision line to open its reasoning.",
-        metrics: "<b>The dashboard.</b> Totals up top, then what the spend is made of \\u2014 tokens and calls per model \\u2014 then how it behaved over time, then each agent\\u2019s 0\\u2013100 <b>health score</b> with a <b>\\u26a0 Triage</b> button that root-causes it from its own SigNoz spans, and finally the 24h burn with per-agent budgets.",
+        metrics: "<b>Where the run\\u2019s time and money actually went.</b> Nothing here is estimated: tokens and cost are what each agent\\u2019s own CLI reported for the turn, and the durations are the spans Notch ships to SigNoz. Every agent carries a 0\\u2013100 <b>health score</b>, and <b>\\u26a0 Triage</b> root-causes a bad one from that agent\\u2019s own spans.",
         decisions: "What each agent <b>decided and why</b>. Filter by agent on the left; click a card for the reason, the alternatives it weighed, and the files it touched.",
         alerts: "<b>What SigNoz told Notch, and what Notch did about it.</b> A firing alert takes the named agent out of rotation \\u2014 it is refused the baton until the alert resolves \\u2014 and a resolved one puts it back. This is the part SigNoz cannot show you: it knows the alert fired, only Notch knows the fleet reacted.",
         logs: "The fleet\\u2019s <b>structured logs</b>, read back out of SigNoz \\u2014 every message, tool call, file edit and error, with the severity it was recorded at. A line that belongs to a turn carries its <b>trace</b>, so you can jump straight from a log line to the span that produced it.",
@@ -3125,7 +3125,13 @@ ${BRAND_SPRITE}
       var totalCalls = callSlices.reduce(function(s, x){ return s + x.v; }, 0);
 
       // Turn duration over time, per agent, bucketed from real run_complete events.
-      var done = (events || []).filter(function(e){ return e.kind === "run_complete" && e.payload && e.payload.durationMs; });
+      // Sorted rather than assumed. The feed arrives oldest-first today and the
+      // bucketing below depends on it: t1 - t0 going negative would clamp span
+      // to 1ms, floor every earlier event into a negative bucket index, and the
+      // 0..N read loop would silently skip them — a wrong chart, not an empty
+      // one. A sort on a copy costs nothing and removes the dependency.
+      var done = (events || []).filter(function(e){ return e.kind === "run_complete" && e.payload && e.payload.durationMs; })
+        .slice().sort(function(a, b){ return a.ts - b.ts; });
       var durSeries = [], xl = [];
       if (done.length > 1){
         var t0 = done[0].ts, t1 = done[done.length - 1].ts, span = Math.max(1, t1 - t0), N = 16;
@@ -3140,17 +3146,45 @@ ${BRAND_SPRITE}
           var pts = []; for (var i = 0; i < N; i++){ var arr = per[a][i]; pts.push(arr ? arr.reduce(function(s, v){ return s + v; }, 0) / arr.length : 0); }
           return { k: a, pts: pts };
         });
-        var f = function(ms){ var d = new Date(ms); return ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2); };
+        // A run that spans more than a day gets dates on the axis. Without them
+        // this read "21:59 · 16:49 · 11:39" for a 37-hour run, which looks like
+        // time flowing backwards until you work out that each step is 18h50m
+        // and the labels have silently crossed two midnights. Anyone reading the
+        // chart for five seconds concludes it is broken. Same-day runs keep the
+        // bare clock, which is the common case and needs no date.
+        var multiDay = span > 36e5 * 20;
+        var f = function(ms){
+          var d = new Date(ms);
+          var hm = ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2);
+          if (!multiDay) return hm;
+          return (d.getMonth() + 1) + "/" + d.getDate() + " " + hm;
+        };
         xl = [f(t0), f(t0 + span / 2), f(t1)];
       }
       var tokSpark = (k.tokenSparkline || []).slice(), costSpark = (k.costSparkline || []).slice();
+      // The card says "cumulative USD", so make it cumulative. costSparkline is
+      // the per-turn cost of the last ten runs; plotting that raw meant a run
+      // whose recent turns reported no cost drew "nothing recorded yet"
+      // directly under a $3.64 SPEND total. Both numbers were true — the total
+      // sums the whole log, the sparkline only the tail — but read together on
+      // one screen they look like the dashboard contradicting itself, which is
+      // the last thing this project can afford to look like.
+      //
+      // Seeding the running total with (total - tail) lands the last point
+      // exactly on the SPEND figure above, so the curve is the real cumulative
+      // spend and the two can never disagree. Turns that cost nothing now show
+      // as what they are: a flat stretch, not missing data.
+      var costTail = costSpark.reduce(function(s, v){ return s + (Number(v) || 0); }, 0);
+      var runUsd = k.totalCostUsd != null ? k.totalCostUsd : (p.costUsd || 0);
+      var costRun = Math.max(0, (Number(runUsd) || 0) - costTail), cumCost = [];
+      costSpark.forEach(function(v){ costRun += Number(v) || 0; cumCost.push(costRun); });
 
       return '<div class="obchartgrid">' +
         obChartCard("Token distribution", "by agent \\u00b7 model", obDonut(tokSlices, tokfmt(totalTok), "tokens")) +
         obChartCard("Turns", "by agent", obDonut(callSlices, String(totalCalls), "turns")) +
         obChartCard("Turn duration over time", "seconds \\u00b7 per agent", obSeries(durSeries, function(v){ return v.toFixed(1) + "s"; }, xl), true) +
         obChartCard("Token usage", "over the run", obSeries(tokSpark.length ? [{ k: "tokens", pts: tokSpark }] : [], tokfmt, []), true) +
-        obChartCard("Spend", "cumulative USD", obSeries(costSpark.length ? [{ k: "cost", pts: costSpark }] : [], money, []), true) +
+        obChartCard("Spend", "cumulative USD", obSeries(cumCost.length ? [{ k: "cost", pts: cumCost }] : [], money, []), true) +
         "</div>";
     }
     function renderObservatory(el, p, m, events){
@@ -4112,14 +4146,20 @@ ${BRAND_SPRITE}
       });
       var edges = nodes.map(function(nd){
         var baton = nd.a.id === holder, busy = nd.a.busy;
-        var col = baton ? "var(--shuttle)" : busy ? "var(--thread)" : "var(--border)";
+        // Idle edges were --border at 0.35 opacity, which is invisible on the
+        // card they sit on: six agents rendered with one visible edge, directly
+        // under a caption promising that *every* agent hangs off the one shared
+        // brain. The single claim this whole view exists to make was the one
+        // thing you couldn't see. Muted-foreground at 0.5 reads as "connected,
+        // not active" while still losing to the baton edge next to it.
+        var col = baton ? "var(--shuttle)" : busy ? "var(--thread)" : "var(--muted-foreground)";
         var mid = (bx + nd.x) / 2;
         // A live edge flows: the dash marches from the brain toward the agent, so
         // "this one is reading and writing the shared memory right now" is
         // something you see rather than something you decode from a colour.
         return '<path class="' + (baton || busy ? "obedge live" : "obedge") + '" d="M ' + (bx + 30) + " " + by + " C " + mid + " " + by + ", " + mid + " " + nd.y + ", " + nd.x + " " + nd.y +
           '" fill="none" stroke="' + col + '" stroke-width="' + (baton ? 2.2 : busy ? 1.8 : 1.2) + '" ' +
-          (busy || baton ? "" : 'stroke-dasharray="3 6" ') + 'opacity="' + (busy || baton ? "0.9" : "0.35") + '"/>';
+          (busy || baton ? "" : 'stroke-dasharray="3 6" ') + 'opacity="' + (busy || baton ? "0.9" : "0.5") + '"/>';
       }).join("");
       var brain =
         '<g transform="translate(' + bx + " " + by + ')">' +

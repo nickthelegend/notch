@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Loom installer — clone, build, link. Usage:
-#   curl -fsSL https://raw.githubusercontent.com/nickthelegend/loom/main/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/nickthelegend/notch/main/scripts/install.sh | bash
 # Env overrides: LOOM_REPO (git url), LOOM_SRC (checkout dir).
 set -euo pipefail
 
-REPO="${LOOM_REPO:-https://github.com/nickthelegend/loom.git}"
+REPO="${LOOM_REPO:-https://github.com/nickthelegend/notch.git}"
 SRC="${LOOM_SRC:-$HOME/.loom-src}"
 
 say() { printf '\033[36m[loom]\033[0m %s\n' "$*"; }
