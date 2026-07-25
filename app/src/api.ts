@@ -54,6 +54,23 @@ export interface RouteState {
   costUsd?: number;
 }
 
+/**
+ * One agent barred from the baton, and why.
+ *
+ * `since` is when the pause started, `displaced` says whether the agent was
+ * actually holding the baton at the time and had it taken off it — a pause on an
+ * idle agent and a pause that interrupted live work are different events and the
+ * UI is expected to tell them apart.
+ */
+export interface QuarantineEntry {
+  reason: string;
+  since: number;
+  displaced: boolean;
+}
+
+/** Keyed by agent id. Empty object means "nothing is paused", which is a fact. */
+export type QuarantineMap = Record<string, QuarantineEntry>;
+
 export interface Project {
   id: string;
   name: string;
@@ -63,6 +80,16 @@ export interface Project {
   route?: RouteState | null;
   routeNames?: string[];
   costUsd?: number;
+  /**
+   * Agents a firing SigNoz alert (or a budget cap) has paused. It rides on the
+   * project status because a pause otherwise lives only in state on disk, which
+   * made the self-heal look like it had done nothing at all.
+   *
+   * Optional only because a daemon older than the field wouldn't send it; the
+   * current one always does, empty object and all, so Self-heal reads an absent
+   * field the same way the desktop does — as nothing paused.
+   */
+  quarantine?: QuarantineMap;
 }
 
 export interface LoomEvent {
@@ -184,6 +211,40 @@ export interface InsightSpan {
 }
 
 export type SpanSource = "signoz" | "local-log";
+
+/**
+ * One log line Notch shipped, read back out of SigNoz.
+ *
+ * `traceId`/`spanId` are empty strings when the record was emitted outside a
+ * span, which is normal for status lines — an empty string here means "this line
+ * is not correlated to a trace", not "we don't know", so the UI shows nothing
+ * rather than a placeholder id.
+ */
+export interface InsightLog {
+  ts: number;
+  severity: string;
+  /** OTel severity_number (1–24), so severity can be ordered without parsing text. */
+  severityNumber: number;
+  body: string;
+  traceId: string;
+  spanId: string;
+  agent: string;
+  /** notch.event.kind — which event produced the line (run_complete, status, message, …). */
+  kind: string;
+  /** notch.chat — the conversation the line belongs to. */
+  chat: string;
+}
+
+/**
+ * Logs get a different provenance pair from spans, and the difference is the
+ * whole point. A span has a local fallback: it is a summary of an event that is
+ * already on the daemon's disk, so `from` can be "local-log". A log line is not
+ * — its severity, body and trace correlation only exist once the record has been
+ * built and shipped — so there is nothing to fall back to, and the daemon says
+ * `"unavailable"` instead of handing back an empty list that would read as
+ * "nothing happened".
+ */
+export type LogSource = "signoz" | "unavailable";
 
 /** A 0–100 score with the four penalty buckets that subtracted from 100. */
 export interface Health {
@@ -468,6 +529,48 @@ export const getHealth = (c: Creds, id: string) =>
   api<{ from: SpanSource; overall: Health; byAgent: Record<string, Health> }>(
     c,
     `/api/projects/${id}/insights/health`,
+  );
+
+/**
+ * The fleet's own log lines, newest first.
+ *
+ * `severity` is a comma list and case-insensitive ("error,warn"); `q` is a plain
+ * substring of the body, not a pattern. The daemon clamps `limit` to 1–1000, and
+ * this clamps too so a caller's mistake is a smaller request rather than a
+ * silently different one.
+ */
+export const getLogs = (
+  c: Creds,
+  id: string,
+  opts: { severity?: string; q?: string; agent?: string; traceId?: string; limit?: number } = {},
+) => {
+  // Built by hand rather than with URLSearchParams: React Native ships a partial
+  // polyfill whose toString() throws, so the browser habit breaks on device.
+  const qs = [`limit=${Math.min(1000, Math.max(1, opts.limit ?? 300))}`];
+  if (opts.severity) qs.push(`severity=${encodeURIComponent(opts.severity)}`);
+  if (opts.q) qs.push(`q=${encodeURIComponent(opts.q)}`);
+  if (opts.agent) qs.push(`agent=${encodeURIComponent(opts.agent)}`);
+  if (opts.traceId) qs.push(`traceId=${encodeURIComponent(opts.traceId)}`);
+  return api<{ from: LogSource; logs: InsightLog[] }>(
+    c,
+    `/api/projects/${id}/insights/logs?${qs.join("&")}`,
+  );
+};
+
+/**
+ * Lift a pause by hand — the operator override for a flapping rule or a
+ * threshold set too tight. 404s when the agent isn't actually paused.
+ *
+ * It answers with the whole quarantine map as it stands after the delete, and
+ * that map is the only thing a caller should redraw from: any project object it
+ * already holds was fetched before this request and no longer describes the
+ * fleet.
+ */
+export const liftQuarantine = (c: Creds, id: string, agentId: string) =>
+  api<{ lifted: boolean; agentId: string; was: QuarantineEntry; quarantine: QuarantineMap }>(
+    c,
+    `/api/projects/${id}/quarantine/${encodeURIComponent(agentId)}`,
+    { method: "DELETE" },
   );
 
 export const getDecisions = (c: Creds, id: string, limit = 200) =>
