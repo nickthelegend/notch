@@ -661,14 +661,25 @@ describe("web app · settings", () => {
     click($(m, "#setupbtn"));
     await waitUntil(() => !!$(m, "#setpane .sgrouph"));
     // wait for the fetch, not just the shell
-    await waitUntil(() => m.window.document.querySelectorAll("#setpane .srow2").length > 0);
+    // 18s, not the 8s default, and the number is measured rather than picked:
+    // GET /api/setup spawns a probe per agent — `codex login status`, opencode's
+    // credential read, a `claude -p` ping — and takes 4.8-6.0s on an IDLE
+    // machine. Against an 8s budget that is 1.5x of headroom for work that is
+    // inherently subprocess-bound, so a 57-file parallel run tips it over. This
+    // is the opposite of the busy-agent leak fixed in 5f186b5: there the reply
+    // was refused and no timeout could ever be long enough; here the fetch does
+    // arrive, it is just slower than a budget meant for DOM settling.
+    await waitUntil(
+      () => m.window.document.querySelectorAll("#setpane .srow2").length > 0,
+      { timeoutMs: 18_000 },
+    );
 
     const groups = [...m.window.document.querySelectorAll(".sgrouph")].map((g) => g.textContent);
     expect(groups.join("|")).toContain("Runtime");
     expect(groups.join("|")).toContain("Agents that can take a turn");
     expect(groups.join("|")).toContain("Permissions");
     expect(m.errors.join("\n")).toBe("");
-  });
+  }, 30_000);
 
   /**
    * The claim this replaces was mine and it was wrong: "Loom can't tell whether
@@ -682,20 +693,26 @@ describe("web app · settings", () => {
     const m = mount();
     await waitUntil(() => !!$(m, "#setupbtn"));
     click($(m, "#setupbtn"));
-    await waitUntil(() => m.window.document.querySelectorAll("#setpane .srow2").length > 5);
+    await waitUntil(
+      () => m.window.document.querySelectorAll("#setpane .srow2").length > 5,
+      { timeoutMs: 18_000 },
+    );
 
     const body = text(m, "#setpane");
     // every installed agent resolves to a real verdict, never a shrug dressed
     // up as a tick
     expect(body).toMatch(/signed in|signed out|couldn|not installed|unknown/i);
     expect(m.errors.join("\n")).toBe("");
-  });
+  }, 30_000);
 
   it("names every agent Loom can drive, with the command to check it", async () => {
     const m = mount();
     await waitUntil(() => !!$(m, "#setupbtn"));
     click($(m, "#setupbtn"));
-    await waitUntil(() => m.window.document.querySelectorAll("#setpane .srow2").length > 5);
+    await waitUntil(
+      () => m.window.document.querySelectorAll("#setpane .srow2").length > 5,
+      { timeoutMs: 18_000 },
+    );
 
     const body = text(m, "#setpane");
     // Antigravity is the headless CLI now; the CDP bridge is no longer offered.
@@ -705,7 +722,7 @@ describe("web app · settings", () => {
     // and the phone, which is the part people never find on their own
     expect(body).toContain("notch up --restart --tailnet");
     expect(m.errors.join("\n")).toBe("");
-  });
+  }, 30_000);
 
   /**
    * The refusal is a feature. People expect a tool that drives other apps to
@@ -716,13 +733,16 @@ describe("web app · settings", () => {
     const m = mount();
     await waitUntil(() => !!$(m, "#setupbtn"));
     click($(m, "#setupbtn"));
-    await waitUntil(() => m.window.document.querySelectorAll("#setpane .srow2").length > 5);
+    await waitUntil(
+      () => m.window.document.querySelectorAll("#setpane .srow2").length > 5,
+      { timeoutMs: 18_000 },
+    );
 
     expect(text(m, "#setpane")).toContain("Accessibility");
     expect(text(m, "#setpane")).toMatch(/not needed/i);
     expect($(m, "#setpane .sdot.no"), "the refused row should be marked as such").toBeTruthy();
     expect(m.errors.join("\n")).toBe("");
-  });
+  }, 30_000);
 
   it("closes on Escape", async () => {
     const m = mount();
@@ -761,11 +781,16 @@ describe("web app · settings", () => {
   it("Diagnostics runs loom doctor live, not a canned list", async () => {
     const m = mount();
     await openSection(m, "diagnostics");
-    // a real /api/doctor round trip, one line per check
-    await waitUntil(() => m.window.document.querySelectorAll("#setpane .dchk").length > 0);
+    // A real /api/doctor round trip, one line per check — and `doctor` shells
+    // out the same way /api/setup does, so it gets the same measured budget
+    // rather than the 8s meant for DOM settling.
+    await waitUntil(
+      () => m.window.document.querySelectorAll("#setpane .dchk").length > 0,
+      { timeoutMs: 18_000 },
+    );
     expect($(m, "#setpane .updpill"), "a pass/fail summary pill").toBeTruthy();
     expect(m.errors.join("\n")).toBe("");
-  });
+  }, 30_000);
 
   it("Updates reports the build and version from the daemon", async () => {
     const m = mount();
