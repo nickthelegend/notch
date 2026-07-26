@@ -208,3 +208,31 @@ describe("SigNoz alert -> baton intervention", () => {
     delete process.env.NOTCH_WEBHOOK_SECRET;
   });
 });
+
+/**
+ * The webhook sits in front of the bearer wall so Alertmanager, which has no
+ * Notch token, can post to it. That is fine while the daemon is on loopback and
+ * only a local user can reach it. Bound past localhost with no secret set, the
+ * same route lets anyone who can route a packet quarantine an agent and move the
+ * baton, so it refuses instead — and names the variable to set rather than just
+ * saying no.
+ */
+describe("webhook auth past loopback", () => {
+  it("refuses an unsecured webhook when the daemon is not on loopback", async () => {
+    process.env.LOOM_HOME = tmpDir("home-exposed");
+    delete process.env.NOTCH_WEBHOOK_SECRET;
+    const d = new LoomDaemon({ host: "0.0.0.0", port: 0 });
+    const { port } = await d.listen();
+    try {
+      const r = await fetch(`http://127.0.0.1:${port}/api/webhooks/signoz`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ alerts: [] }),
+      });
+      expect(r.status).toBe(401);
+      expect(((await r.json()) as { error: string }).error).toContain("NOTCH_WEBHOOK_SECRET");
+    } finally {
+      await d.close();
+    }
+  });
+});
