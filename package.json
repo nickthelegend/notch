@@ -49,9 +49,10 @@
     "prepare": "tsc",
     "dev": "tsx src/cli/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --exclude 'test/app-dom.test.ts' && vitest run test/app-dom.test.ts",
     "test:watch": "vitest",
-    "verify:adapters": "node scripts/verify-adapters.mjs"
+    "verify:adapters": "node scripts/verify-adapters.mjs",
+    "test:all-parallel": "vitest run"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
