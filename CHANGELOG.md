@@ -9,8 +9,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.2.1] - 2026-07-26
+
+Correctness and honesty pass over the Observatory, plus the first way to un-add
+a project. Everything here was found by driving the running app or measuring the
+running suite, not by reading the diff.
+
+### Fixed
+
+- **A deep link to a project this client had not listed yet opened the wrong
+  project.** `#p/<id>` for a just-created project — or a URL from another device
+  — lost the race with the first `/api/projects` reply, silently fell back to
+  the first project in the list, and never reconsidered. The address bar kept
+  saying the id you asked for. Invisible with one project; silent and wrong with
+  two.
+- **The Metrics tab contradicted itself.** "Spend — nothing recorded yet" sat
+  under a $3.64 total, because the chart plotted the last ten turns while the
+  total summed the whole log. The card is now genuinely cumulative and its last
+  point lands on the figure above it.
+- **Live fleet drew every agent's edge to the shared brain invisibly** — border
+  colour at 0.35 opacity — so the one claim that view exists to make was the one
+  thing you could not see.
+- **The turn-duration axis dropped the date on multi-day runs**, so a 37-hour
+  run read "21:59 · 16:49 · 11:39" and looked like time running backwards.
+- **The BATON card ellipsised "claude-code" to "claude-c…"**, on the card whose
+  only job is naming who holds it.
+- **The test suite's flake, which was three separate causes**: a test that
+  returned with an agent turn still in flight, so the *next* test's send was
+  refused and it waited for a reply that was never coming; a wait budget of 8s
+  against a `/api/setup` that spawns a CLI probe per agent and takes 4.8-6.0s on
+  an idle machine; and genuine contention from running app-dom's 62 jsdom
+  windows alongside 56 other files. `npm test` now runs that one file on its own.
+
+### Added
+
+- **`loom projects --forget <id|name>` and `DELETE /api/projects/:id`.** You
+  could point Notch at a directory and had no supported way to un-point it.
+  Registry-only on purpose: the project's `.loom/` — config, event log, memory —
+  stays on disk, and the CLI says so, because "removed" must not be read as
+  "deleted" by a tool that also owns your history.
+
 ### Changed
 
+- Every README screenshot retaken from the running app against live SigNoz. The
+  hero image had been showing the old **loom** wordmark, the pre-redesign
+  graphite theme, no Observatory tab at all, and two errors from the withdrawn
+  Antigravity CDP bridge.
+- Observatory explainers for Timeline, Decisions and Logs now open with a claim
+  rather than a list of their own contents.
+- `docs/DEMO.md` derives the daemon port instead of hardcoding it, and seeds a
+  real error before recording so the Logs ERROR filter has something in it.
 - **The Observatory is eight views.** 0.2.0's entry below says six, and that was
   true when it was written. Two have landed since: **Self-heal**, which shows the
   quarantine/failover/retry loop that SigNoz cannot render, and **Logs**, so Notch
