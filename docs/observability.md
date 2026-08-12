@@ -68,3 +68,33 @@ FROM signoz_traces.distributed_signoz_index_v3
 WHERE serviceName = 'notch' AND timestamp > now() - INTERVAL 15 MINUTE
 GROUP BY name;
 ```
+
+## Dashboard
+
+A ready-made SigNoz dashboard ships at [`docs/signoz-dashboard.json`](./signoz-dashboard.json).
+Import it via **SigNoz → Dashboards → New dashboard → Import JSON**. It reads
+the `notch` service's spans and gives you the fleet at a glance.
+
+If your SigNoz version rejects the import (the dashboard schema drifts between
+releases), the panels are trivial to rebuild by hand in the Query Builder — data
+source **Traces**, filtered to `serviceName = notch`:
+
+| Panel | Type | Filter (add to `serviceName = notch`) | Aggregate | Group by |
+|---|---|---|---|---|
+| Agent turns / min | Time series | `name = gen_ai.agent.turn` | Count | `gen_ai.agent.id` |
+| LLM cost (USD) | Time series | — | Sum of `gen_ai.usage.cost_usd` | — |
+| Tokens in / out | Time series | — | Sum of `gen_ai.usage.input_tokens`, `…output_tokens` | — |
+| Turn latency p95 | Time series | `name = gen_ai.agent.turn` | p95 of `durationNano` | — |
+| Baton handoffs | Value | `name = notch.baton.handoff` | Count | — |
+| Errors / min | Time series | `hasError = true` | Count | — |
+| By agent | Table | `name = gen_ai.agent.turn` | Count + Sum(cost) | `gen_ai.agent.id` |
+
+## Test it
+
+The exporter and the event→span mapping are covered end to end:
+
+```bash
+npm test -- observability          # unit: config, mapper, OTLP payload shape
+npm test -- observability-export   # integration: a stand-in OTLP collector
+                                   # receives real spans from daemon turns
+```
