@@ -98,6 +98,15 @@ describe("Notch -> SigNoz OTLP export (end to end)", () => {
     expect(Number(a["gen_ai.usage.output_tokens"])).toBeGreaterThan(0);
   });
 
+  it("gives each turn its own trace id (per-turn correlation)", async () => {
+    // one turn already ran in the first test; drive a second and compare.
+    await client.send(projectId, "again");
+    await waitUntil(async () => received.filter((s) => s.name === "gen_ai.agent.turn").length >= 2, { timeoutMs: 12_000 });
+    const traces = received.filter((s) => s.name === "gen_ai.agent.turn").map((s) => s.traceId);
+    expect(new Set(traces).size).toBeGreaterThanOrEqual(2); // distinct turns → distinct traces
+    for (const t of traces) expect(t).toMatch(/^[0-9a-f]{32}$/);
+  });
+
   it("exports a notch.baton.handoff span after the baton moves", async () => {
     await client.handoff(projectId, "execbot");
     const toExec = () =>

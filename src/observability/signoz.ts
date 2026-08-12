@@ -75,7 +75,14 @@ export type SpanInput = {
   endNs: bigint;
   attributes: Record<string, string | number | boolean | undefined | null>;
   error?: string;
+  /** Correlate related spans (a turn + its tool calls) under one trace. */
+  traceId?: string;
 };
+
+/** A fresh 16-byte trace id — used to group a turn's spans into one trace. */
+export function newTraceId(): string {
+  return hexId(16);
+}
 
 /**
  * The exporter. Batches spans in a short window and POSTs OTLP/HTTP JSON.
@@ -110,7 +117,7 @@ export class NotchTelemetry {
       attrs.push(kv(k, v));
     }
     this.buffer.push({
-      traceId: hexId(16),
+      traceId: input.traceId ?? hexId(16),
       spanId: hexId(8),
       name: input.name,
       kind: SPAN_KIND_INTERNAL,
