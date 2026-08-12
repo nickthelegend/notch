@@ -67,6 +67,9 @@ export function codexBin(override?: string): string | null {
 export class CodexAdapter extends AdapterBase {
   private child: ChildProcess | null = null;
   private options: CodexOptions;
+  // Token usage from turn.completed, stashed so it also rides run_complete
+  // (which fires on close). Cleared each turn.
+  private lastUsage: { input: number; output: number } | null = null;
 
   constructor(id: string, projectDir: string, options: Record<string, unknown> = {}) {
     super(id, "codex", projectDir);
@@ -184,7 +187,16 @@ export class CodexAdapter extends AdapterBase {
           if (/\?\s*$/.test(lastMessage.trim())) {
             this.emit({ kind: "needs_input", payload: { question: lastMessage.slice(-500) } });
           }
-          this.emit({ kind: "run_complete", payload: { durationMs: Date.now() - started } });
+          this.emit({
+            kind: "run_complete",
+            payload: {
+              durationMs: Date.now() - started,
+              ...(this.lastUsage
+                ? { inputTokens: this.lastUsage.input, outputTokens: this.lastUsage.output }
+                : {}),
+            },
+          });
+          this.lastUsage = null;
           resolve();
         });
       });
@@ -215,6 +227,10 @@ export class CodexAdapter extends AdapterBase {
 
     if (type === "turn.completed") {
       const usage = (evt.usage ?? {}) as Record<string, number>;
+      this.lastUsage = {
+        input: (usage.input_tokens ?? 0) + (usage.cached_input_tokens ?? 0),
+        output: (usage.output_tokens ?? 0) + (usage.reasoning_output_tokens ?? 0),
+      };
       this.emit({
         kind: "status",
         payload: {
