@@ -105,6 +105,20 @@ describe("codex · a normal turn", () => {
     expect(of(events, "run_complete")[0]).toMatchObject({ model: "gpt-5.6", inputTokens: 52831 + 44672, outputTokens: 120 });
   });
 
+  it("treats an item-level error as a non-fatal notice, not a failed turn", async () => {
+    // Codex emits item `error` for benign notices ("skill descriptions were
+    // shortened…"); the turn still completes. It must NOT become a kind:error
+    // event (which would sink the turn mid-route).
+    const NOTICE = JSON.stringify({
+      type: "item.completed",
+      item: { id: "i", type: "error", message: "Skill descriptions were shortened to fit the 2% skills context budget." },
+    });
+    const { events } = await run([THREAD("t"), NOTICE, MSG("done"), TURN_DONE]);
+    expect(of(events, "error")).toHaveLength(0); // the notice is not a fatal error
+    expect(of(events, "status").some((p) => p.state === "notice")).toBe(true);
+    expect(kinds(events)).toContain("run_complete"); // the turn still completes
+  });
+
   it("resumes the thread on the next turn", async () => {
     const dir = makeProjectDir({ name: "cx" });
     await run([THREAD("019f-keep"), MSG("one"), TURN_DONE], {}, dir);
@@ -197,15 +211,17 @@ describe("codex · what it did", () => {
 });
 
 describe("codex · when it goes wrong", () => {
-  it("passes an error item through", async () => {
+  it("surfaces an error item as a non-fatal notice, and keeps going", async () => {
     const { events } = await run([
       THREAD("t"),
       JSON.stringify({ type: "item.completed", item: { type: "error", message: "skills budget exceeded" } }),
       MSG("carrying on"),
       TURN_DONE,
     ]);
-    expect(of(events, "error")[0]).toMatchObject({ message: "skills budget exceeded" });
-    expect(kinds(events)).toContain("run_complete"); // reported, not fatal
+    // Not a fatal error event (that would fail a route); a visible notice instead.
+    expect(of(events, "error")).toHaveLength(0);
+    expect(of(events, "status").find((p) => p.state === "notice")).toMatchObject({ message: "skills budget exceeded" });
+    expect(kinds(events)).toContain("run_complete");
   });
 
   it("throws when it dies without completing a turn", async () => {
