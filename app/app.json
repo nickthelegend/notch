@@ -1,0 +1,55 @@
+{
+  "expo": {
+    "name": "Loom",
+    "slug": "loom",
+    "version": "0.1.0",
+    "scheme": "loom",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#111111",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#111111"
+    },
+    "ios": {
+      "bundleIdentifier": "dev.loom.app",
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true,
+          "NSAllowsLocalNetworking": true
+        },
+        "NSLocalNetworkUsageDescription": "Loom talks to the daemon on your own computer, over your tailnet or LAN."
+      }
+    },
+    "android": {
+      "package": "dev.loom.app",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1B1D21"
+      }
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Loom uses the microphone for voice input",
+          "speechRecognitionPermission": "Loom converts your speech to text so you can dictate messages"
+        }
+      ]
+    ]
+  }
+}
