@@ -1,6 +1,6 @@
 /**
- * The Loom web app — a single-file app served by the daemon at /app.
- * Reachable over the tailnet, paired via the `loom pair` QR deep link
+ * The Notch web app — a single-file app served by the daemon at /app.
+ * Reachable over the tailnet, paired via the `notch pair` QR deep link
  * (…/app#pair=<one-time-token>), installable to the Android home screen,
  * and wrapped by the Electron shell on desktop.
  *
@@ -115,7 +115,7 @@ try{if(localStorage.getItem("loomTheme")==="light")document.documentElement.clas
     font:14px/1.55 var(--font-sans);letter-spacing:.01em;
     -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;
     padding-bottom:env(safe-area-inset-bottom);min-height:100dvh}
-  /* the warp ground — Loom's fingerprint, near-invisible vertical threads */
+  /* the warp ground — Notch's fingerprint, near-invisible vertical threads */
   body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
     background:repeating-linear-gradient(90deg, var(--warp) 0 1px, transparent 1px 28px)}
   ::selection{background:color-mix(in srgb, var(--thread) 30%, transparent)}
@@ -1727,7 +1727,7 @@ ${BRAND_SPRITE}
     pr: svg('<circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><path d="M6 8.5v7"/><circle cx="18" cy="18" r="2.5"/><path d="M18 15.5V9a3 3 0 0 0-3-3h-4"/><path d="m13 3-2 3 2 3"/>'),
     // Brand marks, filled — the one place brand assets are warranted. GitLab
     // and Linear ride along disabled: the row says which providers exist and
-    // which one Loom can actually read.
+    // which one Notch can actually read.
     gitlab:
       '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M22.65 14.39 12 22.13 1.35 14.39a.84.84 0 0 1-.3-.94l1.22-3.78 2.44-7.51A.42.42 0 0 1 4.82 2a.43.43 0 0 1 .58.11l.11.15 2.44 7.53h8.1l2.44-7.51a.42.42 0 0 1 .11-.19.43.43 0 0 1 .58.11l.11.15 2.44 7.53L23 13.45a.84.84 0 0 1-.35.94z"/></svg>',
     linear:
@@ -1827,11 +1827,11 @@ ${BRAND_SPRITE}
       '<div class="tag">the shared-memory layer for your AI dev environments</div>' +
       '<input id="ptok" placeholder="pairing token or link" autocomplete="off" autocapitalize="off" spellcheck="false">' +
       '<button class="btn primary" id="pgo">Pair this device</button>' +
-      '<div class="help">On your computer: <b>loom up --tailnet</b>, then <b>loom pair</b>.<br>Scan the QR, or paste the token or whole link above.</div>' +
+      '<div class="help">On your computer: <b>notch up --tailnet</b>, then <b>notch pair</b>.<br>Scan the QR, or paste the token or whole link above.</div>' +
       '</div>';
     function pair(){
       var v = (document.getElementById("ptok").value || "").trim();
-      if (!v) return toast("paste the token from loom pair");
+      if (!v) return toast("paste the token from notch pair");
       try { var j = JSON.parse(v); if (j && j.token) v = j.token; } catch (e) {}
       var m = v.match(/pair=([A-Za-z0-9]+)/); if (m) v = m[1];
       claim(v).then(route).catch(function(err){ toast(err.message); });
@@ -1848,7 +1848,7 @@ ${BRAND_SPRITE}
     clearTimers();
     clearShell();
     root.innerHTML =
-      '<header class="appbar"><span class="wordmark">lo<b>om</b></span><span class="sub">projects</span>' +
+      '<header class="appbar"><span class="wordmark">no<b>tch</b></span><span class="sub">projects</span>' +
       '<span class="spacer"></span>' + THEME_BTN +
       '<button id="unpair" class="iconbtn" title="unpair this device">' + ICONS.unpair + "</button></header>" +
       '<main id="list">' + LOADER + "</main>";
@@ -1859,7 +1859,7 @@ ${BRAND_SPRITE}
         state.projects = j.projects || [];
         var el = document.getElementById("list");
         if (!el) return;
-        if (!state.projects.length) { el.innerHTML = '<div class="sys" style="padding:40px 0;line-height:1.8">no projects woven yet<br><span style="opacity:.75">run <b class="mono" style="font-weight:500">loom init</b> in a repo on your computer</span></div>'; return; }
+        if (!state.projects.length) { el.innerHTML = '<div class="sys" style="padding:40px 0;line-height:1.8">no projects woven yet<br><span style="opacity:.75">run <b class="mono" style="font-weight:500">notch init</b> in a repo on your computer</span></div>'; return; }
         el.innerHTML = state.projects.map(function(p){
           var r = p.route, act = r && (r.status === "running" || r.status === "waiting_human");
           return '<div class="card" data-id="' + esc(p.id) + '">' +
@@ -1939,7 +1939,7 @@ ${BRAND_SPRITE}
   }
 
   // ---- diff parsing (changes pane + rail) ---------------------------------
-  // Loom's own state dir is workspace noise, not the user's change set.
+  // Notch's own state dir is workspace noise, not the user's change set.
   function isLoomInternal(path){ return String(path || "").indexOf(".loom/") === 0; }
   function visibleFiles(t){ return (t && t.files ? t.files : []).filter(function(f){ return !isLoomInternal(f.path); }); }
   function splitPatch(patch){
@@ -2074,7 +2074,7 @@ ${BRAND_SPRITE}
         // No project title here. The sidebar already names every project and
         // highlights the open one, so this printed it a second time three
         // inches away — and for a project called "loom" that's the word "loom"
-        // twice in one bar, under a window called Loom. Cost and needs-input
+        // twice in one bar, under a window called Notch. Cost and needs-input
         // live on the sidebar row too, so nothing is lost with it.
         '<span id="tabsbox" style="display:contents"></span>' +
         '<span class="spacer"></span>' +
@@ -2405,7 +2405,7 @@ ${BRAND_SPRITE}
           focusTerm();
         })
         .catch(function(err){
-          host.innerHTML = '<div class="termbody"><div class="eo">loom: ' + esc(err.message) + "</div></div>";
+          host.innerHTML = '<div class="termbody"><div class="eo">notch: ' + esc(err.message) + "</div></div>";
         });
     }
     /** A real terminal: xterm.js speaking raw bytes to the pty over the WS. */
@@ -2645,7 +2645,7 @@ ${BRAND_SPRITE}
       api("/api/projects/" + pid + "/term/input", { method: "POST", body: JSON.stringify({ term: t.id, data: cmd }) })
         .catch(function(err){
           t.busy = false; drawTermTabs(); drawPrompt();
-          termAppend(t, '<div class="eo">loom: ' + esc(err.message) + "</div>");
+          termAppend(t, '<div class="eo">notch: ' + esc(err.message) + "</div>");
         });
     }
     function interruptTerm(){
@@ -2812,7 +2812,7 @@ ${BRAND_SPRITE}
       var el = document.getElementById("pane-brain"); if (!el) return;
       if (!el.querySelector(".brain")) el.innerHTML = '<div class="pane-inner">' + LOADER + "</div>";
       // Two reads: the learned memory units (the star), and the imported ADE
-      // sources (context — what Loom pulled in from CLAUDE.md and friends).
+      // sources (context — what Notch pulled in from CLAUDE.md and friends).
       Promise.all([
         api("/api/projects/" + pid + "/brain?limit=200"),
         api("/api/projects/" + pid + "/memory").catch(function(){ return { memory: {} }; }),
@@ -2838,7 +2838,7 @@ ${BRAND_SPRITE}
         if (!shown.length) {
           list = '<div class="bempty">' + (memories.length
             ? "No " + esc(brainKind) + " memories yet."
-            : "Nothing learned yet. As agents finish turns, Loom reads each one and records what's worth keeping — constraints, decisions, and the failures worth not repeating. Add a decision below to seed it, or let an agent take a turn.") + "</div>";
+            : "Nothing learned yet. As agents finish turns, Notch reads each one and records what's worth keeping — constraints, decisions, and the failures worth not repeating. Add a decision below to seed it, or let an agent take a turn.") + "</div>";
         } else {
           list = '<div class="bmems">' + shown.map(function(x){
             var ents = (x.entities || []).slice(0, 6).map(function(e){ return '<span class="bent">' + esc(e) + "</span>"; }).join("");
@@ -2874,7 +2874,7 @@ ${BRAND_SPRITE}
                 '<span class="sf mono">' + esc(s.file) + "</span>" +
                 '<span class="sc">' + Math.round(s.chars / 1024 * 10) / 10 + "k</span></div>";
             }).join("") + "</div>"
-          : '<div class="bempty sm">No native ADE memory found (CLAUDE.md, AGENTS.md, .kiro/steering). Loom reads these but never writes to them.</div>';
+          : '<div class="bempty sm">No native ADE memory found (CLAUDE.md, AGENTS.md, .kiro/steering). Notch reads these but never writes to them.</div>';
 
         el.innerHTML = '<div class="pane-inner brain">' + head + seed + list + src + "</div>";
 
@@ -3210,7 +3210,7 @@ ${BRAND_SPRITE}
     /**
      * Open a worktree from a task and say where it landed. A worktree is a real
      * directory on the daemon host, so the honest confirmation is its path — you
-     * cd there, or point a fresh Loom project at it.
+     * cd there, or point a fresh Notch project at it.
      */
     function openWorktree(btn, body){
       if (btn) { btn.disabled = true; btn.textContent = "Opening\\u2026"; }
@@ -3306,7 +3306,7 @@ ${BRAND_SPRITE}
         body = '<div class="tsetup"><div class="th">Linear isn\\u2019t connected</div>' +
           '<div class="td">' + esc(det) + "</div>" +
           '<code class="scmd">export LINEAR_API_KEY=lin_api_\\u2026\\nloom up --restart</code>' +
-          '<div class="td" style="margin-top:8px">Loom reads the key from its own environment and never stores it \\u2014 the same bet it makes with the GitHub CLI.</div></div>';
+          '<div class="td" style="margin-top:8px">Notch reads the key from its own environment and never stores it \\u2014 the same bet it makes with the GitHub CLI.</div></div>';
       } else {
         var issues = (board.linear && board.linear.available) ? board.linear.issues : [];
         body = issues.length
@@ -3844,7 +3844,7 @@ ${BRAND_SPRITE}
         b.onclick = function(ev){
           ev.stopPropagation();
           var f = b.getAttribute("data-discard");
-          // The only control in Loom that destroys work, so it's the only one
+          // The only control in Notch that destroys work, so it's the only one
           // that asks first.
           // The newline escape below is doubled. This whole file is one TS
           // template literal: a single backslash is eaten here and the browser
@@ -4005,7 +4005,7 @@ ${BRAND_SPRITE}
       var bridges = p ? p.agents.filter(function(a){ return a.tier === "bridge"; }) : [];
       bridges.forEach(function(a){
         html += '<div class="frow bridge" title="' + esc(a.id) +
-          ' is a bridge \\u2014 Loom reads it, but it never holds the baton">' +
+          ' is a bridge \\u2014 Notch reads it, but it never holds the baton">' +
           '<span class="adot"></span>' + brandMark(a.kind) +
           '<span class="fp">' + esc(a.id) + '</span> <span class="abadge">bridge</span>' +
           '<span class="role" style="margin-left:auto">' + esc(a.role) + "</span>" +
@@ -4050,7 +4050,7 @@ ${BRAND_SPRITE}
     }
 
     /**
-     * What you could add: every ADE Loom can drive that isn't in this project.
+     * What you could add: every ADE Notch can drive that isn't in this project.
      *
      * Installed and in-project are different questions and the daemon answers
      * both — an ADE you haven't installed is offered greyed out with the reason,
@@ -4063,7 +4063,7 @@ ${BRAND_SPRITE}
       function render(){
         var list = (state.avail || []).filter(function(a){ return !a.inProject; });
         if (!list.length) {
-          box.innerHTML = '<div class="rempty">every agent Loom can drive is already here</div>';
+          box.innerHTML = '<div class="rempty">every agent Notch can drive is already here</div>';
           return;
         }
         box.innerHTML = list.map(function(a){
@@ -4297,7 +4297,7 @@ ${BRAND_SPRITE}
       box.value = ""; autosizeBox(); attach = []; drawAttach();
       var p = state.project || {};
 
-      // A bridge is driven, not handed a turn: Loom types into Antigravity's or
+      // A bridge is driven, not handed a turn: Notch types into Antigravity's or
       // Kiro's own window and waits for the panel to settle. No handoff, because
       // it never takes the baton — whichever adapter holds it keeps it.
       var sel = (p.agents || []).filter(function(a){ return a.id === state.selected; })[0];
@@ -4844,7 +4844,7 @@ ${BRAND_SPRITE}
   }
   /**
    * Sign in to GitHub. gh's login is an interactive device flow, so the honest
-   * place to run it is the real terminal you already have — Loom never touches
+   * place to run it is the real terminal you already have — Notch never touches
    * the token; gh stores it. We run it there, then poll until gh reports in and
    * light the board up.
    */
@@ -5125,7 +5125,7 @@ ${BRAND_SPRITE}
       if (current === "tailnet" && (!nets.tailnet || !nets.tailnet.available)){
         if (nets.tailnet && nets.tailnet.installed){
           stage('<div class="phmsg">Tailscale is installed but signed out.' +
-            '<div class="phdim">Start it here so a phone on your tailnet can reach Loom from anywhere. No shared Wi-Fi, no terminal.</div>' +
+            '<div class="phdim">Start it here so a phone on your tailnet can reach Notch from anywhere. No shared Wi-Fi, no terminal.</div>' +
             '<button class="btn primary" id="phtsup">Start Tailscale</button></div>');
           q("phtsup").onclick = startTailscale;
         } else {
@@ -5138,7 +5138,7 @@ ${BRAND_SPRITE}
         return;
       }
       if (!net.reachable){
-        stage('<div class="phmsg">Loom is bound to <code>' + esc(nets.boundHost) + '</code>, so a phone cannot reach it yet.' +
+        stage('<div class="phmsg">Notch is bound to <code>' + esc(nets.boundHost) + '</code>, so a phone cannot reach it yet.' +
           '<div class="phdim">Enable phone access to also listen on <code>' + esc(net.ip) + '</code> so a phone on the ' + (current === "tailnet" ? "tailnet" : "same Wi-Fi") + ' can reach it. It stays behind the single-use pairing code.</div>' +
           '<button class="btn primary" id="phexpose">Enable phone access</button></div>');
         q("phexpose").onclick = function(){
@@ -5231,7 +5231,7 @@ ${BRAND_SPRITE}
     s.style.setProperty("--railw", rw + "px");
   }
 
-  // ---- New Task modal (Orca's Create Worktree, mapped to Loom) -------------
+  // ---- New Task modal (Orca's Create Worktree, mapped to Notch) -------------
   // One ADE runs it directly; several run it as a pipeline, hop to hop.
   function openTaskModal(prefillPid, prefillAgents, prefillText){
     var projects = state.projects || [];
@@ -5515,7 +5515,7 @@ ${BRAND_SPRITE}
    * browser the daemon may be on another host, so the path is typed.
    */
   /**
-   * Settings — one sectioned modal for everything about this Loom. A nav rail on
+   * Settings — one sectioned modal for everything about this Notch. A nav rail on
    * the left; one pane on the right. Setup is folded in as the first section
    * rather than living in its own lonely modal, joined by Diagnostics (loom
    * doctor), Preferences (how the brain and handoffs behave), Updates, Devices,
@@ -5601,11 +5601,11 @@ ${BRAND_SPRITE}
         h += '<div class="sgrouph">Runtime</div>';
         h += srow(s.node.ok ? "ok" : "bad", "Node " + esc(s.node.version),
           s.node.ok ? "new enough for the event log"
-            : "Loom needs \\u2265" + esc(s.node.needed) + " \\u2014 on anything older your history is silently dropped",
+            : "Notch needs \\u2265" + esc(s.node.needed) + " \\u2014 on anything older your history is silently dropped",
           s.node.ok ? "" : (s.platform === "darwin" ? "brew install node"
             : s.platform === "win32" ? "winget install OpenJS.NodeJS" : "install node 22.5 or newer"));
         h += '<div class="sgrouph">Agents that can take a turn</div>';
-        if (!s.ready) h += '<div class="snote">Nothing here can hold the baton yet \\u2014 install one and Loom has something to drive.</div>';
+        if (!s.ready) h += '<div class="snote">Nothing here can hold the baton yet \\u2014 install one and Notch has something to drive.</div>';
         s.agents.forEach(function(a){
           // Three states, not two. "Installed" was the lie that cost an
           // afternoon: claude answered --version happily while refusing every
@@ -5630,8 +5630,8 @@ ${BRAND_SPRITE}
             '<div class="sd">' + esc(p.why) + '</div><div class="sd how">' + esc(p.how) + "</div></div></div>";
         });
         h += '<div class="sgrouph">Your phone</div>';
-        h += srow("info", "Let it reach this machine", "Loom listens on localhost by default, which your phone can\\u2019t see.", "loom up --restart --tailnet");
-        h += srow("info", "Pair the device", "Single use \\u2014 or add one under Devices.", "loom pair");
+        h += srow("info", "Let it reach this machine", "Notch listens on localhost by default, which your phone can\\u2019t see.", "notch up --restart --tailnet");
+        h += srow("info", "Pair the device", "Single use \\u2014 or add one under Devices.", "notch pair");
         h += '<div class="pillrow"><button class="btn ghost sm" id="setuprecheck">Re-check</button>' +
           '<span class="hintx">' + (s.ready ? "This machine can run agents." : "No agents installed yet.") + "</span></div>";
         pane.innerHTML = h;
@@ -5639,7 +5639,7 @@ ${BRAND_SPRITE}
       }).catch(fail);
     }
 
-    // ---- Diagnostics: loom doctor, live -------------------------------------
+    // ---- Diagnostics: notch doctor, live -------------------------------------
     function renderDiag(){
       busy();
       api("/api/doctor" + (pid ? "?project=" + encodeURIComponent(pid) : "")).then(function(d){
@@ -5647,7 +5647,7 @@ ${BRAND_SPRITE}
         var bad = checks.filter(function(c){ return c.status === "fail"; }).length;
         var warn = checks.filter(function(c){ return c.status === "warn"; }).length;
         var h = '<div class="setphead">Diagnostics</div>' +
-          '<div class="setpsub">loom doctor, run live on this daemon' + (pid ? " \\u00b7 including the open project" : "") + ".</div>";
+          '<div class="setpsub">notch doctor, run live on this daemon' + (pid ? " \\u00b7 including the open project" : "") + ".</div>";
         h += '<div class="pillrow">';
         if (!bad && !warn) h += '<span class="updpill ok">All ' + checks.length + " checks pass</span>";
         else h += '<span class="updpill warn">' + (bad ? bad + " failing" : "") + (bad && warn ? " \\u00b7 " : "") + (warn ? warn + " warning" + (warn > 1 ? "s" : "") : "") + "</span>";
@@ -5716,7 +5716,7 @@ ${BRAND_SPRITE}
         var behind = g && g.behind ? g.behind : 0;
         var shortRev = (u.rev || "").slice(0, 7);
         var h = '<div class="setphead">Updates</div>' +
-          '<div class="setpsub">Whether this Loom is current \\u2014 the running build, and the code on disk.</div>';
+          '<div class="setpsub">Whether this Notch is current \\u2014 the running build, and the code on disk.</div>';
         h += '<div class="pillrow">';
         if (u.root && behind > 0) h += '<span class="updpill warn">' + behind + " commit" + (behind > 1 ? "s" : "") + " behind</span>";
         else if (u.root && g && g.hasUpstream) h += '<span class="updpill ok">Up to date</span>';
@@ -5731,9 +5731,9 @@ ${BRAND_SPRITE}
           h += '<div class="snote">A newer version is on your remote. Update in place, then restart the daemon:</div>';
           h += '<code class="scmd">cd ' + esc(u.root) + " && git pull --ff-only && npm install && npm run build\\nloom up --restart</code>";
         } else if (u.root && g && g.hasUpstream) {
-          h += '<div class="snote">Your checkout matches its remote. If you just rebuilt, restart to pick it up:</div><code class="scmd">loom up --restart</code>';
+          h += '<div class="snote">Your checkout matches its remote. If you just rebuilt, restart to pick it up:</div><code class="scmd">notch up --restart</code>';
         } else if (!u.root) {
-          h += '<div class="snote">This Loom isn\\u2019t a git checkout, so there\\u2019s nothing to pull \\u2014 update it the way you installed it (npm, or the desktop app\\u2019s own updater).</div>';
+          h += '<div class="snote">This Notch isn\\u2019t a git checkout, so there\\u2019s nothing to pull \\u2014 update it the way you installed it (npm, or the desktop app\\u2019s own updater).</div>';
         }
         pane.innerHTML = h;
         document.getElementById("updcheck").onclick = renderUpdates;
@@ -5755,7 +5755,7 @@ ${BRAND_SPRITE}
         // and point at the CLI path that always works from this machine.
         var adminOnly = /admin/i.test(e.message || "");
         out.innerHTML = adminOnly
-          ? '<div class="snote">Only an admin client can add a device from here. From a terminal on this machine:</div><code class="scmd">loom pair</code>'
+          ? '<div class="snote">Only an admin client can add a device from here. From a terminal on this machine:</div><code class="scmd">notch pair</code>'
           : '<div class="snote">' + esc(e.message) + "</div>";
       });
     }
@@ -5774,7 +5774,7 @@ ${BRAND_SPRITE}
       api("/api/pair/clients").then(function(d){
         var clients = d.clients || [];
         var h = '<div class="setphead">Devices</div>' +
-          '<div class="setpsub">Every client paired to this Loom. Revoke one and its token stops working at once.</div>';
+          '<div class="setpsub">Every client paired to this Notch. Revoke one and its token stops working at once.</div>';
         h += '<div class="pillrow"><button class="btn primary sm" id="devpair">Pair a new device</button></div><div id="devpairout"></div>';
         if (!clients.length) h += '<div class="snote">No devices paired yet.</div>';
         clients.forEach(function(c){
@@ -5838,7 +5838,7 @@ ${BRAND_SPRITE}
           '<div class="pickrow"><input id="pdir" spellcheck="false" autocomplete="off" placeholder="' +
             (native ? "choose a folder\\u2026" : "/path/to/repo on the daemon host") + '">' +
             (native ? '<button class="btn outline" id="pbrowse">Choose\\u2026</button>' : "") + "</div>" +
-          '<span class="hintx">Loom writes a <code>.loom/</code> folder here and leaves the rest of the repo alone.</span></div>' +
+          '<span class="hintx">Notch writes a <code>.loom/</code> folder here and leaves the rest of the repo alone.</span></div>' +
         '<div class="field"><label>Name <span class="opt">optional</span></label>' +
           '<input id="pname" spellcheck="false" autocomplete="off" placeholder="defaults to the folder name"></div>' +
       "</div>" +
@@ -5952,7 +5952,7 @@ ${BRAND_SPRITE}
       C.push({ icon: ICONS.tasks, label: "New task", run: function(){ openTaskModal(pid); } });
       C.push({ icon: ICONS.folderPlus, label: "New project", run: function(){ openProjectModal(); } });
       C.push({ icon: ICONS.gear, label: "Settings", run: function(){ openSettingsModal("setup"); } });
-      C.push({ icon: ICONS.console, label: "Diagnostics", sub: "loom doctor", run: function(){ openSettingsModal("diagnostics"); } });
+      C.push({ icon: ICONS.console, label: "Diagnostics", sub: "notch doctor", run: function(){ openSettingsModal("diagnostics"); } });
       if (pid && state.toggleTerm) C.push({ icon: ICONS.terminal, label: "Toggle terminal", run: function(){ state.toggleTerm(); } });
       C.push({ icon: ICONS.sun, label: "Toggle theme", run: function(){ localStorage.setItem(THEME_KEY, themeNow() === "light" ? "dark" : "light"); applyTheme(); if (state.retheme) state.retheme(); } });
       return C;
@@ -6060,7 +6060,7 @@ ${BRAND_SPRITE}
     root.innerHTML =
       '<div class="dshell">' +
       '<aside class="sidebar">' +
-        '<div class="shead"><span class="wordmark">lo<b>om</b></span></div>' +
+        '<div class="shead"><span class="wordmark">no<b>tch</b></span></div>' +
         '<div class="topnav"><button class="navitem" id="newtask">' + ICONS.tasks + "New task<span class=\\"kbd\\">N</span></button>" +
         '<button class="navitem" id="newproj">' + ICONS.folderPlus + "New project<span class=\\"kbd\\">P</span></button></div>" +
         '<div class="snav">' + ICONS.search + '<input id="sfilter" placeholder="Search" autocomplete="off" spellcheck="false">' +
@@ -6098,7 +6098,7 @@ ${BRAND_SPRITE}
     document.getElementById("setupbtn").onclick = openSetupModal;
     // First run: show it rather than wait to be found. Someone who has just
     // paired has no agents set up and no reason to guess that the small icon in
-    // the sidebar foot is where that happens — and Loom with nothing to drive
+    // the sidebar foot is where that happens — and Notch with nothing to drive
     // is a window with nothing in it. Once only; the button is always there.
     try {
       if (!localStorage.getItem(SETUP_SEEN_KEY)) {
@@ -6243,7 +6243,7 @@ ${BRAND_SPRITE}
     function drawList(){
       var el = document.getElementById("slist"); if (!el) return;
       if (!state.projects.length) {
-        el.innerHTML = '<div class="sys" style="padding:24px 8px;line-height:1.7">no projects yet<br><span style="opacity:.75">run <b class="mono" style="font-weight:500">loom init</b></span></div>';
+        el.innerHTML = '<div class="sys" style="padding:24px 8px;line-height:1.7">no projects yet<br><span style="opacity:.75">run <b class="mono" style="font-weight:500">notch init</b></span></div>';
         return;
       }
       var shown = !filter ? state.projects : state.projects.filter(function(p){
