@@ -127,8 +127,11 @@ export class ProjectRuntime {
   // Cost telemetry — O(1) incremental, rehydrated from the log on open
   // -------------------------------------------------------------------------
 
-  private costs = { totalUsd: 0, turns: 0, totalMs: 0 };
-  private costsByAgent = new Map<string, { usd: number; turns: number; ms: number }>();
+  private costs = { totalUsd: 0, turns: 0, totalMs: 0, tokensIn: 0, tokensOut: 0 };
+  private costsByAgent = new Map<
+    string,
+    { usd: number; turns: number; ms: number; tokensIn: number; tokensOut: number }
+  >();
 
   private rehydrateCosts(): void {
     for (const event of this.log.list({ kinds: ["status", "run_complete"] })) {
@@ -139,7 +142,7 @@ export class ProjectRuntime {
   private trackCost(event: LoomEvent): void {
     const agentId = event.agentId ?? "unknown";
     const entry =
-      this.costsByAgent.get(agentId) ?? { usd: 0, turns: 0, ms: 0 };
+      this.costsByAgent.get(agentId) ?? { usd: 0, turns: 0, ms: 0, tokensIn: 0, tokensOut: 0 };
     if (event.kind === "status" && event.payload.state === "turn_cost") {
       const usd = Number(event.payload.costUsd ?? 0);
       if (usd > 0) {
@@ -149,10 +152,18 @@ export class ProjectRuntime {
       }
     } else if (event.kind === "run_complete") {
       const ms = Number(event.payload.durationMs ?? 0);
+      // Adapters that report token usage (e.g. codex) carry it on run_complete;
+      // cost-only adapters leave these 0. Either way the totals stay honest.
+      const tin = Number(event.payload.inputTokens ?? event.payload.tokensIn ?? 0) || 0;
+      const tout = Number(event.payload.outputTokens ?? event.payload.tokensOut ?? 0) || 0;
       this.costs.turns += 1;
       this.costs.totalMs += ms;
+      this.costs.tokensIn += tin;
+      this.costs.tokensOut += tout;
       entry.turns += 1;
       entry.ms += ms;
+      entry.tokensIn += tin;
+      entry.tokensOut += tout;
       this.costsByAgent.set(agentId, entry);
     }
   }
@@ -165,6 +176,8 @@ export class ProjectRuntime {
       totalUsd: this.costs.totalUsd,
       turns: this.costs.turns,
       totalMs: this.costs.totalMs,
+      tokensIn: this.costs.tokensIn,
+      tokensOut: this.costs.tokensOut,
       byAgent,
     };
   }

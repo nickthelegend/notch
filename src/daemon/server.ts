@@ -783,6 +783,15 @@ export class LoomDaemon {
       }),
     );
 
+    // Observatory metrics: per-agent cost / turns / tokens for the fleet, the
+    // same numbers Notch also ships to SigNoz as gen_ai spans.
+    app.get(
+      "/api/projects/:id/metrics",
+      withRuntime(async (rt, _req, res) => {
+        res.json({ metrics: rt.costSummary() });
+      }),
+    );
+
     app.get(
       "/api/projects/:id/events",
       withRuntime(async (rt, req, res) => {
