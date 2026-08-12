@@ -70,6 +70,9 @@ export class CodexAdapter extends AdapterBase {
   // Token usage from turn.completed, stashed so it also rides run_complete
   // (which fires on close). Cleared each turn.
   private lastUsage: { input: number; output: number } | null = null;
+  // The model codex actually ran, captured from whichever event carries it, so
+  // the turn's gen_ai span reports a real model even with no override. Cleared each turn.
+  private lastModel: string | null = null;
 
   constructor(id: string, projectDir: string, options: Record<string, unknown> = {}) {
     super(id, "codex", projectDir);
@@ -191,12 +194,14 @@ export class CodexAdapter extends AdapterBase {
             kind: "run_complete",
             payload: {
               durationMs: Date.now() - started,
+              ...(this.lastModel ? { model: this.lastModel } : {}),
               ...(this.lastUsage
                 ? { inputTokens: this.lastUsage.input, outputTokens: this.lastUsage.output }
                 : {}),
             },
           });
           this.lastUsage = null;
+          this.lastModel = null;
           resolve();
         });
       });
@@ -208,6 +213,12 @@ export class CodexAdapter extends AdapterBase {
 
   private handleEvent(evt: Record<string, unknown>, setLast: (t: string) => void): void {
     const type = evt.type as string;
+
+    // Codex reports the model on different events across CLI versions (the
+    // thread config, the turn, or the assistant item). Capture it wherever it
+    // shows up so a real gen_ai.request.model lands on the turn span.
+    const m = evt.model ?? (evt.thread as Record<string, unknown> | undefined)?.model;
+    if (typeof m === "string" && m) this.lastModel = m;
 
     if (type === "thread.started") {
       const id = evt.thread_id as string | undefined;
