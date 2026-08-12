@@ -1184,6 +1184,72 @@ try{if(localStorage.getItem("loomTheme")==="light")document.documentElement.clas
   .tevm{color:var(--muted-foreground);flex:none;min-width:44px;text-align:right}
   .tevmsg{flex:1;color:var(--muted-foreground);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .tevt{color:var(--muted-foreground);flex:none}
+  /* health score pill + breakdown */
+  .obhealth{appearance:none;flex:none;margin-left:6px;min-width:34px;text-align:center;font:inherit;
+    font-size:11px;font-weight:700;font-family:var(--font-mono);padding:2px 8px;border-radius:999px;
+    border:1px solid var(--border);background:var(--secondary);color:var(--muted-foreground);cursor:pointer}
+  .obhealth.na{cursor:default;opacity:.6}
+  .obhealth.healthy{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 45%,transparent);background:color-mix(in srgb,var(--ok) 12%,transparent)}
+  .obhealth.degraded{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 45%,transparent);background:color-mix(in srgb,var(--warn) 12%,transparent)}
+  .obhealth.unhealthy{color:var(--err);border-color:color-mix(in srgb,var(--err) 45%,transparent);background:color-mix(in srgb,var(--err) 12%,transparent)}
+  .healthmodal{max-width:420px;width:90vw}
+  .hscore{font-size:46px;font-weight:800;line-height:1;display:flex;align-items:baseline;gap:8px;color:var(--foreground)}
+  .hscore.healthy{color:var(--ok)} .hscore.degraded{color:var(--warn)} .hscore.unhealthy{color:var(--err)}
+  .hscoremax{font-size:16px;font-weight:600;color:var(--muted-foreground)}
+  .hgrade{font-size:11px;font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.05em;padding:2px 8px;border-radius:999px;background:var(--secondary);align-self:center;margin-left:auto}
+  .hgrade.healthy{color:var(--ok)} .hgrade.degraded{color:var(--warn)} .hgrade.unhealthy{color:var(--err)}
+  .hbk{display:flex;align-items:center;gap:10px;margin:7px 0;font-size:12px}
+  .hbkl{flex:none;width:88px;color:var(--muted-foreground)}
+  .hbkbar{flex:1;height:7px;border-radius:4px;background:var(--secondary);overflow:hidden}
+  .hbkfill{display:block;height:100%;background:var(--warn);border-radius:4px}
+  .hbkv{flex:none;width:34px;text-align:right;font-family:var(--font-mono);color:var(--muted-foreground)}
+  /* burn rate + budgets */
+  .obasync{min-height:180px}
+  .burnwrap{display:flex;flex-direction:column}
+  .burnsvg{width:100%;height:150px;display:block;margin:4px 0 8px}
+  .burnstats{display:flex;gap:10px;flex-wrap:wrap}
+  .budgets{display:flex;flex-direction:column;gap:6px}
+  .budrow{display:flex;align-items:center;gap:10px;padding:7px 10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card)}
+  .budrow .obname{flex:none;min-width:110px}
+  .budrow .obsub{flex:none}
+  .budinput{flex:1;max-width:120px;margin-left:auto;background:var(--secondary);border:1px solid var(--border);border-radius:8px;
+    color:var(--foreground);font:inherit;font-size:13px;padding:5px 9px}
+  .budsave{flex:none;appearance:none;border:1px solid var(--border);background:var(--secondary);color:var(--foreground);
+    font:inherit;font-size:12px;font-weight:600;padding:5px 12px;border-radius:8px;cursor:pointer}
+  .budsave:hover{border-color:var(--primary);color:var(--primary)}
+  /* span replay */
+  .replaywrap{display:flex;flex-direction:column}
+  .rpscrubwrap{margin:4px 0 12px}
+  .rpscrub{width:100%;accent-color:var(--primary)}
+  .rpscrubinfo{font-size:11px;color:var(--muted-foreground);font-family:var(--font-mono);margin-top:4px}
+  .rpframe{border:1px solid var(--border);border-radius:var(--radius);background:var(--card);padding:14px 16px}
+  .rphead{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+  .rpagent{font-weight:700;font-size:14px}
+  .rpade{font-family:var(--font-mono);font-size:11px;color:var(--muted-foreground)}
+  .rpstatus{margin-left:auto;font-family:var(--font-mono);font-size:10px;font-weight:700;letter-spacing:.05em;padding:2px 8px;border-radius:999px}
+  .rpstatus.ok{color:var(--ok);background:color-mix(in srgb,var(--ok) 12%,transparent)}
+  .rpstatus.err{color:var(--err);background:color-mix(in srgb,var(--err) 14%,transparent)}
+  .rpmsg{font-size:13.5px;line-height:1.5;color:var(--foreground);margin-bottom:10px}
+  .rpmetrics{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+  .rppill{font-family:var(--font-mono);font-size:11px;color:var(--foreground);background:var(--secondary);border-radius:999px;padding:3px 10px}
+  .rppl{color:var(--muted-foreground)}
+  .rpactions{display:flex;gap:8px;flex-wrap:wrap}
+  .rpwf,.rpsignoz{appearance:none;text-decoration:none;font:inherit;font-size:12px;font-weight:600;padding:6px 12px;border-radius:8px;cursor:pointer;border:1px solid var(--border)}
+  .rpwf{background:color-mix(in srgb,var(--primary) 16%,transparent);color:var(--primary);border-color:color-mix(in srgb,var(--primary) 40%,transparent)}
+  .rpsignoz{background:var(--secondary);color:var(--muted-foreground)}
+  .rpsignoz:hover{color:var(--primary);border-color:var(--primary)}
+  .rpsignoz.wide{display:block;text-align:center;margin-top:12px}
+  /* trace waterfall */
+  .wfmodal{max-width:640px;width:94vw}
+  .wftotal{margin-bottom:8px}
+  .wfrows{display:flex;flex-direction:column;gap:3px;max-height:340px;overflow:auto}
+  .wfrow{display:flex;align-items:center;gap:8px}
+  .wfname{flex:none;width:150px;font-family:var(--font-mono);font-size:11px;color:var(--thread-ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .wfname.err{color:var(--err)}
+  .wftrack{flex:1;position:relative;height:16px;background:var(--secondary);border-radius:4px}
+  .wfbar{position:absolute;top:2px;height:12px;min-width:2px;border-radius:3px;background:var(--primary)}
+  .wfbar.err{background:var(--err)}
+  .wfms{flex:none;width:56px;text-align:right;font-family:var(--font-mono);font-size:10.5px;color:var(--muted-foreground)}
 
   /* ── Board (work flowing from working → needs you → review → merge) ── */
   .boardview{display:flex;flex-direction:column;gap:14px;height:100%}
@@ -2398,8 +2464,10 @@ ${BRAND_SPRITE}
       if (!state.obView) state.obView = "canvas";
       Promise.all([
         api("/api/projects/" + p.id + "/metrics").catch(function(){ return {}; }),
-        api("/api/projects/" + p.id + "/events?limit=500").catch(function(){ return {}; })
+        api("/api/projects/" + p.id + "/events?limit=500").catch(function(){ return {}; }),
+        api("/api/projects/" + p.id + "/insights/health").catch(function(){ return {}; })
       ]).then(function(res){
+        state.obHealth = res[2] || {};
         renderObservatory(el, p, (res[0] && res[0].metrics) || {}, (res[1] && res[1].events) || []);
       });
     }
@@ -2419,14 +2487,16 @@ ${BRAND_SPRITE}
         card("Spend", money(totalUsd), "across all agents", true) +
         card("Turns", String(turns), "completed") +
         card("Tokens", tokfmt(tin + tout), tokfmt(tin) + " in \\u00b7 " + tokfmt(tout) + " out");
-      var VIEWS = [["canvas", "Canvas"], ["graph", "Graph"], ["timeline", "Timeline"], ["metrics", "Metrics"]];
+      var VIEWS = [["canvas", "Canvas"], ["graph", "Graph"], ["timeline", "Timeline"], ["metrics", "Metrics"], ["burn", "Burn"], ["replay", "Replay"]];
       var tabs = VIEWS.map(function(v){
         return '<button class="obtab' + (state.obView === v[0] ? " on" : "") + '" data-obv="' + v[0] + '">' + esc(v[1]) + "</button>";
       }).join("");
       var body;
       if (state.obView === "graph") body = observatoryGraph(agents, p.holder, events, byAgent);
       else if (state.obView === "timeline") body = observatoryTimeline(events);
-      else if (state.obView === "metrics") body = observatoryMetricsDetail(p, events, byAgent);
+      else if (state.obView === "metrics") body = observatoryMetricsDetail(p, events, byAgent, state.obHealth || {});
+      else if (state.obView === "burn") body = '<div id="obburn" class="obasync">' + LOADER + "</div>";
+      else if (state.obView === "replay") body = '<div id="obreplay" class="obasync">' + LOADER + "</div>";
       else body = '<div class="obcanvaswrap">' + observatoryCanvas(agents, p.holder, byAgent) + "</div>";
       el.innerHTML =
         '<div class="obhead"><div class="obtitle">' + ICONS.telescope +
@@ -2441,7 +2511,13 @@ ${BRAND_SPRITE}
       Array.prototype.forEach.call(el.querySelectorAll(".obtriage"), function(b){
         b.onclick = function(ev){ ev.stopPropagation(); openTriage(p, b.getAttribute("data-triage")); };
       });
+      Array.prototype.forEach.call(el.querySelectorAll(".obhealth"), function(b){
+        if (!b.getAttribute("data-health")) return;
+        b.onclick = function(ev){ ev.stopPropagation(); openHealth(b.getAttribute("data-health")); };
+      });
       if (state.obView === "canvas" || state.obView === "graph") wireObservatoryDrag(el);
+      if (state.obView === "burn") observatoryBurn(p);
+      if (state.obView === "replay") observatoryReplay(p);
     }
     // "Why did I fail?" — pull the agent's own traces and root-cause them.
     function openTriage(p, agent){
@@ -2481,6 +2557,139 @@ ${BRAND_SPRITE}
           if (body) body.innerHTML = '<div class="obsub">Triage failed \\u2014 the daemon or SigNoz is unreachable.</div>';
         });
     }
+    // Agent Health Score breakdown — the 4 penalty buckets behind the pill.
+    function openHealth(agent){
+      if (document.querySelector(".scrim")) return;
+      var h = ((state.obHealth || {}).byAgent || {})[agent] || {}, b = h.buckets || {};
+      function bucket(l, v, max){
+        var pct = Math.max(0, Math.min(100, Math.round((v / max) * 100)));
+        return '<div class="hbk"><span class="hbkl">' + l + '</span><span class="hbkbar"><span class="hbkfill" style="width:' + pct + '%"></span></span><span class="hbkv">' + (v ? "\\u2212" + v : "0") + "</span></div>";
+      }
+      var scrim = document.createElement("div"); scrim.className = "scrim";
+      scrim.innerHTML = '<div class="modal healthmodal"><div class="modalhead">Health \\u00b7 ' + esc(agent) +
+        '<button class="iconbtn" id="hx" aria-label="close">' + ICONS.x + "</button></div>" +
+        '<div class="modalbody"><div class="hscore ' + (h.grade || "") + '">' + (h.score != null ? h.score : "\\u2014") +
+        '<span class="hscoremax">/100</span><span class="hgrade ' + (h.grade || "") + '">' + esc(h.grade || "") + "</span></div>" +
+        '<div class="obsub" style="margin:2px 0 12px">' + (h.turns || 0) + " turns \\u00b7 " + (h.errorCount || 0) + " error(s) \\u00b7 penalties subtracted from 100</div>" +
+        bucket("Error rate", b.errorRate || 0, 40) + bucket("Latency", b.latency || 0, 25) +
+        bucket("Token bloat", b.tokenBloat || 0, 20) + bucket("Recent error", b.recency || 0, 15) +
+        "</div></div>";
+      document.body.appendChild(scrim);
+      function close(){ scrim.remove(); document.removeEventListener("keydown", onKey); }
+      function onKey(e){ if (e.key === "Escape") close(); }
+      document.addEventListener("keydown", onKey);
+      scrim.addEventListener("click", function(ev){ if (ev.target === scrim) close(); });
+      document.getElementById("hx").onclick = close;
+    }
+    function signozTraceUrl(id){ return "http://localhost:8080/trace/" + encodeURIComponent(id || ""); }
+    // BURN: per-agent cost over time (real ClickHouse), linear projection, budgets.
+    function observatoryBurn(p){
+      var host = document.getElementById("obburn"); if (!host) return;
+      api("/api/projects/" + p.id + "/insights/burn?hours=24&buckets=12").then(function(r){
+        host.innerHTML = burnView(p, r.burn || { buckets: [], totalUsd: 0, ratePerHour: 0, projected24h: 0 }, r.budgets || {});
+        wireBurnBudgets(p, host);
+      }).catch(function(){ host.innerHTML = '<div class="obnote">Burn data unavailable \\u2014 SigNoz/ClickHouse unreachable.</div>'; });
+    }
+    function burnView(p, burn, budgets){
+      var bk = burn.buckets || [], n = bk.length, W = 680, H = 150, PADL = 6, PADR = 6, PADT = 12, PADB = 8;
+      var max = 0.0000001; bk.forEach(function(b){ if (b.total > max) max = b.total; });
+      var pts = bk.map(function(b, i){
+        var x = PADL + (n <= 1 ? (W - PADL - PADR) / 2 : i * ((W - PADL - PADR) / (n - 1)));
+        var y = (H - PADB) - (b.total / max) * (H - PADT - PADB);
+        return [x, y];
+      });
+      var line = pts.map(function(pt, i){ return (i ? "L" : "M") + pt[0].toFixed(1) + " " + pt[1].toFixed(1); }).join(" ");
+      var area = pts.length > 1 ? line + " L " + pts[pts.length - 1][0].toFixed(1) + " " + (H - PADB) + " L " + pts[0][0].toFixed(1) + " " + (H - PADB) + " Z" : "";
+      var dots = pts.map(function(pt){ return '<circle cx="' + pt[0].toFixed(1) + '" cy="' + pt[1].toFixed(1) + '" r="2.5" fill="var(--primary)"/>'; }).join("");
+      var svg = '<svg viewBox="0 0 ' + W + " " + H + '" class="obsvg burnsvg" preserveAspectRatio="none">' +
+        '<defs><linearGradient id="burnfill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--primary)" stop-opacity="0.35"/><stop offset="100%" stop-color="var(--primary)" stop-opacity="0"/></linearGradient></defs>' +
+        (area ? '<path d="' + area + '" fill="url(#burnfill)"/>' : "") +
+        (line ? '<path d="' + line + '" fill="none" stroke="var(--primary)" stroke-width="2"/>' : "") + dots + "</svg>";
+      var empty = burn.totalUsd > 0 ? "" : '<div class="obnote" style="margin-top:0">No spend yet in this window \\u2014 free-model turns cost $0. The curve fills in as paid turns run.</div>';
+      var summary = '<div class="burnstats">' +
+        '<div class="obminicard"><div class="obcl">Spent (24h)</div><div class="obcv sm">' + money(burn.totalUsd || 0) + "</div></div>" +
+        '<div class="obminicard"><div class="obcl">Rate</div><div class="obcv sm">' + money(burn.ratePerHour || 0) + "/h</div></div>" +
+        '<div class="obminicard"><div class="obcl">Projected 24h</div><div class="obcv sm">' + money(burn.projected24h || 0) + "</div></div></div>";
+      var budrows = (p.agents || []).map(function(a){
+        var v = budgets[a.id];
+        return '<div class="budrow"><span class="obname">' + esc(a.id) + '</span><span class="obsub">$/day</span>' +
+          '<input class="budinput" type="number" min="0" step="0.5" data-agent="' + esc(a.id) + '" value="' + (v != null ? v : "") + '" placeholder="none"/>' +
+          '<button class="budsave" data-agent="' + esc(a.id) + '">Save</button></div>';
+      }).join("");
+      return '<div class="burnwrap"><div class="obmlabel">Burn rate \\u00b7 per-agent cost, last 24h (from SigNoz)</div>' + svg + summary + empty +
+        '<div class="obmlabel" style="margin-top:16px">Per-agent budgets</div><div class="budgets">' + budrows + "</div></div>";
+    }
+    function wireBurnBudgets(p, host){
+      Array.prototype.forEach.call(host.querySelectorAll(".budsave"), function(btn){
+        btn.onclick = function(){
+          var agent = btn.getAttribute("data-agent"), inp = host.querySelector('.budinput[data-agent="' + agent + '"]');
+          var v = inp ? Number(inp.value) : 0;
+          btn.textContent = "\\u2026";
+          api("/api/projects/" + p.id + "/budgets/" + encodeURIComponent(agent), { method: "PUT", body: JSON.stringify({ usdPerDay: v }) })
+            .then(function(){ btn.textContent = "Saved"; setTimeout(function(){ btn.textContent = "Save"; }, 1200); })
+            .catch(function(){ btn.textContent = "!"; });
+        };
+      });
+    }
+    // REPLAY: scrub the fleet's turns frame by frame — each frame is a real span.
+    function observatoryReplay(p){
+      var host = document.getElementById("obreplay"); if (!host) return;
+      api("/api/projects/" + p.id + "/insights/spans?limit=100").then(function(r){
+        var turns = (r.spans || []).filter(function(s){ return s.name === "gen_ai.agent.turn"; });
+        if (!turns.length){ host.innerHTML = '<div class="obnote">No turn spans yet. Run a turn and replay it here.</div>'; return; }
+        state.obReplayTurns = turns; if (state.obReplayIx == null || state.obReplayIx >= turns.length) state.obReplayIx = 0;
+        renderReplay(p, host);
+      }).catch(function(){ host.innerHTML = '<div class="obnote">Span replay unavailable \\u2014 SigNoz/ClickHouse unreachable.</div>'; });
+    }
+    function renderReplay(p, host){
+      var turns = state.obReplayTurns || [], ix = state.obReplayIx || 0, t = turns[ix] || {};
+      var d = new Date(t.ts || Date.now()), hh = ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2) + ":" + ("0" + d.getSeconds()).slice(-2);
+      function pill(l, v){ return '<span class="rppill"><span class="rppl">' + l + "</span>" + v + "</span>"; }
+      var frame = '<div class="rpframe">' +
+        '<div class="rphead"><span class="rpagent">' + esc(t.agent || "agent") + "</span>" +
+          '<span class="rpade">' + esc(t.ade || "") + (t.model ? " \\u00b7 " + esc(t.model) : "") + "</span>" +
+          '<span class="rpstatus ' + (t.code === 2 ? "err" : "ok") + '">' + (t.code === 2 ? "ERROR" : "OK") + "</span></div>" +
+        (t.msg ? '<div class="rpmsg">' + esc(t.msg) + "</div>" : "") +
+        '<div class="rpmetrics">' + pill("duration ", (t.ms || 0) + "ms") + pill("in ", tokfmt(t.tin || 0)) + pill("out ", tokfmt(t.tout || 0)) + pill("cost ", money(t.cost || 0)) + "</div>" +
+        '<div class="rpactions"><button class="rpwf" data-trace="' + esc(t.traceId || "") + '">Trace waterfall</button>' +
+          (t.traceId ? '<a class="rpsignoz" href="' + signozTraceUrl(t.traceId) + '" target="_blank" rel="noreferrer">Open in SigNoz \\u2197</a>' : "") + "</div></div>";
+      var scrub = '<div class="rpscrubwrap"><input class="rpscrub" type="range" min="0" max="' + (turns.length - 1) + '" value="' + ix + '"/>' +
+        '<div class="rpscrubinfo">turn ' + (ix + 1) + " / " + turns.length + " \\u00b7 " + hh + "</div></div>";
+      host.innerHTML = '<div class="replaywrap"><div class="obmlabel">Span replay \\u00b7 scrub the fleet\\u2019s turns (from SigNoz)</div>' + scrub + frame + "</div>";
+      var range = host.querySelector(".rpscrub");
+      if (range) range.oninput = function(){ state.obReplayIx = Number(range.value); renderReplay(p, host); };
+      var wf = host.querySelector(".rpwf");
+      if (wf) wf.onclick = function(){ openWaterfall(p, wf.getAttribute("data-trace")); };
+    }
+    // WATERFALL: one trace's spans as time-positioned bars + a SigNoz deep link.
+    function openWaterfall(p, traceId){
+      if (!traceId || document.querySelector(".scrim")) return;
+      var scrim = document.createElement("div"); scrim.className = "scrim";
+      scrim.innerHTML = '<div class="modal wfmodal"><div class="modalhead">Trace waterfall <span class="obsub">' + esc(traceId.slice(0, 16)) +
+        '\\u2026</span><button class="iconbtn" id="wfx" aria-label="close">' + ICONS.x + "</button></div>" +
+        '<div class="modalbody"><div class="loader"><i></i><i></i><i></i><i></i></div></div></div>';
+      document.body.appendChild(scrim);
+      function close(){ scrim.remove(); document.removeEventListener("keydown", onKey); }
+      function onKey(e){ if (e.key === "Escape") close(); }
+      document.addEventListener("keydown", onKey);
+      scrim.addEventListener("click", function(ev){ if (ev.target === scrim) close(); });
+      document.getElementById("wfx").onclick = close;
+      api("/api/projects/" + p.id + "/insights/trace/" + encodeURIComponent(traceId)).then(function(r){
+        var spans = r.spans || [], body = scrim.querySelector(".modalbody");
+        if (!spans.length){ body.innerHTML = '<div class="obsub">No spans in this trace yet.</div>' + signozLink(traceId); return; }
+        var t0 = Math.min.apply(null, spans.map(function(s){ return s.ts; }));
+        var t1 = Math.max.apply(null, spans.map(function(s){ return s.ts + (s.ms || 0); }));
+        var dur = Math.max(1, t1 - t0);
+        var rows = spans.map(function(s){
+          var left = ((s.ts - t0) / dur) * 100, w = Math.max(1.5, ((s.ms || 0) / dur) * 100);
+          return '<div class="wfrow"><span class="wfname' + (s.code === 2 ? " err" : "") + '">' + esc(s.name) + "</span>" +
+            '<span class="wftrack"><span class="wfbar' + (s.code === 2 ? " err" : "") + '" style="left:' + left.toFixed(1) + "%;width:" + w.toFixed(1) + '%"></span></span>' +
+            '<span class="wfms">' + (s.ms || 0) + "ms</span></div>";
+        }).join("");
+        body.innerHTML = '<div class="wftotal obsub">' + spans.length + ' spans \\u00b7 ' + dur + 'ms total</div><div class="wfrows">' + rows + '</div>' + signozLink(traceId);
+      }).catch(function(){ var body = scrim.querySelector(".modalbody"); if (body) body.innerHTML = '<div class="obsub">Trace unavailable \\u2014 SigNoz unreachable.</div>' + signozLink(traceId); });
+    }
+    function signozLink(traceId){ return '<a class="rpsignoz wide" href="' + signozTraceUrl(traceId) + '" target="_blank" rel="noreferrer">View full trace in SigNoz \\u2197</a>'; }
     // GRAPH: the baton/handoff DAG — agents in columns by handoff depth, edges
     // are the passes of the baton. Draggable, like the canvas.
     function observatoryGraph(agents, holder, events, byAgent){
@@ -2561,9 +2770,16 @@ ${BRAND_SPRITE}
       }).join("");
       return '<ol class="obtimeline">' + rows + "</ol>";
     }
-    // METRICS: the baton path + counts + per-agent fleet breakdown.
-    function observatoryMetricsDetail(p, events, byAgent){
-      var agents = (p.agents || []);
+    // A 0-100 health pill, coloured by grade. Clickable → penalty breakdown.
+    function healthBadge(h, agent){
+      if (!h || h.score == null) return '<span class="obhealth na" title="No health data yet">\\u2014</span>';
+      var g = h.grade || "healthy";
+      return '<button class="obhealth ' + g + '" data-health="' + esc(agent) + '" title="Agent Health ' + h.score +
+        '/100 (' + g + ') \\u2014 click for the breakdown">' + h.score + "</button>";
+    }
+    // METRICS: the baton path + counts + per-agent fleet breakdown + health.
+    function observatoryMetricsDetail(p, events, byAgent, health){
+      var agents = (p.agents || []), hb = (health && health.byAgent) || {};
       var handoffs = (events || []).filter(function(e){ return e.kind === "handoff"; }).length;
       var routes = (events || []).filter(function(e){ return e.kind === "route_completed" || e.kind === "route_failed"; }).length;
       var chain = [];
@@ -2577,6 +2793,7 @@ ${BRAND_SPRITE}
         var c = byAgent[a.id] || {}, baton = a.id === p.holder, cls = a.busy ? "busy" : baton ? "baton" : "idle";
         return '<div class="obrow"><span class="obdot ' + cls + '"></span><span class="obname">' + esc(a.id) + "</span>" +
           '<span class="obkind">' + esc(a.kind || "") + (a.role ? " \\u00b7 " + esc(a.role) : "") + "</span>" +
+          healthBadge(hb[a.id], a.id) +
           '<span class="obspend">' + money(c.usd || 0) + '</span><span class="obturns">' + (c.turns || 0) + " turns</span>" +
           '<span class="obtok">' + tokfmt((c.tokensIn || 0) + (c.tokensOut || 0)) + " tok</span>" +
           '<button class="obtriage" data-triage="' + esc(a.id) + '" title="Why did I fail? Root-cause this agent from its own SigNoz traces">\\u26a0 Triage</button></div>';
