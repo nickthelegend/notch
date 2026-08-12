@@ -10,9 +10,44 @@
  */
 
 import { spawn } from "node:child_process";
+import os from "node:os";
 import type { LoomEvent } from "../types.js";
 
 const CH_URL = process.env.NOTCH_CLICKHOUSE_URL || "http://localhost:8123";
+
+/**
+ * The `claude` CLI in print mode emits either JSON (`--output-format json`,
+ * whose `.result` is the text) or, on older CLIs, the raw text itself. Pull the
+ * completion out of whichever we got; return null for an empty/again-parseable
+ * result so triage falls back to the deterministic root cause.
+ */
+export function parseCliOutput(raw: string): string | null {
+  const text = (raw || "").trim();
+  if (!text) return null;
+  try {
+    const j = JSON.parse(text) as { result?: unknown; is_error?: boolean };
+    if (j.is_error) return null;
+    const r = typeof j.result === "string" ? j.result.trim() : "";
+    return r || null;
+  } catch {
+    return text; // not JSON — treat as plain text
+  }
+}
+
+/**
+ * A copy of the environment with Claude Code's nesting markers removed. When the
+ * daemon is launched from inside a Claude Code session (or CI), the child
+ * `claude` would otherwise inherit a child-session OAuth token that returns
+ * empty completions. Stripping these is a no-op in a normal terminal.
+ */
+function cliEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (k === "CLAUDECODE" || /^CLAUDE_CODE/i.test(k)) continue;
+    env[k] = v;
+  }
+  return env;
+}
 
 export type TriageSpan = {
   ts: number;
@@ -179,21 +214,31 @@ async function llmPhrase(agent: string, spans: TriageSpan[]): Promise<string | n
   return await claudeCli(prompt);
 }
 
-/** Best-effort: pipe the prompt through the signed-in `claude` CLI (print mode). */
+/**
+ * Best-effort: run the prompt through the signed-in `claude` CLI in print mode.
+ * We ask for JSON so we can read `.result` reliably, run in a neutral cwd (no
+ * project trust dialog, no giant CLAUDE.md pulled into context), and strip the
+ * Claude Code nesting vars so a daemon started from inside a session still gets
+ * a real completion. Falls back to null (→ heuristic) on timeout/empty.
+ */
 function claudeCli(prompt: string): Promise<string | null> {
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn("claude", ["-p", prompt], { stdio: ["ignore", "pipe", "ignore"] });
+      child = spawn("claude", ["-p", prompt, "--output-format", "json"], {
+        stdio: ["ignore", "pipe", "ignore"],
+        cwd: os.tmpdir(),
+        env: cliEnv(),
+      });
     } catch {
       resolve(null);
       return;
     }
     let out = "";
-    const kill = setTimeout(() => { try { child.kill(); } catch { /* ignore */ } resolve(null); }, 25_000);
+    const kill = setTimeout(() => { try { child.kill(); } catch { /* ignore */ } resolve(null); }, 30_000);
     child.stdout?.on("data", (d: Buffer) => (out += d.toString()));
     child.on("error", () => { clearTimeout(kill); resolve(null); });
-    child.on("close", () => { clearTimeout(kill); resolve(out.trim() || null); });
+    child.on("close", () => { clearTimeout(kill); resolve(parseCliOutput(out)); });
   });
 }
 

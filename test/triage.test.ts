@@ -6,7 +6,7 @@
 
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { LoomEvent } from "../src/types.js";
-import { triageAgent } from "../src/observability/triage.js";
+import { parseCliOutput, triageAgent } from "../src/observability/triage.js";
 
 beforeAll(() => {
   process.env.NOTCH_TRIAGE_NO_LLM = "1"; // deterministic: heuristic only
@@ -64,5 +64,24 @@ describe("agent self-triage", () => {
     const r = await triageAgent("ghost");
     expect(r.source).toBe("no-data");
     expect(r.from).toBe("none");
+  });
+});
+
+describe("parseCliOutput — reading the claude CLI's print-mode reply", () => {
+  it("pulls .result out of --output-format json", () => {
+    const raw = JSON.stringify({ type: "result", is_error: false, result: "opencode crashed on turn 5; restart it." });
+    expect(parseCliOutput(raw)).toBe("opencode crashed on turn 5; restart it.");
+  });
+  it("returns null for an empty result (the child-session case)", () => {
+    expect(parseCliOutput(JSON.stringify({ is_error: false, result: "" }))).toBeNull();
+  });
+  it("returns null when the CLI reports an error", () => {
+    expect(parseCliOutput(JSON.stringify({ is_error: true, result: "Not logged in" }))).toBeNull();
+  });
+  it("falls back to raw text for a non-JSON (older CLI) reply", () => {
+    expect(parseCliOutput("  the agent timed out; raise the deadline.  ")).toBe("the agent timed out; raise the deadline.");
+  });
+  it("returns null for blank output", () => {
+    expect(parseCliOutput("   ")).toBeNull();
   });
 });
