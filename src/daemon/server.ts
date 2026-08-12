@@ -21,6 +21,7 @@ import type { MemoryKind, MemoryPatch } from "../core/brain.js";
 import { retrieve } from "../core/brain-index.js";
 import { RouteActiveError } from "../core/routes.js";
 import { recordAgentEvent } from "../observability/index.js";
+import { triageAgent } from "../observability/triage.js";
 import { ADES, buildDefaultRoutes, defaultAgentConfigs, detectAdes } from "../core/ades.js";
 import { logbook, type LogLevel } from "../core/logbook.js";
 import { searchChats, searchCode } from "../core/search.js";
@@ -790,6 +791,17 @@ export class LoomDaemon {
       "/api/projects/:id/metrics",
       withRuntime(async (rt, _req, res) => {
         res.json({ metrics: rt.costSummary() });
+      }),
+    );
+
+    // Agent self-triage: read one agent's own traces back out of SigNoz (falling
+    // back to the local event log) and root-cause its last failure.
+    app.get(
+      "/api/projects/:id/triage/:agentId",
+      withRuntime(async (rt, req, res) => {
+        const agent = String(req.params.agentId ?? "");
+        const events = rt.log.list({ limit: 300 });
+        res.json({ triage: await triageAgent(agent, events) });
       }),
     );
 

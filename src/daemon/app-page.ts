@@ -1154,6 +1154,34 @@ try{if(localStorage.getItem("loomTheme")==="light")document.documentElement.clas
   .obmgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;margin-bottom:16px}
   .obminicard{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:10px 13px}
   .obcv.sm{font-size:19px}
+  /* agent self-triage */
+  .obtriage{appearance:none;margin-left:12px;flex:none;background:none;border:1px solid var(--border);
+    border-radius:999px;color:var(--muted-foreground);font:inherit;font-size:11px;font-weight:500;
+    padding:3px 10px;cursor:pointer;transition:background .15s,color .15s,border-color .15s}
+  .obtriage:hover{color:var(--warn);border-color:color-mix(in srgb, var(--warn) 50%, transparent);
+    background:color-mix(in srgb, var(--warn) 12%, transparent)}
+  .triagemodal{max-width:580px;width:92vw}
+  .tmeta{display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap}
+  .tbadge{font-size:10.5px;font-family:var(--font-mono);letter-spacing:.03em;text-transform:uppercase;
+    padding:2px 8px;border-radius:999px;background:var(--secondary);color:var(--muted-foreground)}
+  .tbadge.on{background:color-mix(in srgb, var(--primary) 22%, transparent);color:var(--thread-ink)}
+  .tlabel{font-size:11px;color:var(--muted-foreground);font-family:var(--font-mono);letter-spacing:.04em;
+    text-transform:uppercase;margin:14px 0 6px}
+  .trootcause{font-size:14px;line-height:1.55;color:var(--foreground);
+    background:color-mix(in srgb, var(--warn) 8%, var(--card));
+    border:1px solid color-mix(in srgb, var(--warn) 30%, transparent);border-radius:var(--radius);padding:12px 14px}
+  .tfix{font-size:13.5px;line-height:1.5;color:var(--foreground);
+    background:color-mix(in srgb, var(--ok) 9%, var(--card));
+    border:1px solid color-mix(in srgb, var(--ok) 30%, transparent);border-radius:var(--radius);padding:11px 14px}
+  .tevidence{display:flex;flex-direction:column;gap:1px;max-height:210px;overflow:auto;
+    border:1px solid var(--border);border-radius:var(--radius)}
+  .tev{display:flex;align-items:baseline;gap:8px;padding:5px 10px;font-family:var(--font-mono);font-size:11px}
+  .tev.err{background:color-mix(in srgb, var(--err) 10%, transparent)}
+  .tev.err .tevn{color:var(--err)}
+  .tevn{color:var(--thread-ink);flex:none;min-width:132px}
+  .tevm{color:var(--muted-foreground);flex:none;min-width:44px;text-align:right}
+  .tevmsg{flex:1;color:var(--muted-foreground);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tevt{color:var(--muted-foreground);flex:none}
 
   /* ── Board (work flowing from working → needs you → review → merge) ── */
   .boardview{display:flex;flex-direction:column;gap:14px;height:100%}
@@ -2407,7 +2435,48 @@ ${BRAND_SPRITE}
       Array.prototype.forEach.call(el.querySelectorAll(".obtab"), function(t){
         t.onclick = function(){ state.obView = t.getAttribute("data-obv"); renderObservatory(el, p, m, events); };
       });
+      Array.prototype.forEach.call(el.querySelectorAll(".obtriage"), function(b){
+        b.onclick = function(ev){ ev.stopPropagation(); openTriage(p, b.getAttribute("data-triage")); };
+      });
       if (state.obView === "canvas" || state.obView === "graph") wireObservatoryDrag(el);
+    }
+    // "Why did I fail?" — pull the agent's own traces and root-cause them.
+    function openTriage(p, agent){
+      if (document.querySelector(".scrim")) return;
+      var scrim = document.createElement("div"); scrim.className = "scrim";
+      scrim.innerHTML = '<div class="modal triagemodal"><div class="modalhead">Triage \\u00b7 ' + esc(agent) +
+        '<button class="iconbtn" id="tx" aria-label="close">' + ICONS.x + "</button></div>" +
+        '<div class="modalbody"><div class="loader"><i></i><i></i><i></i><i></i></div>' +
+        '<div class="obsub" style="text-align:center;margin-top:10px">Reading ' + esc(agent) + "\\u2019s traces\\u2026</div></div></div>";
+      document.body.appendChild(scrim);
+      function close(){ scrim.remove(); document.removeEventListener("keydown", onKey); }
+      function onKey(e){ if (e.key === "Escape") close(); }
+      document.addEventListener("keydown", onKey);
+      scrim.addEventListener("click", function(ev){ if (ev.target === scrim) close(); });
+      document.getElementById("tx").onclick = close;
+      api("/api/projects/" + p.id + "/triage/" + encodeURIComponent(agent))
+        .then(function(r){
+          var t = (r && r.triage) || {};
+          var src = t.source === "llm" ? '<span class="tbadge on">Claude</span>' : t.source === "heuristic" ? '<span class="tbadge">rule-based</span>' : '<span class="tbadge">no data</span>';
+          var frm = t.from === "signoz" ? '<span class="tbadge">from SigNoz</span>' : t.from === "local-log" ? '<span class="tbadge">from event log</span>' : "";
+          var evs = (t.evidence || []).map(function(s){
+            var d = new Date(s.ts), hh = ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2);
+            return '<div class="tev' + (s.code === 2 ? " err" : "") + '"><span class="tevn">' + esc(s.name) + "</span>" +
+              '<span class="tevm">' + (s.ms ? s.ms + "ms" : "") + "</span>" +
+              '<span class="tevmsg">' + esc((s.msg || "").slice(0, 90)) + "</span>" +
+              '<span class="tevt">' + hh + "</span></div>";
+          }).join("");
+          var body = document.querySelector(".triagemodal .modalbody");
+          if (body) body.innerHTML =
+            '<div class="tmeta">' + src + frm + '<span class="obsub">' + (t.spanCount || 0) + " spans \\u00b7 " + (t.errorCount || 0) + " error(s)</span></div>" +
+            '<div class="tlabel">Root cause</div><div class="trootcause">' + esc(t.rootCause || "\\u2014") + "</div>" +
+            '<div class="tlabel">Suggested fix</div><div class="tfix">' + esc(t.suggestedFix || "\\u2014") + "</div>" +
+            (evs ? '<div class="tlabel">Evidence <span class="obsub">(its own spans)</span></div><div class="tevidence">' + evs + "</div>" : "");
+        })
+        .catch(function(){
+          var body = document.querySelector(".triagemodal .modalbody");
+          if (body) body.innerHTML = '<div class="obsub">Triage failed \\u2014 the daemon or SigNoz is unreachable.</div>';
+        });
     }
     // GRAPH: the baton/handoff DAG — agents in columns by handoff depth, edges
     // are the passes of the baton. Draggable, like the canvas.
@@ -2504,7 +2573,8 @@ ${BRAND_SPRITE}
         return '<div class="obrow"><span class="obdot ' + cls + '"></span><span class="obname">' + esc(a.id) + "</span>" +
           '<span class="obkind">' + esc(a.kind || "") + (a.role ? " \\u00b7 " + esc(a.role) : "") + "</span>" +
           '<span class="obspend">' + money(c.usd || 0) + '</span><span class="obturns">' + (c.turns || 0) + " turns</span>" +
-          '<span class="obtok">' + tokfmt((c.tokensIn || 0) + (c.tokensOut || 0)) + " tok</span></div>";
+          '<span class="obtok">' + tokfmt((c.tokensIn || 0) + (c.tokensOut || 0)) + " tok</span>" +
+          '<button class="obtriage" data-triage="' + esc(a.id) + '" title="Why did I fail? Root-cause this agent from its own SigNoz traces">\\u26a0 Triage</button></div>';
       }).join("") || '<div class="obsub" style="padding:10px 2px">No agents.</div>';
       function mini(l, v){ return '<div class="obminicard"><div class="obcl">' + l + '</div><div class="obcv sm">' + v + "</div></div>"; }
       return '<div class="obmsec"><div class="obmlabel">Baton path</div><div class="obchain">' + chainHtml + "</div></div>" +
