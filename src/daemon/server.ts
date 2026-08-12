@@ -341,6 +341,13 @@ export class LoomDaemon {
 
     // Everything else requires a bearer token.
     app.use((req: Request, res: Response, next: NextFunction) => {
+      // Inbound webhooks (SigNoz alerts) can't carry the admin bearer token, so
+      // they authenticate with their own NOTCH_WEBHOOK_SECRET instead. Set that
+      // secret whenever the daemon binds past localhost.
+      if (req.path.startsWith("/api/webhooks/")) {
+        next();
+        return;
+      }
       const token = bearerToken(req.headers.authorization);
       if (!this.auth.isAuthorized(token)) {
         res.status(401).json({ error: "unauthorized" });
@@ -804,6 +811,54 @@ export class LoomDaemon {
         res.json({ triage: await triageAgent(agent, events) });
       }),
     );
+
+    // Self-healing: a SigNoz alert (cost budget breached, error rate too high)
+    // posts its firing payload here, and Notch forces the baton off the failing
+    // agent onto a fallback — closing the loop from metric to intervention.
+    app.post("/api/webhooks/signoz", (req, res) => {
+      void (async () => {
+        const secret = process.env.NOTCH_WEBHOOK_SECRET;
+        if (secret && req.query.token !== secret && req.headers["x-notch-secret"] !== secret) {
+          return void res.status(401).json({ error: "unauthorized" });
+        }
+        const body = (req.body ?? {}) as Record<string, unknown>;
+        const rawAlerts = Array.isArray(body.alerts) ? (body.alerts as Record<string, unknown>[]) : [body];
+        const q = req.query as Record<string, string>;
+        const common = (body.commonLabels ?? {}) as Record<string, string>;
+        const actions: Array<Record<string, unknown>> = [];
+        for (const raw of rawAlerts) {
+          const al = (raw ?? {}) as Record<string, unknown>;
+          const labels = { ...common, ...((al.labels ?? {}) as Record<string, string>) };
+          const status = String(al.status ?? body.status ?? "firing");
+          if (status !== "firing") { actions.push({ skipped: "not firing" }); continue; }
+          const projectRef = labels["notch.project"] ?? labels.notch_project ?? q.project;
+          const agent = labels["gen_ai.agent.id"] ?? labels.gen_ai_agent_id ?? labels.agent ?? q.agent;
+          const alertName = String(labels.alertname ?? body.title ?? "SigNoz alert");
+          if (!agent) { actions.push({ skipped: "no agent label on alert" }); continue; }
+          const infos = listProjects();
+          const info = infos.find((p) => p.name === projectRef || p.id === projectRef) ?? infos[0];
+          if (!info) { actions.push({ skipped: "no project" }); continue; }
+          try {
+            const rt = await this.runtime(info.id);
+            const holder = rt.baton.holder();
+            const agents = (await rt.status()).agents;
+            const fallback = agents.find((a) => a.id !== agent)?.id;
+            rt.log.append({ kind: "status", agentId: String(agent),
+              payload: { state: "signoz_intervention", alert: alertName, holder, fallback: fallback ?? null } });
+            if (holder === agent && fallback) {
+              await rt.handoff(fallback);
+              actions.push({ project: info.name, agent, alert: alertName, action: `baton handed to ${fallback}` });
+            } else {
+              actions.push({ project: info.name, agent, alert: alertName,
+                action: fallback ? "logged (agent isn't holding the baton)" : "logged (no fallback agent)" });
+            }
+          } catch (e) {
+            actions.push({ agent, error: e instanceof Error ? e.message : String(e) });
+          }
+        }
+        res.json({ ok: true, actions });
+      })();
+    });
 
     app.get(
       "/api/projects/:id/events",
