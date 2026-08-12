@@ -258,7 +258,7 @@ try{if(localStorage.getItem("loomTheme")==="light")document.documentElement.clas
   .md .mdhr{border:0;border-top:1px solid var(--border);margin:12px 0}
   .md .mdi{font-family:var(--font-mono);font-size:.88em;background:color-mix(in srgb, var(--muted-foreground) 16%, transparent);
     padding:1px 5px;border-radius:5px;word-break:break-word}
-  .md a{color:var(--thread,#67e8f9);text-decoration:underline;text-underline-offset:2px}
+  .md a{color:var(--thread,#8b5cf6);text-decoration:underline;text-underline-offset:2px}
   .md .mdcode{margin:0 0 8px;background:var(--editor-surface,color-mix(in srgb, var(--foreground) 6%, var(--background)));
     border:1px solid var(--border);border-radius:8px;padding:10px 12px;overflow-x:auto}
   .md .mdcode code{font-family:var(--font-mono);font-size:12.5px;line-height:1.5;white-space:pre;color:var(--foreground)}
@@ -1641,7 +1641,13 @@ ${BRAND_SPRITE}
   (function installRowA11y(){
     var SEL = ".card[data-id],.agentrow[data-agent],.trow[data-file],.trow[data-dir]," +
       ".hitrow[data-open],.scmrow[data-file],.srow[data-id],.crow[data-p],.crow[data-newchat]";
-    function tag(el){ if (el.getAttribute("tabindex") === null){ el.setAttribute("tabindex", "0"); el.setAttribute("role", "button"); } }
+    function tag(el){
+      if (el.getAttribute("tabindex") !== null) return;
+      el.setAttribute("tabindex", "0");
+      // role="button" only on leaf rows: a row that nests its own control (a
+      // chat/project row with a menu button) must not claim to be a button.
+      if (!el.querySelector("button,a[href],input,select,textarea,[role='button']")) el.setAttribute("role", "button");
+    }
     function enhance(root){ if (root.querySelectorAll) { var n = root.querySelectorAll(SEL); for (var i = 0; i < n.length; i++) tag(n[i]); } }
     try {
       var mo = new MutationObserver(function(muts){
@@ -2395,17 +2401,17 @@ ${BRAND_SPRITE}
         red: v("--git-del", "#c74e39"),
         green: v("--git-add", "#81b88b"),
         yellow: v("--warn", "#eab308"),
-        blue: v("--thread", "#67e8f9"),
-        magenta: v("--shuttle", "#e879f9"),
-        cyan: v("--thread", "#67e8f9"),
+        blue: v("--thread", "#8b5cf6"),
+        magenta: v("--shuttle", "#d946ef"),
+        cyan: v("--thread", "#8b5cf6"),
         white: fg,
         brightBlack: dim,
         brightRed: v("--err", "#ff6568"),
         brightGreen: v("--ok", "#10b981"),
         brightYellow: v("--warn", "#eab308"),
-        brightBlue: v("--thread", "#67e8f9"),
-        brightMagenta: v("--shuttle", "#e879f9"),
-        brightCyan: v("--thread", "#67e8f9"),
+        brightBlue: v("--thread", "#8b5cf6"),
+        brightMagenta: v("--shuttle", "#d946ef"),
+        brightCyan: v("--thread", "#8b5cf6"),
         brightWhite: fg
       };
     }
