@@ -146,6 +146,8 @@ export interface ProjectState {
   chats?: ChatInfo[];
   /** Task cards you wrote yourself. See BoardTask. */
   tasks?: BoardTask[];
+  /** Per-agent spend budgets in USD/day, set from the Observatory burn-rate panel. */
+  budgets?: Record<string, number>;
 }
 
 /**

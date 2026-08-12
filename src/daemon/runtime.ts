@@ -185,6 +185,21 @@ export class ProjectRuntime {
     };
   }
 
+  /** Per-agent spend budgets (USD/day), set from the Observatory burn-rate panel. */
+  budgets(): Record<string, number> {
+    return readProjectState(this.info.dir).budgets ?? {};
+  }
+
+  /** Set (usd > 0) or clear (usd ≤ 0) one agent's daily budget; returns the new map. */
+  setBudget(agentId: string, usdPerDay: number): Record<string, number> {
+    const state = readProjectState(this.info.dir);
+    const budgets = { ...(state.budgets ?? {}) };
+    if (Number.isFinite(usdPerDay) && usdPerDay > 0) budgets[agentId] = usdPerDay;
+    else delete budgets[agentId];
+    writeProjectState(this.info.dir, { ...state, budgets });
+    return budgets;
+  }
+
   /** Has .loom/config.json changed since this runtime was opened? */
   configStale(): boolean {
     return configMtimeOf(this.info.dir) > this.configMtime;
