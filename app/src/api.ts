@@ -77,6 +77,50 @@ export interface Chat {
   createdAt: number;
 }
 
+/** Per-agent cost + token rollup from the daemon's /metrics endpoint. */
+export interface AgentMetric {
+  agentId: string;
+  usd: number;
+  turns: number;
+  ms: number;
+  tokensIn: number;
+  tokensOut: number;
+}
+
+export interface Metrics {
+  totalUsd: number;
+  turns: number;
+  totalMs: number;
+  tokensIn: number;
+  tokensOut: number;
+  byAgent: AgentMetric[];
+}
+
+/** One trace span behind a triage verdict (the agent's own turns/handoffs/errors). */
+export interface TriageSpan {
+  ts: number;
+  name: string;
+  ms: number;
+  code: number; // OTel status: 2 = error
+  msg: string;
+  kind: string;
+  cost: number;
+  tin: number;
+  tout: number;
+}
+
+/** "Why did I fail?" — an agent root-caused from its own SigNoz traces. */
+export interface Triage {
+  agent: string;
+  spanCount: number;
+  errorCount: number;
+  evidence: TriageSpan[];
+  rootCause: string;
+  suggestedFix: string;
+  source: "llm" | "heuristic" | "no-data";
+  from: "signoz" | "local-log" | "none";
+}
+
 export interface WorkingTree {
   git: boolean;
   branch?: string;
@@ -129,7 +173,7 @@ export async function claim(url: string, pairToken: string): Promise<Creds> {
   const res = await fetch(`${base}/api/pair/claim`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token: pairToken, name: "loom-app" }),
+    body: JSON.stringify({ token: pairToken, name: "notch-app" }),
   });
   const json = (await res.json()) as { clientToken?: string; error?: string };
   if (!res.ok || !json.clientToken) throw new Error(json.error ?? "pairing failed");
@@ -177,6 +221,10 @@ export const getChats = (c: Creds, id: string) =>
   api<{ chats: Chat[] }>(c, `/api/projects/${id}/chats`);
 export const getTree = (c: Creds, id: string) =>
   api<{ tree: WorkingTree }>(c, `/api/projects/${id}/tree`);
+export const getMetrics = (c: Creds, id: string) =>
+  api<{ metrics: Metrics }>(c, `/api/projects/${id}/metrics`);
+export const getTriage = (c: Creds, id: string, agentId: string) =>
+  api<{ triage: Triage }>(c, `/api/projects/${id}/triage/${encodeURIComponent(agentId)}`);
 export const getTasks = (c: Creds, id: string, kind: "issue" | "pr", search: string) =>
   api<TaskResult>(c, `/api/projects/${id}/tasks?kind=${kind}&search=${encodeURIComponent(search)}`);
 export const sendMessage = (c: Creds, id: string, text: string, agentId?: string, chat?: string) =>
