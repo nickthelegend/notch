@@ -22,6 +22,7 @@ import type {
 import type { RouteState, RouteStepSpec, RouterKind } from "../types.js";
 import { isAdapter, MAIN_CHAT } from "../types.js";
 import { createAgent, knownAgentKinds } from "../adapters/index.js";
+import { recordAgentEvent } from "../observability/index.js";
 import { BatonManager, NotHolderError } from "../core/baton.js";
 import { Brain, CONFIDENCE_FLOOR } from "../core/brain.js";
 import { compileBrief, retrieve } from "../core/brain-index.js";
@@ -694,6 +695,8 @@ export class ProjectRuntime {
   /** Fire-and-notify hooks + routing + suggested handoffs, off the log. */
   private afterAgentEvent(event: LoomEvent): void {
     this.trackCost(event);
+    // Ship the turn/route/handoff/memory event to SigNoz as an OTel span.
+    recordAgentEvent(event, { project: this.info.name });
     this.routes.handleAgentEvent(event);
     if (event.kind === "run_complete" && event.agentId) {
       this.captureTurnDiff(event.agentId);

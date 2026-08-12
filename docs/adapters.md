@@ -18,7 +18,7 @@ bridge can graduate later.
 
 ## The contract
 
-Everything lives in `@loompad/cli/sdk`:
+Everything lives in `notch/sdk`:
 
 ```ts
 import {
@@ -27,7 +27,7 @@ import {
   registerAgentKind,
   type SendInput,   // { text, briefing? }
   type AdapterEvent // { kind, payload }
-} from "@loompad/cli/sdk";
+} from "notch/sdk";
 ```
 
 ### Events you can emit
@@ -49,7 +49,7 @@ becomes context for everyone else.
 ### A complete adapter
 
 ```ts
-import { AdapterBase, registerAgentKind, type SendInput } from "@loompad/cli/sdk";
+import { AdapterBase, registerAgentKind, type SendInput } from "notch/sdk";
 
 export class MyAgentAdapter extends AdapterBase {
   // available(): is the underlying tool installed/reachable?
@@ -105,7 +105,7 @@ including session persistence via project state.
 ### A bridge
 
 ```ts
-import { BridgeBase, registerAgentKind } from "@loompad/cli/sdk";
+import { BridgeBase, registerAgentKind } from "notch/sdk";
 
 export class MyGuiBridge extends BridgeBase {
   async available() { return true; }
