@@ -229,7 +229,7 @@ try{if(localStorage.getItem("loomTheme")==="light")document.documentElement.clas
     border:1.5px solid currentColor;border-top-color:transparent;animation:spin 1s linear infinite}
   @keyframes spin{to{transform:rotate(360deg)}}
   /* ── Thread feed ──────────────────────────────────────── */
-  .msg{margin:10px 0;display:flex;flex-direction:column}
+  .msg{margin:16px 0;display:flex;flex-direction:column}
   .msg .who{font-family:var(--font-mono);font-size:11px;color:var(--muted-foreground);
     margin:0 2px 4px;letter-spacing:.04em;display:flex;align-items:center;gap:5px}
   .msg .bubble{max-width:88%;padding:9px 13px;border-radius:var(--radius-xl);
@@ -277,7 +277,7 @@ try{if(localStorage.getItem("loomTheme")==="light")document.documentElement.clas
   .thinkbox[open] summary::before{content:"\\25be "}
   .thinkbox .md{margin-top:6px;line-height:1.55}
   .thinkbox .md .mdp{margin-bottom:5px}
-  .sys{color:var(--muted-foreground);font-size:12px;text-align:center;margin:10px auto;
+  .sys{color:var(--muted-foreground);font-size:12px;text-align:center;margin:8px auto;
     font-family:var(--font-mono);letter-spacing:.02em;max-width:92%}
   .sys.warn{color:var(--warn)}
   .sys.err{color:var(--err)}
@@ -285,8 +285,14 @@ try{if(localStorage.getItem("loomTheme")==="light")document.documentElement.clas
   .tool{color:color-mix(in srgb, var(--muted-foreground) 75%, transparent);
     font-size:11.5px;font-family:var(--font-mono);margin:3px 0 3px 14px;
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .handoff{display:flex;align-items:center;justify-content:center;gap:10px;margin:14px 0;
+  /* The baton passing is the product's signature beat, not another status line:
+     give it room and flank it with shuttle-tinted hairlines so it reads as a
+     chapter break in the thread. */
+  .handoff{display:flex;align-items:center;justify-content:center;gap:10px;margin:22px 0;
     font-family:var(--font-mono);font-size:12px}
+  .handoff::before,.handoff::after{content:"";height:1px;flex:0 1 56px;
+    background:linear-gradient(90deg,transparent,color-mix(in srgb, var(--shuttle) 42%, transparent))}
+  .handoff::after{background:linear-gradient(90deg,color-mix(in srgb, var(--shuttle) 42%, transparent),transparent)}
   .handoff .a{color:var(--muted-foreground)}
   .handoff .shuttle{color:var(--shuttle-ink);font-size:15px;animation:glide .5s ease}
   .handoff .b{color:var(--shuttle-ink)}
