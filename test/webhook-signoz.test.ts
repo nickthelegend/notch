@@ -58,6 +58,44 @@ describe("SigNoz alert -> baton intervention", () => {
     expect(events.some((e) => e.kind === "status" && e.payload.state === "signoz_intervention")).toBe(true);
   });
 
+  it("retries the original agent when the alert resolves (pause → failover → restore)", async () => {
+    await client.handoff(projectId, "plannerbot");
+    expect((await client.project(projectId)).project.holder).toBe("plannerbot");
+
+    const post = (status: string) =>
+      fetch(`${baseUrl}/api/webhooks/signoz`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ alerts: [{ status, labels: { alertname: "AgentErrorRateHigh", "notch.project": "heal", "gen_ai.agent.id": "plannerbot" } }] }),
+      }).then((r) => r.json() as Promise<{ actions: Array<{ action?: string }> }>);
+
+    // firing: plannerbot is quarantined and the baton fails over
+    const fired = await post("firing");
+    expect(fired.actions[0]?.action).toMatch(/quarantined; baton handed to/);
+    await waitUntil(async () => (await client.project(projectId)).project.holder !== "plannerbot", { timeoutMs: 6000 });
+    const failedOverTo = (await client.project(projectId)).project.holder;
+    expect(failedOverTo).not.toBe("plannerbot");
+
+    // resolved: the baton is handed back to plannerbot (retry)
+    const resolved = await post("resolved");
+    expect(resolved.actions[0]?.action).toMatch(/baton handed back to plannerbot/);
+    await waitUntil(async () => (await client.project(projectId)).project.holder === "plannerbot", { timeoutMs: 6000 });
+    expect((await client.project(projectId)).project.holder).toBe("plannerbot");
+
+    const { events } = await client.events(projectId, undefined, 100);
+    expect(events.some((e) => e.kind === "status" && e.payload.state === "signoz_recovery" && e.payload.retried === true)).toBe(true);
+  });
+
+  it("a resolved alert for an agent that was never quarantined is a no-op", async () => {
+    const r = await fetch(`${baseUrl}/api/webhooks/signoz`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ alerts: [{ status: "resolved", labels: { "notch.project": "heal", "gen_ai.agent.id": "reviewbot" } }] }),
+    });
+    const j = (await r.json()) as { actions: Array<{ action?: string }> };
+    expect(j.actions[0]?.action).toMatch(/was not quarantined/);
+  });
+
   it("enforces the shared-secret gate when configured", async () => {
     process.env.NOTCH_WEBHOOK_SECRET = "s3cret";
     const res = await fetch(`${baseUrl}/api/webhooks/signoz`, {
