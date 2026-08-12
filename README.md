@@ -1,23 +1,27 @@
-# Loom
+# Notch
 
-[![ci](https://github.com/nickthelegend/loom/actions/workflows/ci.yml/badge.svg)](https://github.com/nickthelegend/loom/actions/workflows/ci.yml)
-[![npm](https://img.shields.io/npm/v/notch)](https://www.npmjs.com/package/notch)
+[![ci](https://github.com/nickthelegend/notch/actions/workflows/ci.yml/badge.svg)](https://github.com/nickthelegend/notch/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-**The shared-memory layer for AI dev environments.** Every coding agent — Claude Code,
-OpenCode, Antigravity, Codex, … — keeps its own brain in its own files. Loom makes them
-**one brain**: connect your ADEs, and their memory, decisions, and context become a
-single shared thread that flows from one agent to the next.
+**Mission control for a fleet of coding agents — with the whole fleet observable in
+[SigNoz](https://signoz.io).** Every coding agent — Claude Code, Codex, OpenCode, Grok,
+Antigravity, Kiro — keeps its own brain in its own files and runs blind to the others.
+Notch makes them **one brain** with **one baton**: connect your agents and their memory,
+decisions, and context become a single shared thread that flows from one agent to the next —
+and **every turn, handoff, route, and memory fold is traced to SigNoz** as OpenTelemetry
+`gen_ai` spans, so you can watch the fleet, its cost, and its tokens in real time.
 
 Today that means **Claude Code, Codex, OpenCode and Grok Code** as full agents, each
-verified against a real version, plus **Antigravity and Kiro** driven through their
-own windows —
-see [Supported agents](#supported-agents) for exactly how far each one goes, and
-[How memory actually reaches a model](#how-memory-actually-reaches-a-model) for the
-part most tools gloss over.
+verified against a real version, plus **Antigravity and Kiro** driven through their own
+windows — see [Supported agents](#supported-agents) for exactly how far each one goes, and
+[How memory actually reaches a model](#how-memory-actually-reaches-a-model) for the part
+most tools gloss over.
 
-Loom is **not** another IDE. It's the thin layer *between* your agents — the continuity
-and memory they don't share on their own.
+Notch is **not** another IDE. It's the thin layer *between* your agents — the continuity,
+memory, and **observability** they don't have on their own. It's a fork of
+[loom](https://github.com/nickthelegend/loom) with a purple-dark identity, an in-app
+**[Observatory](#observability--signoz)** (live canvas, handoff graph, event timeline, fleet
+metrics), and end-to-end SigNoz instrumentation built on top.
 
 ```
    CLAUDE.md      AGENTS.md      .antigravity/     ← each ADE's native memory
@@ -34,15 +38,78 @@ and memory they don't share on their own.
 ```
 
 <p align="center">
-  <img src="docs/img/workspace.png" alt="Loom workspace — one thread over every agent, with the Explorer, the composer, and the agent baton" width="100%">
+  <img src="docs/img/workspace.png" alt="Notch workspace — one thread over every agent, with the Explorer, the composer, and the agent baton" width="100%">
   <br>
   <em>One thread over every agent — projects and chats on the left, the shared conversation in the middle, the Explorer on the right, and a composer you switch agents from without leaving the box.</em>
 </p>
 
+## Observability — SigNoz
+
+A fleet of agents you can't see is a fleet you can't trust. Notch instruments the whole
+orchestration and ships it to **SigNoz** using the OpenTelemetry
+[GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) — plus an
+in-app **Observatory** so you never have to leave the app to know what the fleet is doing.
+
+### The Observatory
+
+A tab next to the Brain, four live views over the running project (real data, no mocks):
+
+- **Canvas** — the *one brain* as a glowing hub linked to every agent, the **baton** drawn in
+  shuttle-fuchsia to whoever holds it, busy agents pulsing. Nodes are **draggable**.
+- **Graph** — the **baton/handoff DAG**: agents laid out in columns by handoff depth, with a
+  directional arrow for every pass of the baton. Draggable.
+- **Timeline** — the chronological trace: turns, handoffs, routes, memory folds, errors, and
+  decisions, each dotted by status with a relative timestamp.
+- **Metrics** — the baton path, handoff / route / event counts, and a per-agent fleet
+  breakdown (**cost · turns · tokens**).
+
+A persistent vitals strip (active agents, baton holder, spend, turns, tokens) sits above all
+four, and a **View in SigNoz** link jumps straight to the traces.
+
+### SigNoz export
+
+The daemon is already a stream of events; Notch folds the notable ones into OTel spans over a
+single central hook and exports them **OTLP/HTTP (JSON)** — no OpenTelemetry SDK dependency,
+just `fetch`, batched and best-effort (an unreachable collector never touches the agent loop).
+
+| Event | Span | Key attributes |
+|---|---|---|
+| agent turn | `gen_ai.agent.turn` | `gen_ai.agent.id`, `gen_ai.request.model`, `gen_ai.usage.input_tokens` / `output_tokens`, `gen_ai.usage.cost_usd`, duration |
+| tool call | `gen_ai.tool.call` | `gen_ai.tool.name` |
+| baton handoff | `notch.baton.handoff` | `notch.handoff.from` / `.to` |
+| route lifecycle | `notch.route.<phase>` | `notch.route.id` |
+| memory fold | `notch.memory.<op>` | `notch.memory.kind` / `.scope` |
+| error | `notch.error` (ERROR status) | message |
+
+Every span carries `service.name = notch`, plus `notch.project` and `notch.chat`.
+
+### LLM cost tracer
+
+Notch tracks **cost and tokens per agent** — turns, spend, input/output tokens — read straight
+from what each CLI reports (Claude Code's `result` usage, Codex's `turn.completed`, OpenCode's
+message tokens; cost-only adapters stay honestly at zero). It's exposed at
+`GET /api/projects/:id/metrics` and shipped to SigNoz as the `gen_ai.usage.*` span attributes.
+
+### Point it at your SigNoz, or turn it off
+
+Self-hosted works out of the box (exports to `http://localhost:4318`). For another collector or
+SigNoz Cloud, set `NOTCH_OTEL_ENDPOINT` (and `SIGNOZ_INGESTION_KEY`). Opt out entirely with
+`DO_NOT_TRACK=1`, `NOTCH_TELEMETRY_DISABLED=1`, or `NOTCH_OTEL=0`. A ready-to-import dashboard
+ships at [`docs/signoz-dashboard.json`](docs/signoz-dashboard.json); full details in
+[`docs/observability.md`](docs/observability.md).
+
+The exporter and the event→span mapping are covered by unit **and** integration tests
+(a stand-in OTLP collector receives real spans from live daemon turns):
+
+```bash
+npm test -- observability          # config, mapper, OTLP payload shape
+npm test -- observability-export   # end-to-end: daemon turns → collector spans
+```
+
 ## Codex & GPT‑5.6
 
-Loom is built around orchestrating **OpenAI Codex** as a first‑class agent — and in this
-build every Codex turn runs **GPT‑5.6**: Codex's model, pinned in Loom's per‑project agent
+Notch is built around orchestrating **OpenAI Codex** as a first‑class agent — and in this
+build every Codex turn runs **GPT‑5.6**: Codex's model, pinned in Notch's per‑project agent
 config (`.loom/config.json` → `codex → model: "gpt-5.6"`) at high reasoning effort.
 
 - **Codex holds the baton like any other agent.** The adapter
@@ -50,7 +117,7 @@ config (`.loom/config.json` → `codex → model: "gpt-5.6"`) at high reasoning 
   it opens a thread, streams Codex's JSONL event log (`thread.started`, `item.completed`
   → `agent_message` / `command_execution` / `file_change`, `run_complete`), and **resumes
   the same thread across turns** so Codex keeps its own context between handoffs.
-- **Codex reads and writes the shared brain.** Before a Codex turn, Loom projects the
+- **Codex reads and writes the shared brain.** Before a Codex turn, Notch projects the
   unified memory (imported ADE memory + decisions + the thread) into its briefing; its
   replies and memory writes land back in the one shared store. So a handoff
   *Claude Code → Codex* carries the full context, and the next agent inherits what Codex
@@ -60,10 +127,10 @@ config (`.loom/config.json` → `codex → model: "gpt-5.6"`) at high reasoning 
   pressing the **Codex** key hands Codex the baton; hold the mic and speak → your words are
   transcribed → sent to Codex (GPT‑5.6) → the reply is spoken back through the pad.
 - **Codex as a dev agent, too.** Because Codex is a full agent, you can hand it real work
-  inside Loom — `loom route ship "…"` routes *plan → Codex executes → review*, the brain
+  inside Notch — `loom route ship "…"` routes *plan → Codex executes → review*, the brain
   flowing hop to hop.
 
-In short: **GPT‑5.6, via Codex, is one of the interchangeable minds Loom keeps in sync** —
+In short: **GPT‑5.6, via Codex, is one of the interchangeable minds Notch keeps in sync** —
 start a thread in Claude Code, hand it to Codex mid‑task, and it picks up with the whole
 shared context intact.
 
@@ -74,15 +141,15 @@ OpenCode; Antigravity doesn't know what you decided with Claude an hour ago. Swi
 tools and you re-explain your project every time.
 
 Other multi-agent tools answer this by keeping agents **apart** — each in its own
-worktree, run in parallel, compare and merge. Loom makes the opposite bet: keep the
+worktree, run in parallel, compare and merge. Notch makes the opposite bet: keep the
 agents' **memory together** so work *continues* across them instead of forking.
 
-- **One brain across every ADE** — Loom imports each agent's native memory
+- **One brain across every ADE** — Notch imports each agent's native memory
   (`CLAUDE.md`, `AGENTS.md`, …) into a unified store, merges it with your decisions and
   the shared thread, and hands the whole thing to whoever picks up next. `loom memory`.
 - **The baton** — exactly one agent works at a time; passing it *carries the context*
   (interrupt-safe, memory projected, briefing armed). Not isolation — continuation.
-- **Routes** — let Loom drive the chain: `loom route ship "add dark mode"` runs
+- **Routes** — let Notch drive the chain: `loom route ship "add dark mode"` runs
   plan → execute → review as one command, the brain flowing hop to hop; or `loom route
   auto` lets an LLM pick each next agent.
 - **Every surface, one daemon** — a full-screen TUI, a web app, a desktop window, and a
@@ -92,7 +159,7 @@ agents' **memory together** so work *continues* across them instead of forking.
 
 ## Install
 
-Requires **Node ≥ 22.5** (Loom's event log uses the built-in `node:sqlite`).
+Requires **Node ≥ 22.5** (Notch's event log uses the built-in `node:sqlite`).
 
 ```bash
 npm install -g notch          # → `notch` on your PATH
@@ -120,7 +187,7 @@ loom doctor        # checks node, agents, tailscale, daemon, and your project
 
 Surfaces, all talking to the same daemon:
 - **TUI / CLI** — `loom` (default), `loom chat`, `loom send`, …
-- **Desktop app (Loom Desktop)** — prebuilt for
+- **Desktop app (Notch Desktop)** — prebuilt for
   [**macOS**, **Linux**, and **Windows**](https://github.com/nickthelegend/loom/releases/latest)
   (`.dmg` · `.AppImage` · `.exe`; the macOS dmg is ad-hoc signed, so right-click → **Open**
   the first time), or build from [`desktop/`](desktop/README.md): `cd desktop && npm
@@ -128,7 +195,7 @@ Surfaces, all talking to the same daemon:
   pairs itself.
 - **Phone app (LoomPad)** — install the prebuilt
   [`loompad.apk`](https://github.com/nickthelegend/loom/releases/latest) (allow unknown
-  sources), open **Loom**, and **Scan QR code** from the desktop's *Connect a phone*.
+  sources), open **Notch**, and **Scan QR code** from the desktop's *Connect a phone*.
   Voice input, per-prompt diffs, push. Or build from source
   ([`app/`](app/README.md)): `cd app && npx expo install && npx expo start`.
 - **Web app** — no install; `loom pair` → open the link. Same workspace in the browser.
@@ -136,7 +203,7 @@ Surfaces, all talking to the same daemon:
 ## The workspace
 
 On a wide screen the web app (and the desktop shell around it) is a full workspace for
-*driving* agents — still not an editor: Loom shows you the context and the agents do
+*driving* agents — still not an editor: Notch shows you the context and the agents do
 the writing.
 
 ```
@@ -161,7 +228,7 @@ the writing.
 - **Board** is one board with three sources — **GitHub**, **Projects**, **Linear** —
   switched from a segmented control (see [GitHub & Linear, native](#github--linear-native)).
   GitHub is four live columns (working → needs you → in review → ready to merge); cards
-  come from **yours** (`+ Task`), **Loom** (which agents are running or blocked), and
+  come from **yours** (`+ Task`), **Notch** (which agents are running or blocked), and
   your repo's **PRs** (draft, CI failed, changes requested, approved — read through your
   own `gh`). Search issues and PRs in GitHub's own query language; **Start** hands an
   issue to an agent. Dragging your own card really moves it; dragging a PR card only moves
@@ -182,14 +249,14 @@ the writing.
 
 ### Settings, in one place
 
-Everything about a Loom lives behind the gear in the bottom-left: **Setup** (what the
+Everything about a Notch lives behind the gear in the bottom-left: **Setup** (what the
 machine still needs to run agents), **Diagnostics** (`loom doctor`, run live on the
 daemon), **Updates** (build rev, and how far the checkout is behind its remote),
 **Preferences** (theme, the brain extractor, handoff brief style, default agent),
 **Devices** (paired clients — revoke one, or pair another), and **About**.
 
 <p align="center">
-  <img src="docs/img/settings.png" alt="Loom's Settings screen — Setup, Diagnostics, Updates, Preferences, Devices, About" width="100%">
+  <img src="docs/img/settings.png" alt="Notch's Settings screen — Setup, Diagnostics, Updates, Preferences, Devices, About" width="100%">
 </p>
 
 ## GitHub & Linear, native
@@ -199,7 +266,7 @@ any task; review and approve PRs; and file **Linear** issues with a team selecto
 context switch, no second browser tab.
 
 <p align="center">
-  <img src="docs/img/board-projects.png" alt="A GitHub Project board rendered in Loom, items grouped by their Status column" width="100%">
+  <img src="docs/img/board-projects.png" alt="A GitHub Project board rendered in Notch, items grouped by their Status column" width="100%">
   <br>
   <em>A GitHub Project (v2) board, in-app — items grouped by their Status column, each linking back to its issue or PR.</em>
 </p>
@@ -207,7 +274,7 @@ context switch, no second browser tab.
 - **Browse PRs, issues, and Project boards.** The **GitHub** source is the live kanban;
   the **Projects** source lists the owner's GitHub Project (v2) boards and lays a
   project's items out by Status; search takes github.com's own query language.
-- **Review and approve PRs in place.** Open a PR's diff without leaving Loom and post the
+- **Review and approve PRs in place.** Open a PR's diff without leaving Notch and post the
   three things a reviewer does — **comment**, **request changes**, **approve**. The review
   is signed as you (through your `gh`); approve asks first, because it publishes.
 - **Open a worktree from any task.** One click cuts a checked-out branch in its own
@@ -218,12 +285,12 @@ context switch, no second browser tab.
   description, file it — the new issue's identifier comes straight back.
 
 <p align="center">
-  <img src="docs/img/board-linear.png" alt="Loom's Linear source, honest about being off until you connect it" width="100%">
+  <img src="docs/img/board-linear.png" alt="Notch's Linear source, honest about being off until you connect it" width="100%">
   <br>
-  <em>Linear is off until you connect it — and Loom tells you exactly how, because it holds no token of its own.</em>
+  <em>Linear is off until you connect it — and Notch tells you exactly how, because it holds no token of its own.</em>
 </p>
 
-**Loom holds no token of its own.** GitHub goes through your `gh` CLI; Linear reads
+**Notch holds no token of its own.** GitHub goes through your `gh` CLI; Linear reads
 `LINEAR_API_KEY` from the daemon's own environment (you `export` it) and never stores,
 logs, or transmits it anywhere else. No key → an honest "not connected", never a dead
 form — the same bet the agent adapters make by shelling out to the CLIs you already have.
@@ -297,7 +364,7 @@ router failure. Every decision is logged with its reason
 What happens per hop: interrupt-safe **handoff** → shared-memory **projection** →
 **briefing** → the step's role instruction. Then:
 
-- step finishes cleanly → Loom advances to the next agent automatically;
+- step finishes cleanly → Notch advances to the next agent automatically;
 - the agent asks a question → the route **pauses** (`waiting_human`), you get a
   notification, `loom route --status` and the board show the question; you answer in
   the shared thread (`loom send "…"`) and the route **resumes by itself**;
@@ -332,7 +399,7 @@ detects at least two roles.
 | Command | What it does |
 |---|---|
 | `loom` | **The TUI** — tabbed workspace (Thread · Board · Brain · Diff), `shift+tab` switches view, `tab` shifts agents, `/`-commands + `ctrl+p` palette inline |
-| `loom init` | Make the current directory a Loom project (auto-detects agents) |
+| `loom init` | Make the current directory a Notch project (auto-detects agents) |
 | `loom chat` | Same thread as a plain line REPL (`/handoff`, `/interrupt`, `@agent`) |
 | `loom send <text>` | One-shot message (`-a <agent>` to address someone specific) |
 | `loom handoff <agent>` | Pass the baton — interrupts, projects memory, briefs the target |
@@ -365,7 +432,7 @@ Three of those need their asterisks spelled out, because the table row is
 shorter than the truth:
 
 **Codex reports tokens, never money.** Its `turn.completed` carries
-`input_tokens` / `output_tokens` and no dollar figure, so Loom shows tokens and
+`input_tokens` / `output_tokens` and no dollar figure, so Notch shows tokens and
 no cost for Codex turns. A USD number derived from a price table we'd have to
 keep current is fiction with a decimal point in it.
 
@@ -379,7 +446,7 @@ mode also defaults to `bypassPermissions`, because headless with no TTY to ask,
 every other mode ends the turn `Cancelled` having written nothing.
 
 **Antigravity and Kiro are driven, not routed.** Both are Electron apps with no
-API; Loom connects to the debugging port, finds the chat box, types through the
+API; Notch connects to the debugging port, finds the chat box, types through the
 input pipeline and reads back what the panel gained — the approach
 [antigravity_phone_chat](https://github.com/krishnakanthb13/antigravity_phone_chat)
 takes, and for the same reason: never touch the provider APIs, drive the app
@@ -396,7 +463,7 @@ your code and pressing Enter is not a mistake an error message repairs.
 What's verified is the mechanism, against a real Chromium. What is **not**
 verified is either app's actual chat DOM: Antigravity shows a sign-in screen and
 Kiro shows no chat panel until you open one, so there was no composer to read
-the selectors from. Reachable and driveable are separate questions, and Loom
+the selectors from. Reachable and driveable are separate questions, and Notch
 answers both — a signed-out Antigravity replies to CDP cheerfully and reports
 `driveable: false — no chat box on screen`.
 
@@ -410,7 +477,7 @@ agents without a stable API can't be trusted with interrupt-safe writes. See
 
 Worth being precise about, because this is the whole premise and it has a soft edge.
 
-Loom **reliably builds** the shared brain (every ADE's imported memory + your decisions
+Notch **reliably builds** the shared brain (every ADE's imported memory + your decisions
 + the thread) and **reliably writes** it to `.loom/memory/<agent>.md` on every handoff.
 That part is solid and tested.
 
@@ -422,7 +489,7 @@ Getting it into the model's context is a different problem, and it depends on th
 | Grok Code | the briefing rides in `--rules`, Grok's real system-prompt channel, so `-p` stays your clean prompt | **strong** — `--rules` is a genuine system channel, not text in the turn |
 | Codex | no `--append-system-prompt` on `codex exec`, so the briefing rides in front of your prompt — **framed** as an unmissable `LOOM SESSION MEMORY — authoritative, read first` block | **reliable** — one prompt either way, but framed so it can't be mistaken for chatter |
 | OpenCode | no per-prompt system field on `/prompt`, so the same **framed** block is prepended to your prompt | **reliable** — delivered as an authoritative block, not loose text |
-| Antigravity, Kiro | nothing tells them the file exists — Loom types into their chat box, which is not a system prompt | **none** — a human has to open it |
+| Antigravity, Kiro | nothing tells them the file exists — Notch types into their chat box, which is not a system prompt | **none** — a human has to open it |
 
 So: the **summary always lands**; the **full brain is an invitation**. An agent that
 ignores the pointer works from the summary alone. If you need something remembered for
@@ -430,7 +497,7 @@ certain, put it in a decision (`loom decide`) — decisions ride in the briefing
 There's an opt-in eval (`LOOM_TEST_REAL=1`) that checks a real model actually *uses* an
 injected brief, and declines rather than invents when the brief is silent.
 
-Memory also flows **one way**. Loom reads `CLAUDE.md` / `AGENTS.md` and never writes
+Memory also flows **one way**. Notch reads `CLAUDE.md` / `AGENTS.md` and never writes
 them, so your ADE's own memory files stay yours. And the import is a **merge, not a
 parse**: files are read, capped at 8000 chars, and concatenated under headers. Claude
 Code's `@path` imports are **not followed** — a `CLAUDE.md` that is mostly `@` pointers
@@ -440,7 +507,7 @@ The brain also **learns on its own**. After each turn a small Claude reads what 
 and files what's worth keeping as typed memory *units* — a constraint, a decision, a
 convention, a fact, a failure — reconciled on write (add / update / forget, never a
 growing blob), the approach [mem0](https://github.com/mem0ai/mem0) pioneered, adapted to
-Loom's event log. Every unit's evidence is verified against the turn before it's kept, so
+Notch's event log. Every unit's evidence is verified against the turn before it's kept, so
 the brain doesn't remember things that were never said. Retrieval is hybrid too — exact
 entity matches (file paths, symbols, error codes) unioned with BM25 over the text, no
 embedding model to ship — with failures and constraints biased to the top of the brief,
@@ -454,7 +521,7 @@ five agents each learn one fact, and every other agent's brief then carries all 
 the extractor off per project in Settings.
 
 <p align="center">
-  <img src="docs/img/brain.png" alt="Loom's Brain tab — the memory units it has learned, by kind" width="100%">
+  <img src="docs/img/brain.png" alt="Notch's Brain tab — the memory units it has learned, by kind" width="100%">
   <br>
   <em>The Brain tab — learned memory units, grouped by kind, each traceable to the turn it came from.</em>
 </p>
@@ -464,7 +531,7 @@ the extractor off per project in Settings.
 - **Event log** (`.loom/log.db`, SQLite via `node:sqlite`, JSONL fallback) — every
   message, tool call, file edit, decision, and handoff, appended in order. The log *is*
   the project's memory; everything else is a view of it.
-- **Projection** — on handoff, Loom distills the log into
+- **Projection** — on handoff, Notch distills the log into
   `.loom/memory/<agent>.md` (persistent, namespaced) and arms a short one-shot briefing
   injected with the target's next turn (system-prompt append for Claude Code, delimited
   preamble for OpenCode). Two renderers behind one interface:
@@ -479,7 +546,7 @@ the extractor off per project in Settings.
   handoff. Ghost holders (agent removed from config) self-heal. Every handoff snapshots
   the outgoing agent's working-tree state (dirty flag + `git status`) into the log.
 - **Unified memory ("multiple memory in one")** — each connected ADE keeps its own
-  native memory (`CLAUDE.md`, `AGENTS.md`, …). Loom imports them all into one brain
+  native memory (`CLAUDE.md`, `AGENTS.md`, …). Notch imports them all into one brain
   (`memory_import` events, content-hash deduped), merges them with the project's
   decisions and shared thread, and projects the union into whoever holds the baton.
   Connect a new agent → its knowledge joins the brain, and everything the others learned
@@ -498,12 +565,12 @@ the extractor off per project in Settings.
 ## Your phone (Android today, over Tailscale)
 
 The daemon serves a full phone app at `/app` — board, live thread, agent chips, routes.
-No app store, no build step; it ships inside Loom.
+No app store, no build step; it ships inside Notch.
 
 **Pair from the app.** The web/desktop window has a **Connect a phone** button next to the
 terminal: it opens a modal with a QR (and a copy link) and a **Local network / Tailnet**
 toggle. Pick one and, if the daemon is still localhost-only, hit **Enable phone access** —
-Loom adds a *second listener* on that LAN or tailnet IP (localhost is never disturbed, so
+Notch adds a *second listener* on that LAN or tailnet IP (localhost is never disturbed, so
 the window you're in doesn't blink) and shows a QR your phone can actually reach. Same
 single-use token, no terminal needed.
 
@@ -633,16 +700,16 @@ npm run dev       # run the CLI from source (tsx)
 
 | Variable | What it does |
 |---|---|
-| `LOOM_HOME` | Where the registry, daemon config, and pair tokens live. Default `~/.loom`. Point it at a temp dir to try Loom without touching real state. |
-| `LOOM_STORE` | `jsonl` forces the portable event store instead of `node:sqlite`. Loom falls back on its own if sqlite is unavailable; this makes it explicit. |
+| `LOOM_HOME` | Where the registry, daemon config, and pair tokens live. Default `~/.loom`. Point it at a temp dir to try Notch without touching real state. |
+| `LOOM_STORE` | `jsonl` forces the portable event store instead of `node:sqlite`. Notch falls back on its own if sqlite is unavailable; this makes it explicit. |
 | `LOOM_NO_PTY` | `1` forces the pipe-backed shell instead of a real pty. CI runs the suite both ways. |
 | `LOOM_NODE` | Node binary the desktop shell spawns the daemon with (Electron's own Node predates `node:sqlite`). |
 | `LOOM_NO_NOTIFY` | `1` silences desktop notifications. |
 | `LOOM_NO_PUSH` | `1` silences phone push. |
 | `LOOM_ROUTE_STEP_TIMEOUT_MS` | Per-hop route timeout. Default 45 min. |
 
-Going the other way, Loom **sets `LOOM_TERMINAL=1`** inside every terminal it opens, so
-your shell profile can tell it's running in Loom's pane. (`LOOM_EXPO_PUSH_URL` and
+Going the other way, Notch **sets `LOOM_TERMINAL=1`** inside every terminal it opens, so
+your shell profile can tell it's running in Notch's pane. (`LOOM_EXPO_PUSH_URL` and
 `LOOM_TUI_SMOKE` also exist, but they're test plumbing — not configuration.)
 
 ## Roadmap
@@ -652,11 +719,11 @@ your shell profile can tell it's running in Loom's pane. (`LOOM_EXPO_PUSH_URL` a
 
 ## Design
 
-Every Loom surface (web app, desktop shell, phone app) wears one design system —
-**quiet graphite**: neutral monochrome chrome, hairline borders, Geist type, and
-color reserved for state (thread cyan = live, shuttle magenta = the baton).
-Adapted from the [Orca](https://github.com/stablyai/orca) design system (MIT,
-© Lovecast Inc.); the Geist typeface is © Vercel under the SIL Open Font
+Every Notch surface (web app, desktop shell, phone app) wears one **purple-dark**
+identity: a violet-tinted void, plum panels, Geist type, and color reserved for
+state (thread violet = live, shuttle fuchsia = the baton). Recolored from the
+"quiet graphite" system adapted from [Orca](https://github.com/stablyai/orca)
+(MIT, © Lovecast Inc.); the Geist typeface is © Vercel under the SIL Open Font
 License 1.1. Tokens and rules: [docs/design-system.md](docs/design-system.md).
 
 ## License
