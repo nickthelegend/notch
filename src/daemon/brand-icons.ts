@@ -20,7 +20,7 @@ export const BRAND_KINDS = ["claude-code","antigravity","opencode","kiro","codex
 export const BRAND_TITLES: Record<string, string> = {
   "claude-code": "Claude Code",
   "antigravity": "Antigravity IDE",
-  "antigravity-cli": "Antigravity CLI",
+  "antigravity-cli": "Antigravity",
   "opencode": "opencode",
   "kiro": "Kiro",
   "codex": "Codex",

@@ -88,7 +88,7 @@ export const ADES: AdeSpec[] = [
   },
   {
     kind: "antigravity-cli",
-    label: "Antigravity CLI",
+    label: "Antigravity",
     tier: "adapter",
     // Gemini flash is the token-saving default the CLI is here for; the pro and
     // hosted-Claude/GPT ids are offered too, and the custom field is the real
@@ -106,20 +106,22 @@ export const ADES: AdeSpec[] = [
     },
   },
   {
-    kind: "antigravity",
-    label: "Antigravity IDE",
-    tier: "bridge",
-    // The GUI bridge: presence is decided by the debugging port, not by a file
-    // on disk, and it only watches. For a headless turn, use antigravity-cli.
-    probe: async () => false,
-  },
-  {
     kind: "kiro",
     label: "Kiro",
     tier: "bridge",
     probe: async () => false,
   },
 ];
+
+/**
+ * A friendly default id for an auto-added agent. Almost always the kind itself
+ * ("codex" is codex), but the Antigravity CLI reads better as just
+ * "antigravity" — the `-cli` is an implementation detail, and it's the only
+ * Antigravity now that the CDP bridge is no longer offered.
+ */
+function defaultIdFor(kind: string): string {
+  return kind === "antigravity-cli" ? "antigravity" : kind;
+}
 
 /** Which kinds can hold the baton. */
 export function adapterKinds(): string[] {
@@ -176,5 +178,5 @@ export function buildDefaultRoutes(agents: AgentConfig[]): Record<string, string
 export function defaultAgentConfigs(availability: Record<string, boolean>): AgentConfig[] {
   return adapterKinds()
     .filter((kind) => availability[kind])
-    .map((kind) => ({ id: kind, kind, role: kind }));
+    .map((kind) => ({ id: defaultIdFor(kind), kind, role: defaultIdFor(kind) }));
 }
