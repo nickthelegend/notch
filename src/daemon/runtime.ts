@@ -51,6 +51,8 @@ import {
 } from "../core/registry.js";
 import { suggestHandoff } from "../core/suggestions.js";
 import { decisionStats, extractDecisions, type AgentDecision, type DecisionStats } from "../observability/decisions.js";
+import { buildSkillsBlock, loadSkills, type SkillManifest } from "../core/skills.js";
+import type { McpServerConfig } from "../types.js";
 import {
   diffSinceSnapshot,
   porcelainStatus,
@@ -203,6 +205,61 @@ export class ProjectRuntime {
     else delete budgets[agentId];
     writeProjectState(this.info.dir, { ...state, budgets });
     return budgets;
+  }
+
+  // ── Skills (SKILL.md context blocks injected into the briefing) ──
+
+  /** Where skills live: the project's own skills/, then the daemon's bundled skills/. */
+  private skillRoots(): string[] {
+    return [path.join(this.info.dir, "skills"), path.join(process.cwd(), "skills")];
+  }
+
+  /** All available skills with this project's enabled state. */
+  getSkills(): SkillManifest[] {
+    return loadSkills(this.skillRoots(), this.config.skills ?? {});
+  }
+
+  /** Enable/disable one skill for this project; returns the new enabled map. */
+  setSkillEnabled(id: string, on: boolean): Record<string, boolean> {
+    const skills = { ...(this.config.skills ?? {}) };
+    if (on) skills[id] = true;
+    else delete skills[id];
+    this.config.skills = skills;
+    this.saveConfig();
+    return skills;
+  }
+
+  /** The ACTIVE SKILLS block to prepend to a briefing, or "" when none are on. */
+  activeSkillsBlock(): string {
+    return buildSkillsBlock(this.getSkills());
+  }
+
+  // ── MCP servers ──
+
+  private static DEFAULT_MCPS: McpServerConfig[] = [
+    { name: "GitHub", url: "", description: "issues, PRs, code search", icon: "github" },
+    { name: "Supabase", url: "", description: "query, schema, migrations", icon: "database" },
+    { name: "SigNoz", url: "", description: "traces, metrics, alerts", icon: "chart" },
+    { name: "Linear", url: "", description: "issues, projects, cycles", icon: "linear" },
+    { name: "Slack", url: "", description: "messages, channels, users", icon: "slack" },
+    { name: "Filesystem", url: "", description: "read/write local files", icon: "folder" },
+  ];
+
+  /** Configured MCP servers, merged over the built-in suggestions (deduped by name). */
+  getMcps(): McpServerConfig[] {
+    const saved = this.config.mcps ?? [];
+    const byName = new Map(ProjectRuntime.DEFAULT_MCPS.map((m) => [m.name, { ...m }]));
+    for (const m of saved) byName.set(m.name, { ...(byName.get(m.name) ?? {}), ...m });
+    return [...byName.values()];
+  }
+
+  /** Add or update one MCP (by name); persists only the real (non-default) fields. */
+  upsertMcp(mcp: McpServerConfig): McpServerConfig[] {
+    const saved = (this.config.mcps ?? []).filter((m) => m.name !== mcp.name);
+    saved.push(mcp);
+    this.config.mcps = saved;
+    this.saveConfig();
+    return this.getMcps();
   }
 
   /** Agents currently paused by a firing SigNoz alert (self-heal quarantine). */
@@ -1040,7 +1097,10 @@ export class ProjectRuntime {
     await this.ensureStarted(target);
 
     const pendingBriefing = this.consumePendingBriefing(target);
-    const input: SendInput = pendingBriefing ? { text, briefing: pendingBriefing } : { text };
+    // Prepend the enabled skills so every turn carries them, alongside any
+    // one-shot handoff briefing. Empty when no skills are on.
+    const briefing = [this.activeSkillsBlock(), pendingBriefing].filter(Boolean).join("\n").trim() || undefined;
+    const input: SendInput = briefing ? { text, briefing } : { text };
     // Snapshot the tree so this prompt's changes can be attributed to it.
     this.preTurnTree.set(target, await porcelainStatus(this.info.dir));
     // Fire-and-notify: the turn runs in the background; progress streams

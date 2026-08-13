@@ -24,6 +24,7 @@ import { recordAgentEvent } from "../observability/index.js";
 import { triageAgent } from "../observability/triage.js";
 import { burnSeries, fetchSpans, healthScore, insightSpansFromLog, recentAgentErrors, traceSpans, type InsightSpan } from "../observability/insights.js";
 import { buildSnapshots } from "../observability/snapshots.js";
+import { suggestSkill } from "../core/skills.js";
 import { ADES, buildDefaultRoutes, defaultAgentConfigs, detectAdes } from "../core/ades.js";
 import { logbook, type LogLevel } from "../core/logbook.js";
 import { searchChats, searchCode } from "../core/search.js";
@@ -1160,6 +1161,40 @@ export class LoomDaemon {
         } catch (e) {
           res.status(409).json({ error: e instanceof Error ? e.message : String(e) });
         }
+      }),
+    );
+
+    // Skills: the SKILL.md context blocks; per-project enable state; a keyword
+    // suggestion for the current message (?suggest=<text>).
+    app.get(
+      "/api/projects/:id/skills",
+      withRuntime(async (rt, req, res) => {
+        const skills = rt.getSkills();
+        const suggest = req.query.suggest ? suggestSkill(String(req.query.suggest), skills) : null;
+        res.json({ skills, suggestion: suggest });
+      }),
+    );
+    app.put(
+      "/api/projects/:id/skills/:skillId",
+      withRuntime(async (rt, req, res) => {
+        const { enabled } = (req.body ?? {}) as { enabled?: boolean };
+        res.json({ skills: rt.setSkillEnabled(String(req.params.skillId), enabled !== false) });
+      }),
+    );
+
+    // MCP servers: the connect/toggle list. PATCH upserts one by name.
+    app.get(
+      "/api/projects/:id/mcps",
+      withRuntime(async (rt, _req, res) => {
+        res.json({ mcps: rt.getMcps() });
+      }),
+    );
+    app.patch(
+      "/api/projects/:id/mcps",
+      withRuntime(async (rt, req, res) => {
+        const body = (req.body ?? {}) as { mcp?: { name?: string } };
+        if (!body.mcp?.name) return void res.status(400).json({ error: "mcp.name required" });
+        res.json({ mcps: rt.upsertMcp(body.mcp as Parameters<typeof rt.upsertMcp>[0]) });
       }),
     );
 
