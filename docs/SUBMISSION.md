@@ -28,7 +28,8 @@ human stares at.
 | ✅ | 2-minute demo script | `docs/DEMO.md` |
 | ✅ | Observability docs + importable dashboard | `docs/observability.md`, `docs/signoz-dashboard.json` |
 | ⬜ | Screenshots | drop PNGs in `docs/screenshots/` (guide there) |
-| 🔶 | Native builds (apk / appimage / exe / dmg) | see `docs/BUILDS.md` — build commands + prerequisites |
+| ✅ | Desktop **dmg** built (arm64 + x64), daemon bundled | `desktop/dist/Notch-Desktop-0.1.0-*.dmg` |
+| 🔶 | exe / AppImage / apk | configs ready; need Windows/Linux/Docker or Expo — `docs/BUILDS.md` |
 
 ## Reproduce the headline demos
 

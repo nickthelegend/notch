@@ -33,6 +33,10 @@ docker run --rm -v "$(pwd)/..":/project -w /project/desktop \
   /bin/bash -c "npx electron-builder --linux AppImage --win nsis"
 ```
 
+**Built here:** `desktop/npm run dist` produced working, daemon-bundled dmgs for both arches —
+`desktop/dist/Notch-Desktop-0.1.0-arm64.dmg` (~114 MB) and `…-x64.dmg` (~119 MB). The exe and
+AppImage need their target OS / Docker (see the table + Docker recipe above); the config is ready.
+
 Output lands in `desktop/dist/`. Builds are unsigned (hackathon artifacts): the dmg sets
 `gatekeeperAssess:false`; on first open use right-click → Open (macOS) or "More info → Run
 anyway" (Windows SmartScreen).
