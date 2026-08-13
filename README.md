@@ -2,6 +2,7 @@
 
 [![ci](https://github.com/nickthelegend/notch/actions/workflows/ci.yml/badge.svg)](https://github.com/nickthelegend/notch/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![SigNoz skill PR](https://img.shields.io/badge/SigNoz%2Fagent--skills-PR%20%2376-orange)](https://github.com/SigNoz/agent-skills/pull/76)
 
 **Mission control for a fleet of coding agents — with the whole fleet observable in
 [SigNoz](https://signoz.io).** Every coding agent — Claude Code, Codex, OpenCode, Grok,
@@ -50,21 +51,72 @@ orchestration and ships it to **SigNoz** using the OpenTelemetry
 [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) — plus an
 in-app **Observatory** so you never have to leave the app to know what the fleet is doing.
 
+```mermaid
+flowchart LR
+  subgraph Fleet["Coding-agent fleet — ADEs"]
+    CC[Claude Code]
+    CX[Codex]
+    OC[OpenCode]
+    GK[Grok]
+  end
+  Fleet -->|turns · handoffs · routes · memory| D["Notch daemon<br/>baton · routes · brain"]
+  D -->|"OTLP/HTTP · gen_ai.* spans"| SN[("SigNoz<br/>ClickHouse")]
+  SN -->|read spans back| OB{{"Observatory<br/>Triage · Health · Burn · Replay · Waterfall"}}
+  SN -->|alert fires| WH["/api/webhooks/signoz"]
+  WH -->|"quarantine → failover → recheck → retry"| D
+  OB -.->|act on it| D
+```
+
+The write path is the top arrow (fleet → daemon → SigNoz). The two bottom arrows are the
+**read-back** — Notch querying its own spans to triage/score/self-heal the fleet.
+
 ### The Observatory
 
-A tab next to the Brain, four live views over the running project (real data, no mocks):
+A tab next to the Brain — **six live views** over the running project, all backed by real
+data (SigNoz spans / event log, no mocks). A persistent vitals strip (active agents, baton
+holder, spend, turns, tokens) sits above them, and **View in SigNoz** jumps to the traces.
 
-- **Canvas** — the *one brain* as a glowing hub linked to every agent, the **baton** drawn in
-  shuttle-fuchsia to whoever holds it, busy agents pulsing. Nodes are **draggable**.
-- **Graph** — the **baton/handoff DAG**: agents laid out in columns by handoff depth, with a
-  directional arrow for every pass of the baton. Draggable.
-- **Timeline** — the chronological trace: turns, handoffs, routes, memory folds, errors, and
-  decisions, each dotted by status with a relative timestamp.
-- **Metrics** — the baton path, handoff / route / event counts, and a per-agent fleet
-  breakdown (**cost · turns · tokens**).
+| View | What it shows | Source |
+|---|---|---|
+| **Canvas** | the *one brain* as a glowing hub linked to every agent, the **baton** drawn to whoever holds it, busy agents pulsing (draggable) | live state |
+| **Graph** | the **baton/handoff DAG** — agents in columns by handoff depth, an arrow per pass of the baton (draggable) | event log |
+| **Timeline** | the chronological trace — turns, handoffs, routes, memory folds, errors, and the **self-heal** intervention/recovery lines | event log |
+| **Metrics** | the baton path, handoff/route/event counts, and a per-agent fleet breakdown (cost · turns · tokens) with a **Health** badge and a **⚠ Triage** button per agent | `/metrics` + spans |
+| **Burn** | an SVG sparkline of per-agent cost/24h with a linear projection, and per-agent USD/day **budgets** | ClickHouse |
+| **Replay** | scrub the fleet's real turn **spans** frame by frame — model, tokens, cost, status — and open the **Trace Waterfall** | ClickHouse |
 
-A persistent vitals strip (active agents, baton holder, spend, turns, tokens) sits above all
-four, and a **View in SigNoz** link jumps straight to the traces.
+Three features read the spans **back out of SigNoz** — this is the agent-native part:
+
+- **Agent Health Score (0–100).** A per-agent badge from a pure, unit-tested formula over the
+  agent's own spans: four penalty buckets (error rate ≤40, latency ≤25, token bloat ≤20, recent
+  error ≤15) → healthy / degraded / unhealthy, with a click-through breakdown.
+- **Agent Self-Triage ("why did I fail?").** Pulls the agent's own `gen_ai.*` spans from SigNoz
+  (local-log fallback), finds the most recent failure and the **upstream handoff** that led into
+  it, and root-causes it — with LLM prose when an `ANTHROPIC_API_KEY` or signed-in `claude` CLI
+  is present, deterministic heuristic otherwise. Also shipped as a custom
+  [SigNoz skill (PR #76)](https://github.com/SigNoz/agent-skills/pull/76).
+- **Trace Waterfall + deep link.** Click a turn → its trace's spans as time-positioned bars,
+  with **View full trace in SigNoz ↗**.
+
+### Screenshots
+
+The Observatory is best seen live (`notch up` → open a project → **Observatory**). Captures of
+the Metrics/Health, Triage, Burn, Replay+Waterfall, and the raw SigNoz traces go in
+[`docs/screenshots/`](docs/screenshots/) — see its guide for the exact framing.
+
+### Self-heal: SigNoz alert → intervention → recovery
+
+Notch closes the loop the other way too. A SigNoz **alert** (error rate, latency, cost budget)
+posts to `POST /api/webhooks/signoz`:
+
+- **firing** → the failing agent is **quarantined** and the baton **fails over** to a fallback;
+- then a background **recheck loop** (every `NOTCH_HEAL_RECHECK_MS`, default 60s) asks SigNoz
+  whether the agent has stopped erroring and, if so, **hands the baton back** — retrying up to
+  `NOTCH_HEAL_MAX_RETRIES` (default 3) times;
+- a **resolved** alert is the fast lane for the same restoration.
+
+Metric breach → intervention → recovery → retry, all visible as green/violet lines in the
+Timeline.
 
 ### SigNoz export
 
@@ -707,6 +759,21 @@ npm run dev       # run the CLI from source (tsx)
 | `LOOM_NO_NOTIFY` | `1` silences desktop notifications. |
 | `LOOM_NO_PUSH` | `1` silences phone push. |
 | `LOOM_ROUTE_STEP_TIMEOUT_MS` | Per-hop route timeout. Default 45 min. |
+
+**Observability & self-heal:**
+
+| Variable | What it does |
+|---|---|
+| `NOTCH_OTEL_ENDPOINT` / `OTEL_EXPORTER_OTLP_ENDPOINT` / `SIGNOZ_ENDPOINT` | OTLP collector base URL. Default `http://localhost:4318`. |
+| `SIGNOZ_INGESTION_KEY` / `SIGNOZ_ACCESS_TOKEN` | Sent as `signoz-access-token` for SigNoz Cloud. |
+| `NOTCH_CLICKHOUSE_URL` | ClickHouse HTTP for the read-back (triage/health/burn/replay). Default `http://localhost:8123`. |
+| `DO_NOT_TRACK=1` · `NOTCH_TELEMETRY_DISABLED=1` · `NOTCH_OTEL=0` | Any one opts out of all export. |
+| `ANTHROPIC_API_KEY` | Enables LLM triage prose headlessly (else the signed-in `claude` CLI, else heuristic). |
+| `NOTCH_TRIAGE_MODEL` | Override the triage model. Default `claude-haiku-4-5-20251001`. |
+| `NOTCH_WEBHOOK_SECRET` | Shared secret required on `POST /api/webhooks/signoz` (via `?token=` or `x-notch-secret`). |
+| `NOTCH_HEAL_RECHECK_MS` | Self-heal recheck interval. Default `60000`. |
+| `NOTCH_HEAL_MAX_RETRIES` | Self-heal recheck attempts before giving up. Default `3`. |
+| `NOTCH_HEAL_DISABLED=1` | Turn off the background recheck loop (the resolved-alert fast lane still works). |
 
 Going the other way, Notch **sets `LOOM_TERMINAL=1`** inside every terminal it opens, so
 your shell profile can tell it's running in Notch's pane. (`LOOM_EXPO_PUSH_URL` and
