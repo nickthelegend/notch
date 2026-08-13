@@ -1,13 +1,13 @@
 {
-  "name": "loom-desktop",
+  "name": "notch-desktop",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Loom desktop — an Electron shell around the loom daemon's web app. See BUILD.md for why the build config looks like this.",
+  "description": "Notch desktop — an Electron shell around the Notch daemon's web app. See BUILD.md for why the build config looks like this.",
   "main": "main.js",
   "repository": {
     "type": "git",
-    "url": "https://github.com/nickthelegend/loom.git"
+    "url": "https://github.com/nickthelegend/notch.git"
   },
   "scripts": {
     "start": "electron .",
@@ -20,8 +20,8 @@
     "electron-builder": "^25.1.8"
   },
   "build": {
-    "appId": "dev.loom.desktop",
-    "productName": "Loom Desktop",
+    "appId": "dev.notch.desktop",
+    "productName": "Notch Desktop",
     "directories": {
       "buildResources": "build"
     },
@@ -59,7 +59,7 @@
       "entitlementsInherit": "build/entitlements.mac.plist"
     },
     "dmg": {
-      "artifactName": "Loom-Desktop-${version}-${arch}.${ext}"
+      "artifactName": "Notch-Desktop-${version}-${arch}.${ext}"
     },
     "win": {
       "target": "nsis",
