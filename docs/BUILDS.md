@@ -70,6 +70,9 @@ cd android && ./gradlew assembleRelease   # or assembleDebug to skip signing
 
 `ANDROID_HOME` must point at your SDK (e.g. `~/Library/Android/sdk`).
 
+**Built here:** the local gradle path produced `app/android/app/build/outputs/apk/debug/app-debug.apk`
+(~139 MB, `dev.notch.app`). `assembleRelease` needs a signing keystore; `assembleDebug` (above) does not.
+
 ## iOS (bonus)
 
 `npx eas build -p ios --profile preview` (needs an Apple account), or `app/ios/` via

@@ -27,9 +27,10 @@ human stares at.
 | ✅ | README with architecture diagram + env table | `README.md` |
 | ✅ | 2-minute demo script | `docs/DEMO.md` |
 | ✅ | Observability docs + importable dashboard | `docs/observability.md`, `docs/signoz-dashboard.json` |
-| ⬜ | Screenshots | drop PNGs in `docs/screenshots/` (guide there) |
+| ✅ | Screenshots | `docs/screenshots/*.png`, embedded in the README |
 | ✅ | Desktop **dmg** built (arm64 + x64), daemon bundled | `desktop/dist/Notch-Desktop-0.1.0-*.dmg` |
-| 🔶 | exe / AppImage / apk | configs ready; need Windows/Linux/Docker or Expo — `docs/BUILDS.md` |
+| ✅ | Android **apk** built | `app/android/app/build/outputs/apk/debug/app-debug.apk` (139 MB) |
+| 🔶 | exe / AppImage | not buildable on Apple Silicon (Docker/QEMU segfault); `.github/workflows/release.yml` builds them on CI |
 
 ## Reproduce the headline demos
 
