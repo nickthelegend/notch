@@ -68,7 +68,7 @@ jobs:
         if: ${{ env.EXPO_TOKEN == '' }}
         working-directory: app
         run: |
-          npm ci
+          npm install --no-audit --no-fund
           npx expo prebuild -p android --no-install
           cd android && ./gradlew assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
