@@ -12,6 +12,7 @@
  */
 
 import type { AgentConfig } from "../types.js";
+import { agyBin } from "../adapters/antigravity-cli.js";
 import { cliAvailable } from "../adapters/base.js";
 import { codexBin } from "../adapters/codex.js";
 import { grokBin } from "../adapters/grok.js";
@@ -86,11 +87,30 @@ export const ADES: AdeSpec[] = [
     },
   },
   {
+    kind: "antigravity-cli",
+    label: "Antigravity CLI",
+    tier: "adapter",
+    // Gemini flash is the token-saving default the CLI is here for; the pro and
+    // hosted-Claude/GPT ids are offered too, and the custom field is the real
+    // path when Google renames one. `agy models` prints the current list.
+    models: [
+      "gemini-3.6-flash-medium",
+      "gemini-3.6-flash-high",
+      "gemini-3.1-pro-high",
+      "claude-sonnet-4-6",
+      "gpt-oss-120b-medium",
+    ],
+    probe: async () => {
+      const bin = agyBin();
+      return bin ? cliAvailable(bin) : false;
+    },
+  },
+  {
     kind: "antigravity",
-    label: "Antigravity",
+    label: "Antigravity IDE",
     tier: "bridge",
-    // Presence is decided by the debugging port, not by a file on disk: an
-    // installed-but-closed Antigravity is not something Loom can drive.
+    // The GUI bridge: presence is decided by the debugging port, not by a file
+    // on disk, and it only watches. For a headless turn, use antigravity-cli.
     probe: async () => false,
   },
   {

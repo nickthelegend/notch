@@ -16,7 +16,7 @@
  * bar. Mobile keeps the single-column thread. See docs/design-system.md.
  */
 
-import { BRAND_SPRITE, BRAND_TITLES } from "./brand-icons.js";
+import { BRAND_ICON_ALIAS, BRAND_SPRITE, BRAND_TITLES } from "./brand-icons.js";
 
 export const APP_MANIFEST = {
   name: "Notch",
@@ -2048,16 +2048,19 @@ ${BRAND_SPRITE}
 
   // ---- ADE brand marks -----------------------------------------------------
   var BRAND_TITLES = ${JSON.stringify(BRAND_TITLES)};
+  var BRAND_ICON_ALIAS = ${JSON.stringify(BRAND_ICON_ALIAS)};
   /**
    * The agent's own logo, drawn from the sprite in <body>. Keyed by adapter
    * kind, not by the instance id — you can name an agent anything, but its
    * kind is what it actually is. An unknown kind (a custom adapter, "echo")
    * has no logo to show, so callers fall back to the hue monogram rather than
-   * guessing with someone else's brand.
+   * guessing with someone else's brand. Some kinds alias another's mark (the
+   * Antigravity CLI and IDE are one product, one <symbol>).
    */
   function brandMark(kind, cls){
     if (!kind || !BRAND_TITLES[kind]) return "";
-    return '<svg class="' + (cls || "brand") + '" aria-hidden="true"><use href="#brand-' + kind + '"></use></svg>';
+    var sym = BRAND_ICON_ALIAS[kind] || kind;
+    return '<svg class="' + (cls || "brand") + '" aria-hidden="true"><use href="#brand-' + sym + '"></use></svg>';
   }
   function hasBrand(kind){ return !!(kind && BRAND_TITLES[kind]); }
   /** Look up an agent's kind from the project payload (rows only carry ids). */
