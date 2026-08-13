@@ -95,6 +95,19 @@ Rules:
 Agent turn output to analyze:
 `;
 
+/**
+ * Truncate to a word boundary with an ellipsis — never mid-word. A decision
+ * title cut at a raw 60 chars reads as broken ("…Redis to store and"); cut at
+ * the last whole word with an ellipsis reads as intentional.
+ */
+function clip(s: string, max = 60): string {
+  const t = String(s ?? "").trim();
+  if (t.length <= max) return t;
+  const cut = t.slice(0, max);
+  const sp = cut.lastIndexOf(" ");
+  return (sp > max * 0.6 ? cut.slice(0, sp) : cut).replace(/[\s,;:.\-]+$/, "") + "…";
+}
+
 /** Coerce one loose object from the model into a well-formed RawDecision. */
 function normalizeRaw(d: Record<string, unknown>): RawDecision {
   const cat = String(d.category ?? "other") as DecisionCategory;
@@ -102,7 +115,7 @@ function normalizeRaw(d: Record<string, unknown>): RawDecision {
   const conf = Number(d.confidence);
   return {
     category: CATEGORIES.includes(cat) ? cat : "other",
-    title: String(d.title ?? "").slice(0, 60) || "decision",
+    title: clip(String(d.title ?? "")) || "decision",
     reasoning: String(d.reasoning ?? ""),
     confidence: Number.isFinite(conf) ? Math.max(0, Math.min(100, Math.round(conf))) : 70,
     alternatives: arr(d.alternatives).slice(0, 6),
@@ -136,17 +149,17 @@ export function extractDecisionsRegex(text: string): RawDecision[] {
   const usePattern = /I(?:'ll| will) (?:use|implement|create|build|add|go with|adopt) ([^.]+?) (?:because|since|as|so that) ([^.]+)\./gi;
   let m: RegExpExecArray | null;
   while ((m = usePattern.exec(text)) !== null) {
-    decisions.push({ ...base, category: "implementation", title: m[1]!.trim().slice(0, 60), reasoning: m[2]!.trim(), confidence: 75, alternatives: [] });
+    decisions.push({ ...base, category: "implementation", title: clip(m[1]!), reasoning: m[2]!.trim(), confidence: 75, alternatives: [] });
   }
 
   const insteadPattern = /[Ii]nstead of ([^,]+), I(?:'ll| will) ([^.]+)\./g;
   while ((m = insteadPattern.exec(text)) !== null) {
-    decisions.push({ ...base, category: "implementation", title: m[2]!.trim().slice(0, 60), reasoning: `Preferred over: ${m[1]!.trim()}`, confidence: 80, alternatives: [m[1]!.trim()] });
+    decisions.push({ ...base, category: "implementation", title: clip(m[2]!), reasoning: `Preferred over: ${m[1]!.trim()}`, confidence: 80, alternatives: [m[1]!.trim()] });
   }
 
   const choosePattern = /I(?:'ve| have)? (?:chose|decided|opted|picked)(?: to| for)? ([^.]+?)(?: (?:because|since|to) ([^.]+))?\./gi;
   while ((m = choosePattern.exec(text)) !== null) {
-    decisions.push({ ...base, category: "implementation", title: m[1]!.trim().slice(0, 60), reasoning: (m[2] ?? "chosen approach").trim(), confidence: 78, alternatives: [] });
+    decisions.push({ ...base, category: "implementation", title: clip(m[1]!), reasoning: (m[2] ?? "chosen approach").trim(), confidence: 78, alternatives: [] });
   }
 
   return decisions.slice(0, 5);

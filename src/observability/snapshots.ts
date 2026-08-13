@@ -41,7 +41,7 @@ function describeEvent(e: LoomEvent): string {
   const agent = e.agentId ?? String(p.agentId ?? "system");
   switch (e.kind) {
     case "run_complete": return `${agent} completed turn`;
-    case "handoff": return `baton · ${String(p.from ?? "?")} → ${String(p.to ?? "?")}`;
+    case "handoff": return p.from ? `baton · ${String(p.from)} → ${String(p.to ?? "—")}` : `baton · ${String(p.to ?? "agent")} takes it first`;
     case "error": return `${agent} errored: ${String(p.message ?? "").slice(0, 60)}`;
     case "route_started": return "route started";
     case "route_completed": return "route completed";
