@@ -75,6 +75,20 @@ export async function fetchSpans(project: string, opts: { agent?: string; limit?
   return (await chQuery(sql)).map(rowToSpan);
 }
 
+/** How many error spans an agent has emitted since `sinceMs` — the self-heal recheck signal. */
+export async function recentAgentErrors(project: string, agent: string, sinceMs: number): Promise<number> {
+  const proj = chLiteral(project);
+  const a = chLiteral(agent);
+  const sinceSec = Math.floor(Math.max(0, sinceMs) / 1000);
+  const sql = `SELECT count() AS n FROM ${SPAN_TABLE}
+    WHERE ${SERVICE} AND attributes_string['notch.project'] = '${proj}'
+      AND attributes_string['gen_ai.agent.id'] = '${a}'
+      AND status_code = 2
+      AND timestamp >= toDateTime(${sinceSec})`;
+  const rows = await chQuery(sql);
+  return Number(rows[0]?.n ?? 0);
+}
+
 /** Every span in one trace, oldest first — the waterfall's rows. */
 export async function traceSpans(traceId: string): Promise<InsightSpan[]> {
   const t = chLiteral(traceId);

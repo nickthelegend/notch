@@ -18,6 +18,7 @@ beforeAll(async () => {
   process.env.LOOM_HOME = tmpDir("home");
   process.env.LOOM_NO_NOTIFY = "1";
   delete process.env.NOTCH_WEBHOOK_SECRET;
+  process.env.NOTCH_HEAL_DISABLED = "1"; // the background recheck loop is exercised in its own test
   daemon = new LoomDaemon({ host: "127.0.0.1", port: 0 });
   const { host, port } = await daemon.listen();
   baseUrl = `http://${host}:${port}`;
@@ -27,6 +28,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await daemon.close();
+  delete process.env.NOTCH_HEAL_DISABLED;
 });
 
 describe("SigNoz alert -> baton intervention", () => {
@@ -84,6 +86,30 @@ describe("SigNoz alert -> baton intervention", () => {
 
     const { events } = await client.events(projectId, undefined, 100);
     expect(events.some((e) => e.kind === "status" && e.payload.state === "signoz_recovery" && e.payload.retried === true)).toBe(true);
+  });
+
+  it("auto-returns the baton on the recheck loop when the agent stops erroring", async () => {
+    // Enable the background loop with a fast recheck just for this test.
+    process.env.NOTCH_HEAL_RECHECK_MS = "60";
+    process.env.NOTCH_HEAL_MAX_RETRIES = "3";
+    delete process.env.NOTCH_HEAL_DISABLED;
+    try {
+      await client.handoff(projectId, "plannerbot");
+      await fetch(`${baseUrl}/api/webhooks/signoz`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ alerts: [{ status: "firing", labels: { alertname: "AgentErrorRateHigh", "notch.project": "heal", "gen_ai.agent.id": "plannerbot" } }] }),
+      });
+      // failover happened; the recheck loop (no new errors) then hands it back.
+      await waitUntil(async () => (await client.project(projectId)).project.holder !== "plannerbot", { timeoutMs: 4000 });
+      await waitUntil(async () => (await client.project(projectId)).project.holder === "plannerbot", { timeoutMs: 4000 });
+      const { events } = await client.events(projectId, undefined, 100);
+      expect(events.some((e) => e.kind === "status" && e.payload.state === "signoz_recovery" && e.payload.via === "recheck")).toBe(true);
+    } finally {
+      delete process.env.NOTCH_HEAL_RECHECK_MS;
+      delete process.env.NOTCH_HEAL_MAX_RETRIES;
+      process.env.NOTCH_HEAL_DISABLED = "1";
+    }
   });
 
   it("a resolved alert for an agent that was never quarantined is a no-op", async () => {
