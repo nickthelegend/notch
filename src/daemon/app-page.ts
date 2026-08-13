@@ -1252,6 +1252,88 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
   .wfbar{position:absolute;top:2px;height:12px;min-width:2px;border-radius:3px;background:var(--primary)}
   .wfbar.err{background:var(--err)}
   .wfms{flex:none;width:56px;text-align:right;font-family:var(--font-mono);font-size:10.5px;color:var(--muted-foreground)}
+  /* KAIRO dense metrics */
+  .kmgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px}
+  .kmcard{position:relative;overflow:hidden;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);padding:12px 14px}
+  .kmlabel{font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted-foreground);margin-bottom:5px}
+  .kmvalue{font-size:24px;font-weight:800;line-height:1;color:var(--foreground)}
+  .kmvalue .kmcost{color:var(--primary)}
+  .kmvalue .kmsm{font-size:13px;font-weight:600;display:inline-block;line-height:1.3}
+  .kmsub{font-size:10.5px;color:var(--muted-foreground);margin-top:4px}
+  .kmsparkwrap{position:absolute;top:10px;right:10px;opacity:.7}
+  .kmspark.tok{color:var(--primary)} .kmspark.cost{color:var(--thread)} .kmspark.blue{color:var(--accentBlue)}
+  .kmbar{height:4px;border-radius:99px;background:var(--secondary);overflow:hidden;margin-top:8px}
+  .kmbarfill{height:100%;background:var(--primary);border-radius:99px}
+  .kmagents{margin-bottom:18px;border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;background:var(--card)}
+  .kmarow{display:grid;grid-template-columns:110px 1fr 48px;align-items:center;gap:10px;margin-top:7px}
+  .kmaname{font-size:11.5px;color:var(--foreground);font-family:var(--font-mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .kmabarwrap{height:6px;background:var(--secondary);border-radius:99px;overflow:hidden}
+  .kmabar{display:block;height:100%;background:var(--primary);border-radius:99px}
+  .kmatok{font-size:10.5px;color:var(--muted-foreground);text-align:right;font-family:var(--font-mono)}
+  @media(max-width:900px){.kmgrid{grid-template-columns:repeat(2,1fr)}}
+  /* Decision Explorer */
+  .decheader{display:flex;align-items:baseline;gap:10px;margin-bottom:10px}
+  .declabel{font-size:11px;letter-spacing:.08em;color:var(--muted-foreground)}
+  .deccount{font-size:11px;color:var(--primary)}
+  .decfilters{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+  .decchip{appearance:none;font:inherit;font-size:11px;padding:3px 11px;border-radius:99px;border:1px solid var(--border);background:transparent;color:var(--muted-foreground);cursor:pointer}
+  .decchip.on,.decchip:hover{border-color:var(--primary);color:var(--primary);background:color-mix(in srgb,var(--primary) 10%,transparent)}
+  .declayout{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
+  .declist{display:flex;flex-direction:column;gap:8px;max-height:520px;overflow:auto}
+  .decdetail{border:1px solid var(--border);border-radius:var(--radius);background:var(--card);padding:16px;min-height:200px;position:sticky;top:0}
+  .deccard{border:1px solid var(--border);border-radius:var(--radius);background:var(--card);padding:11px 13px;cursor:pointer;transition:border-color .15s}
+  .deccard:hover,.deccard.sel{border-color:var(--primary)}
+  .decchd{display:flex;justify-content:space-between;margin-bottom:4px}
+  .deccat{font-size:9.5px;letter-spacing:.09em;font-weight:700}
+  .decconf{font-size:11px;color:var(--muted-foreground);font-family:var(--font-mono)}
+  .decctitle{font-size:13px;font-weight:600;margin-bottom:3px}
+  .deccmeta{font-size:10.5px;color:var(--muted-foreground);font-family:var(--font-mono)}
+  .decsl{font-size:9.5px;letter-spacing:.1em;color:var(--muted-foreground);margin:14px 0 5px}
+  .decsl:first-child{margin-top:0}
+  .decdt{font-size:15px;font-weight:700}
+  .decdtext{font-size:13px;line-height:1.55;color:var(--foreground)}
+  .decalt{font-size:12px;color:var(--muted-foreground);padding:2px 0}
+  .decconfbar{height:6px;background:var(--secondary);border-radius:99px;overflow:hidden}
+  .decconffill{height:100%;background:var(--primary);border-radius:99px}
+  .decsub2{font-size:10.5px;color:var(--muted-foreground);font-family:var(--font-mono);margin-top:4px}
+  .decfile,.decart{font-size:11.5px;font-family:var(--font-mono);color:var(--foreground);padding:2px 0}
+  /* Timeline decision line */
+  .obtl.decision{cursor:pointer;border-left:2px solid var(--primary);padding-left:8px;margin-left:-10px}
+  .obtlconf{font-size:9.5px;color:var(--muted-foreground);font-family:var(--font-mono)}
+  /* Time-Travel Replay */
+  .ttheader{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+  .ttctrls{display:flex;gap:8px}
+  .ttbtn{appearance:none;font:inherit;font-size:13px;padding:6px 14px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--foreground);cursor:pointer}
+  .ttbtn:hover{border-color:var(--primary);color:var(--primary)}
+  .ttbtn.ttplay{background:var(--primary);border-color:var(--primary);color:var(--primary-foreground,#fff)}
+  .ttframe{font-size:12px;color:var(--muted-foreground);font-family:var(--font-mono)}
+  .tttimeline{margin-bottom:18px}
+  .ttscrub{width:100%;accent-color:var(--primary);margin-bottom:4px}
+  .ttmarkers{position:relative;height:8px}
+  .ttmarker{position:absolute;top:0;width:2px;height:8px;border-radius:1px;transform:translateX(-50%)}
+  .ttbody{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+  .ttsec{margin-bottom:16px}
+  .ttsl{font-size:9.5px;letter-spacing:.1em;color:var(--muted-foreground);margin-bottom:7px}
+  .ttbaton{font-size:18px;font-weight:800;color:var(--primary)}
+  .tttime{font-size:10.5px;color:var(--muted-foreground);font-family:var(--font-mono);margin-top:2px}
+  .ttarow{display:flex;align-items:center;gap:8px;font-size:12px;margin-bottom:5px}
+  .ttdot{width:6px;height:6px;border-radius:50%;flex:none}
+  .tt-active{background:var(--primary);box-shadow:0 0 6px var(--primary)} .tt-idle{background:var(--muted-foreground)} .tt-errored{background:var(--err)} .tt-waiting{background:var(--warn)}
+  .ttaname{flex:1;color:var(--foreground);font-family:var(--font-mono)}
+  .ttaturns,.ttacost{color:var(--muted-foreground);font-family:var(--font-mono);font-size:11px}
+  .ttdc{font-size:12.5px;margin-bottom:6px;color:var(--foreground)}
+  .ttdi{display:flex;gap:8px;font-size:11px;margin-bottom:3px}
+  .ttdcat{color:var(--primary);text-transform:uppercase;font-size:9.5px;letter-spacing:.06em}
+  .ttdt{color:var(--muted-foreground)}
+  .ttfact{font-size:11px;color:var(--muted-foreground);padding:2px 0}
+  .ttlm{font-size:11px;background:var(--secondary);padding:8px 10px;border-radius:8px;line-height:1.4}
+  .ttlma{color:var(--primary);font-weight:600;margin-right:4px}
+  .ttevcard{border:1px solid var(--border);border-radius:var(--radius);background:var(--card);padding:16px;margin-bottom:16px}
+  .ttevtype{font-size:9.5px;letter-spacing:.1em;font-weight:700;margin-bottom:6px}
+  .ttevdesc{font-size:15px;font-weight:600;margin-bottom:8px}
+  .ttevmeta{font-size:11.5px;color:var(--muted-foreground);font-family:var(--font-mono)}
+  .ttprogbar{height:6px;background:var(--secondary);border-radius:99px;overflow:hidden;margin-bottom:4px}
+  .ttprogfill{height:100%;background:var(--primary);border-radius:99px;transition:width .3s}
 
   /* ── Board (work flowing from working → needs you → review → merge) ── */
   .boardview{display:flex;flex-direction:column;gap:14px;height:100%}
@@ -2470,6 +2552,7 @@ ${BRAND_SPRITE}
         api("/api/projects/" + p.id + "/insights/health").catch(function(){ return {}; })
       ]).then(function(res){
         state.obHealth = res[2] || {};
+        state.obKairo = (res[0] && res[0].kairo) || {};
         renderObservatory(el, p, (res[0] && res[0].metrics) || {}, (res[1] && res[1].events) || []);
       });
     }
@@ -2489,16 +2572,18 @@ ${BRAND_SPRITE}
         card("Spend", money(totalUsd), "across all agents", true) +
         card("Turns", String(turns), "completed") +
         card("Tokens", tokfmt(tin + tout), tokfmt(tin) + " in \\u00b7 " + tokfmt(tout) + " out");
-      var VIEWS = [["canvas", "Canvas"], ["graph", "Graph"], ["timeline", "Timeline"], ["metrics", "Metrics"], ["burn", "Burn"], ["replay", "Replay"]];
+      var VIEWS = [["canvas", "Canvas"], ["graph", "Graph"], ["timeline", "Timeline"], ["metrics", "Metrics"], ["decisions", "Decisions"], ["burn", "Burn"], ["replay", "Replay"], ["travel", "Time Travel"]];
       var tabs = VIEWS.map(function(v){
         return '<button class="obtab' + (state.obView === v[0] ? " on" : "") + '" data-obv="' + v[0] + '">' + esc(v[1]) + "</button>";
       }).join("");
       var body;
       if (state.obView === "graph") body = observatoryGraph(agents, p.holder, events, byAgent);
       else if (state.obView === "timeline") body = observatoryTimeline(events);
-      else if (state.obView === "metrics") body = observatoryMetricsDetail(p, events, byAgent, state.obHealth || {});
+      else if (state.obView === "metrics") body = renderKairoMetrics(state.obKairo || {}) + observatoryMetricsDetail(p, events, byAgent, state.obHealth || {});
+      else if (state.obView === "decisions") body = '<div id="obdecisions" class="obasync">' + LOADER + "</div>";
       else if (state.obView === "burn") body = '<div id="obburn" class="obasync">' + LOADER + "</div>";
       else if (state.obView === "replay") body = '<div id="obreplay" class="obasync">' + LOADER + "</div>";
+      else if (state.obView === "travel") body = '<div id="obtravel" class="obasync">' + LOADER + "</div>";
       else body = '<div class="obcanvaswrap">' + observatoryCanvas(agents, p.holder, byAgent) + "</div>";
       el.innerHTML =
         '<div class="obhead"><div class="obtitle">' + ICONS.telescope +
@@ -2517,9 +2602,15 @@ ${BRAND_SPRITE}
         if (!b.getAttribute("data-health")) return;
         b.onclick = function(ev){ ev.stopPropagation(); openHealth(b.getAttribute("data-health")); };
       });
+      // Clicking a decision line in the Timeline jumps to the Decision Explorer.
+      Array.prototype.forEach.call(el.querySelectorAll(".obtl.decision[data-decid]"), function(li){
+        li.onclick = function(){ state.obPendingDecision = li.getAttribute("data-decid"); state.obView = "decisions"; renderObservatory(el, p, m, events); };
+      });
       if (state.obView === "canvas" || state.obView === "graph") wireObservatoryDrag(el);
       if (state.obView === "burn") observatoryBurn(p);
       if (state.obView === "replay") observatoryReplay(p);
+      if (state.obView === "decisions") observatoryDecisions(p);
+      if (state.obView === "travel") observatoryTravel(p);
     }
     // "Why did I fail?" — pull the agent's own traces and root-cause them.
     function openTriage(p, agent){
@@ -2693,6 +2784,139 @@ ${BRAND_SPRITE}
       }).catch(function(){ var body = scrim.querySelector(".modalbody"); if (body) body.innerHTML = '<div class="obsub">Trace unavailable \\u2014 SigNoz unreachable.</div>' + signozLink(traceId); });
     }
     function signozLink(traceId){ return '<a class="rpsignoz wide" href="' + signozTraceUrl(traceId) + '" target="_blank" rel="noreferrer">View full trace in SigNoz \\u2197</a>'; }
+    // ---- KAIRO-style dense metrics panels (above the fleet table) ----------
+    function fmtMs(ms){ ms = Number(ms) || 0; if (ms < 1000) return ms + "ms"; if (ms < 60000) return (ms / 1000).toFixed(1) + "s"; return Math.floor(ms / 60000) + "m " + Math.round((ms % 60000) / 1000) + "s"; }
+    function kmSpark(values, cls){
+      values = values || []; if (!values.length) return "";
+      var max = Math.max.apply(null, values.concat([1])), w = 78, h = 22, n = values.length;
+      var pts = values.map(function(v, i){ var x = (n <= 1 ? w / 2 : (i / (n - 1)) * w); var y = h - (v / max) * (h - 2) - 1; return x.toFixed(1) + "," + y.toFixed(1); }).join(" ");
+      return '<svg width="' + w + '" height="' + h + '" class="kmspark ' + cls + '"><polyline points="' + pts + '" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
+    }
+    function renderKairoMetrics(k){
+      if (!k || k.agentsSpawned == null) return "";
+      function c(label, val, sub, extra){ return '<div class="kmcard"><div class="kmlabel">' + label + '</div><div class="kmvalue">' + val + '</div><div class="kmsub">' + sub + "</div>" + (extra || "") + "</div>"; }
+      var totalTok = (k.totalTokensIn || 0) + (k.totalTokensOut || 0);
+      var grid = '<div class="kmgrid">' +
+        c("Agents spawned", k.agentsSpawned || 0, (k.turnsCompleted || 0) + " turns", '<div class="kmsparkwrap tok">' + kmSpark(k.tokenSparkline, "tok") + "</div>") +
+        c("Files", k.filesCreated || 0, (k.filesModified || 0) + " changes", '<div class="kmsparkwrap cost">' + kmSpark(k.costSparkline, "cost") + "</div>") +
+        c("Avg turn time", fmtMs(k.avgReasoningTimeMs), "reasoning time") +
+        c("Token usage", tokfmt(totalTok), tokfmt(k.totalTokensIn) + "\\u2191 " + tokfmt(k.totalTokensOut) + "\\u2193", '<div class="kmsparkwrap blue">' + kmSpark(k.tokenSparkline, "blue") + "</div>") +
+        c("Est. cost", '<span class="kmcost">' + money(k.totalCostUsd || 0) + "</span>", "from CLI usage") +
+        c("Critical path", '<span class="kmsm">' + (k.criticalPath && k.criticalPath.length ? esc(k.criticalPath.join(" \\u2192 ")) : "\\u2014") + "</span>", (k.decisionsRecorded || 0) + " decisions") +
+        c("Avg confidence", (k.avgConfidence || 0) + "%", (k.decisionsRecorded || 0) + " decisions", '<div class="kmbar"><div class="kmbarfill" style="width:' + (k.avgConfidence || 0) + '%"></div></div>') +
+        c("Retries", k.retriesTotal || 0, "errors + route fails") + "</div>";
+      var tba = k.tokensByAgent || {}, names = Object.keys(tba).sort(function(a, b){ return tba[b] - tba[a]; });
+      var bars = names.map(function(a){
+        var pct = totalTok ? Math.round((tba[a] / totalTok) * 100) : 0;
+        return '<div class="kmarow"><span class="kmaname">' + esc(a) + '</span><span class="kmabarwrap"><span class="kmabar" style="width:' + pct + '%"></span></span><span class="kmatok">' + tokfmt(tba[a]) + "</span></div>";
+      }).join("");
+      return grid + (names.length ? '<div class="kmagents"><div class="kmlabel">Tokens by agent</div>' + bars + "</div>" : "");
+    }
+    // ---- Decision Explorer (KAIRO Decisions tab) ---------------------------
+    function decCatColor(cat){ return ({ architecture: "var(--primary)", design: "var(--thread)", implementation: "var(--accentBlue)", fix: "var(--err)", refactor: "var(--warn)", test: "var(--ok)" })[cat] || "var(--muted-foreground)"; }
+    function renderDecisionCard(d){
+      return '<div class="deccard" data-id="' + esc(d.id) + '" data-agent="' + esc(d.agentId) + '"><div class="decchd"><span class="deccat" style="color:' + decCatColor(d.category) + '">' + esc((d.category || "").toUpperCase()) + '</span><span class="decconf">' + (d.confidence || 0) + '%</span></div><div class="decctitle">' + esc(d.title) + '</div><div class="deccmeta">' + esc(d.agentId) + " \\u00b7 " + esc(d.agentRole) + "</div></div>";
+    }
+    function renderDecisionDetail(d){
+      var alts = (d.alternatives || []).length ? '<div class="decsl">ALTERNATIVES</div>' + d.alternatives.map(function(a){ return '<div class="decalt">\\u25cb ' + esc(a) + "</div>"; }).join("") : "";
+      var files = (d.filesCreated || []).concat(d.filesModified || []);
+      var filesH = files.length ? '<div class="decsl">FILES</div>' + files.map(function(f){ return '<div class="decfile">\\u25a1 ' + esc(f) + "</div>"; }).join("") : "";
+      var arts = (d.artifactNames || []).length ? '<div class="decsl">ARTIFACTS</div>' + d.artifactNames.map(function(a){ return '<div class="decart">\\u25c6 ' + esc(a) + "</div>"; }).join("") : "";
+      return '<div class="decsl">DECISION</div><div class="decdt">' + esc(d.title) + "</div>" +
+        '<div class="decsl">REASON</div><div class="decdtext">' + esc(d.reasoning || "\\u2014") + "</div>" + alts +
+        '<div class="decsl">CONFIDENCE</div><div class="decconfbar"><div class="decconffill" style="width:' + (d.confidence || 0) + '%"></div></div>' +
+        '<div class="decsub2">' + (d.confidence || 0) + "% \\u00b7 " + tokfmt(d.tokensUsed) + " tok \\u00b7 " + money(d.costUsd || 0) + "</div>" + filesH + arts;
+    }
+    function selectDecision(id){
+      var d = (state.obDecisions || {})[id]; if (!d) return;
+      Array.prototype.forEach.call(document.querySelectorAll(".deccard"), function(c){ c.classList.toggle("sel", c.getAttribute("data-id") === id); });
+      var el = document.getElementById("decdetail"); if (el) el.innerHTML = renderDecisionDetail(d);
+    }
+    function observatoryDecisions(p){
+      var host = document.getElementById("obdecisions"); if (!host) return;
+      api("/api/projects/" + p.id + "/decisions").then(function(r){
+        var decisions = r.decisions || [], stats = r.stats || {};
+        state.obDecisions = {}; decisions.forEach(function(d){ state.obDecisions[d.id] = d; });
+        if (!decisions.length){ host.innerHTML = '<div class="obnote">No decisions captured yet. Run a turn \\u2014 with <code>ANTHROPIC_API_KEY</code> set for rich extraction \\u2014 and each agent\\u2019s choices appear here.</div>'; return; }
+        var agents = []; decisions.forEach(function(d){ if (agents.indexOf(d.agentId) < 0) agents.push(d.agentId); });
+        var chips = '<button class="decchip on" data-filter="all">All</button>' + agents.map(function(a){ return '<button class="decchip" data-filter="' + esc(a) + '">' + esc(a) + "</button>"; }).join("");
+        host.innerHTML = '<div class="decheader"><span class="declabel">DECISIONS</span><span class="deccount">' + (stats.total || decisions.length) + " recorded \\u00b7 avg " + (stats.avgConfidence || 0) + "%</span></div>" +
+          '<div class="decfilters">' + chips + "</div>" +
+          '<div class="declayout"><div class="declist" id="declist">' + decisions.map(renderDecisionCard).join("") + '</div><div class="decdetail" id="decdetail"><div class="obsub" style="padding:20px;text-align:center">Select a decision to see its reasoning, alternatives, and files.</div></div></div>';
+        Array.prototype.forEach.call(host.querySelectorAll(".decchip"), function(chip){
+          chip.onclick = function(){
+            Array.prototype.forEach.call(host.querySelectorAll(".decchip"), function(c){ c.classList.remove("on"); }); chip.classList.add("on");
+            var f = chip.getAttribute("data-filter");
+            Array.prototype.forEach.call(host.querySelectorAll(".deccard"), function(card){ card.style.display = (f === "all" || card.getAttribute("data-agent") === f) ? "" : "none"; });
+          };
+        });
+        Array.prototype.forEach.call(host.querySelectorAll(".deccard"), function(card){ card.onclick = function(){ selectDecision(card.getAttribute("data-id")); }; });
+        var pending = state.obPendingDecision; state.obPendingDecision = null;
+        if (pending && state.obDecisions[pending]) selectDecision(pending);
+        else if (decisions[0]) selectDecision(decisions[0].id);
+      }).catch(function(){ host.innerHTML = '<div class="obnote">Decisions unavailable.</div>'; });
+    }
+    // ---- Time-Travel Replay (KAIRO Replay — the time machine) --------------
+    function observatoryTravel(p){
+      var host = document.getElementById("obtravel"); if (!host) return;
+      Promise.all([
+        api("/api/projects/" + p.id + "/snapshots").catch(function(){ return {}; }),
+        api("/api/projects/" + p.id + "/decisions").catch(function(){ return {}; })
+      ]).then(function(res){
+        var snaps = (res[0] && res[0].snapshots) || [], decs = (res[1] && res[1].decisions) || [];
+        if (!snaps.length){ host.innerHTML = '<div class="obnote">No replay data yet \\u2014 run some agents to build a timeline.</div>'; return; }
+        var byId = {}; decs.forEach(function(d){ byId[d.id] = d; });
+        state.obTravel = { snaps: snaps, byId: byId, i: 0, timer: null };
+        var markers = snaps.map(function(s, i){
+          var pct = (snaps.length <= 1 ? 0 : (i / (snaps.length - 1)) * 100);
+          var col = s.triggerEvent.type === "error" ? "var(--err)" : s.triggerEvent.type === "decision" ? "var(--primary)" : "var(--border)";
+          return '<div class="ttmarker" style="left:' + pct.toFixed(1) + "%;background:" + col + '" title="' + esc(s.triggerEvent.description) + '"></div>';
+        }).join("");
+        host.innerHTML =
+          '<div class="ttheader"><div class="ttctrls"><button class="ttbtn" id="ttprev">\\u25c0</button><button class="ttbtn ttplay" id="ttplay">\\u25b6 Play</button><button class="ttbtn" id="ttnext">\\u25b6</button></div><div class="ttframe">Frame <span id="ttnum">1</span> / ' + snaps.length + "</div></div>" +
+          '<div class="tttimeline"><input type="range" class="ttscrub" id="ttscrub" min="0" max="' + (snaps.length - 1) + '" value="0"><div class="ttmarkers">' + markers + "</div></div>" +
+          '<div class="ttbody"><div class="ttstate" id="ttstate"></div><div class="ttevent" id="ttevent"></div></div>';
+        var scrub = host.querySelector("#ttscrub");
+        function go(i){ state.obTravel.i = i; scrub.value = i; updateTravelFrame(); }
+        scrub.oninput = function(){ go(Number(scrub.value)); };
+        host.querySelector("#ttprev").onclick = function(){ if (state.obTravel.i > 0) go(state.obTravel.i - 1); };
+        host.querySelector("#ttnext").onclick = function(){ if (state.obTravel.i < snaps.length - 1) go(state.obTravel.i + 1); };
+        host.querySelector("#ttplay").onclick = function(){
+          var t = state.obTravel, btn = this;
+          if (t.timer){ clearInterval(t.timer); t.timer = null; btn.textContent = "\\u25b6 Play"; }
+          else { btn.textContent = "\\u23f8 Pause"; t.timer = setInterval(function(){ if (t.i < snaps.length - 1) go(t.i + 1); else { clearInterval(t.timer); t.timer = null; btn.textContent = "\\u25b6 Play"; } }, 800); }
+        };
+        updateTravelFrame();
+      }).catch(function(){ host.innerHTML = '<div class="obnote">Time-travel unavailable.</div>'; });
+    }
+    function updateTravelFrame(){
+      var t = state.obTravel; if (!t) return; var s = t.snaps[t.i]; if (!s) return;
+      var numEl = document.getElementById("ttnum"); if (numEl) numEl.textContent = String(t.i + 1);
+      var decsAt = (s.decisionsAtPoint || []).map(function(id){ return t.byId[id]; }).filter(Boolean);
+      var stEl = document.getElementById("ttstate");
+      if (stEl){
+        var agentRows = Object.keys(s.agentStates || {}).map(function(a){
+          var st = s.agentStates[a];
+          return '<div class="ttarow"><span class="ttdot tt-' + st.status + '"></span><span class="ttaname">' + esc(a) + '</span><span class="ttaturns">' + st.turnsCompleted + ' turns</span><span class="ttacost">' + money(st.costUsd) + "</span></div>";
+        }).join("");
+        var decItems = decsAt.slice(-3).map(function(d){ return '<div class="ttdi"><span class="ttdcat">' + esc(d.category) + '</span><span class="ttdt">' + esc(d.title) + "</span></div>"; }).join("");
+        var facts = (s.memorySnapshot.keyFacts || []).map(function(f){ return '<div class="ttfact">\\u00b7 ' + esc(f) + "</div>"; }).join("");
+        var lm = s.lastMessage;
+        stEl.innerHTML =
+          '<div class="ttsec"><div class="ttsl">BATON AT THIS MOMENT</div><div class="ttbaton">' + esc(s.batonHolder) + '</div><div class="tttime">' + new Date(s.timestampMs).toLocaleTimeString() + "</div></div>" +
+          '<div class="ttsec"><div class="ttsl">FLEET STATE</div>' + (agentRows || '<div class="obsub">no agents yet</div>') + "</div>" +
+          '<div class="ttsec"><div class="ttsl">DECISIONS SO FAR</div><div class="ttdc">' + decsAt.length + " recorded</div>" + decItems + "</div>" +
+          '<div class="ttsec"><div class="ttsl">MEMORY AT THIS POINT</div><div class="ttdc">' + s.memorySnapshot.decisionsCount + " items</div>" + facts + "</div>" +
+          '<div class="ttsec"><div class="ttsl">THREAD</div><div class="ttdc">' + s.threadLength + " messages</div>" + (lm ? '<div class="ttlm"><span class="ttlma">' + esc(lm.agentId) + ":</span> " + esc((lm.text || "").slice(0, 120)) + "</div>" : "") + "</div>";
+      }
+      var evEl = document.getElementById("ttevent");
+      if (evEl){
+        var col = s.triggerEvent.type === "error" ? "var(--err)" : s.triggerEvent.type === "decision" ? "var(--primary)" : "var(--thread)";
+        var pct = t.snaps.length > 1 ? Math.round((t.i / (t.snaps.length - 1)) * 100) : 100;
+        evEl.innerHTML = '<div class="ttevcard" style="border-color:' + col + '"><div class="ttevtype" style="color:' + col + '">' + esc(String(s.triggerEvent.type).toUpperCase().replace(/_/g, " ")) + '</div><div class="ttevdesc">' + esc(s.triggerEvent.description) + '</div><div class="ttevmeta">Agent: ' + esc(s.triggerEvent.agentId) + " \\u00b7 " + new Date(s.timestampMs).toLocaleTimeString() + "</div></div>" +
+          '<div class="ttprog"><div class="ttsl">RUN PROGRESS</div><div class="ttprogbar"><div class="ttprogfill" style="width:' + pct + '%"></div></div><div class="ttdc">' + pct + "% complete</div></div>";
+      }
+    }
     // GRAPH: the baton/handoff DAG — agents in columns by handoff depth, edges
     // are the passes of the baton. Draggable, like the canvas.
     function observatoryGraph(agents, holder, events, byAgent){
@@ -2755,13 +2979,15 @@ ${BRAND_SPRITE}
         memory_forget: ["mem", 1], needs_input: ["warn", 1], error: ["err", 1], decision: ["info", 1] };
       var isHeal = function(e){ return e.kind === "status" && (e.payload || {}).state === "signoz_intervention"; };
       var isRecover = function(e){ return e.kind === "status" && (e.payload || {}).state === "signoz_recovery"; };
-      var evs = (events || []).filter(function(e){ return KINDS[e.kind] || isHeal(e) || isRecover(e); }).sort(function(a, b){ return a.ts - b.ts; });
+      var isDecision = function(e){ return e.kind === "status" && (e.payload || {}).state === "agent_decision"; };
+      var evs = (events || []).filter(function(e){ return KINDS[e.kind] || isHeal(e) || isRecover(e) || isDecision(e); }).sort(function(a, b){ return a.ts - b.ts; });
       if (!evs.length) return '<div class="obnote">No fleet events yet. Run a turn and the trace fills in.</div>';
       var base = evs[0].ts;
       var rows = evs.map(function(e){
-        var p = e.payload || {}, cls = isHeal(e) ? "heal" : isRecover(e) ? "ok" : KINDS[e.kind][0], label;
+        var p = e.payload || {}, cls = isHeal(e) ? "heal" : isRecover(e) ? "ok" : isDecision(e) ? "decision" : KINDS[e.kind][0], label, extra = "";
         if (isHeal(e)) label = "\\u26a1 SigNoz alert \\u00b7 " + esc(p.alert || "alert") + " \\u2192 baton forced off " + esc(e.agentId || "agent") + (p.fallback ? " to " + esc(p.fallback) : "");
         else if (isRecover(e)) label = "\\u2713 SigNoz recovery \\u00b7 " + esc(p.alert || "alert") + " resolved \\u2192 " + (p.retried ? "baton retried on " + esc(e.agentId || "agent") : "quarantine lifted on " + esc(e.agentId || "agent"));
+        else if (isDecision(e)){ label = "\\ud83d\\udca1 " + esc(e.agentId || "agent") + " decided: <strong>" + esc(p.title || "decision") + '</strong> <span class="obtlconf">' + (p.confidence || 0) + "%</span>"; extra = ' data-decid="' + esc(p.decisionId || "") + '"'; }
         else if (e.kind === "run_complete") label = esc(e.agentId || "agent") + " finished a turn" + (p.durationMs ? " \\u00b7 " + (Math.round(p.durationMs / 100) / 10) + "s" : "");
         else if (e.kind === "handoff") label = "baton \\u00b7 " + esc(p.from || "?") + " \\u2192 " + esc(p.to || "?");
         else if (e.kind.indexOf("route_") === 0) label = "route " + e.kind.slice(6) + (p.error ? " \\u00b7 " + esc(p.error) : "");
@@ -2771,7 +2997,7 @@ ${BRAND_SPRITE}
         else label = "decision \\u00b7 " + esc(trunc(p.text || "", 56));
         var secs = Math.max(0, Math.round((e.ts - base) / 1000));
         var t = secs < 60 ? secs + "s" : Math.floor(secs / 60) + "m " + (secs % 60) + "s";
-        return '<li class="obtl ' + cls + '"><span class="obtldot"></span><span class="obtllabel">' + label + '</span><span class="obtltime">' + t + "</span></li>";
+        return '<li class="obtl ' + cls + '"' + extra + '><span class="obtldot"></span><span class="obtllabel">' + label + '</span><span class="obtltime">' + t + "</span></li>";
       }).join("");
       return '<ol class="obtimeline">' + rows + "</ol>";
     }
