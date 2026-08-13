@@ -140,6 +140,11 @@ retries, with sparklines and per-agent token bars:
 
 ![KAIRO metrics](docs/screenshots/kairo-metrics.png)
 
+**The composer** — an **AUTO** chip (dynamic routing) or a specific agent, MCP + Skills slots,
+and a smart **skill suggestion** banner that surfaces a relevant skill as you type:
+
+![Composer with skill suggestion + Skills panel](docs/screenshots/composer-skills.png)
+
 ### Self-heal: SigNoz alert → intervention → recovery
 
 Notch closes the loop the other way too. A SigNoz **alert** (error rate, latency, cost budget)
