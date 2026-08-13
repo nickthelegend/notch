@@ -72,7 +72,7 @@ The write path is the top arrow (fleet → daemon → SigNoz). The two bottom ar
 
 ### The Observatory
 
-A tab next to the Brain — **six live views** over the running project, all backed by real
+A tab next to the Brain — **eight live views** over the running project, all backed by real
 data (SigNoz spans / event log, no mocks). A persistent vitals strip (active agents, baton
 holder, spend, turns, tokens) sits above them, and **View in SigNoz** jumps to the traces.
 
@@ -80,10 +80,17 @@ holder, spend, turns, tokens) sits above them, and **View in SigNoz** jumps to t
 |---|---|---|
 | **Canvas** | the *one brain* as a glowing hub linked to every agent, the **baton** drawn to whoever holds it, busy agents pulsing (draggable) | live state |
 | **Graph** | the **baton/handoff DAG** — agents in columns by handoff depth, an arrow per pass of the baton (draggable) | event log |
-| **Timeline** | the chronological trace — turns, handoffs, routes, memory folds, errors, and the **self-heal** intervention/recovery lines | event log |
-| **Metrics** | the baton path, handoff/route/event counts, and a per-agent fleet breakdown (cost · turns · tokens) with a **Health** badge and a **⚠ Triage** button per agent | `/metrics` + spans |
+| **Timeline** | the chronological trace — turns, handoffs, routes, memory folds, errors, 💡 **decisions**, and the **self-heal** intervention/recovery lines | event log |
+| **Metrics** | a **dense metrics grid** (agents, files, avg turn time, tokens + sparklines, cost, critical path, confidence, retries) + per-agent token bars, over the fleet breakdown with **Health** badge + **⚠ Triage** per agent | `/metrics` + spans |
+| **Decisions** | a filterable **Decision Explorer** — every agent choice as a card (category · confidence), with a detail panel: reason, alternatives, confidence, files, artifacts | decisions store |
 | **Burn** | an SVG sparkline of per-agent cost/24h with a linear projection, and per-agent USD/day **budgets** | ClickHouse |
 | **Replay** | scrub the fleet's real turn **spans** frame by frame — model, tokens, cost, status — and open the **Trace Waterfall** | ClickHouse |
+| **Time Travel** | scrub **every** frame of the run — at each point: who held the baton, per-agent turns/cost, decisions-so-far, brain facts, and the thread. Play / step controls | folded event log |
+
+**Decision capture.** After each turn, Notch mines the agent's prose into structured decisions
+(category, reasoning, confidence, alternatives, files) — via the Anthropic API when
+`ANTHROPIC_API_KEY` is set, a deterministic regex fallback otherwise. They power the Decisions
+Explorer, the Timeline's 💡 lines, and the Time-Travel snapshots.
 
 Three features read the spans **back out of SigNoz** — this is the agent-native part:
 
@@ -118,6 +125,20 @@ Waterfall** with the SigNoz deep link:
 | Burn | Fleet readiness |
 |---|---|
 | ![Burn rate](docs/screenshots/burn.png) | ![Agents ready](docs/screenshots/agents-setup.png) |
+
+**Decision Explorer** — every agent choice as a card with reason, alternatives, and confidence:
+
+![Decision Explorer](docs/screenshots/kairo-decisions.png)
+
+**Time-Travel Replay** — scrub any frame of the run and see the exact fleet state, baton,
+decisions, memory, and thread at that instant:
+
+![Time-Travel Replay](docs/screenshots/kairo-time-travel.png)
+
+**Dense KAIRO-style metrics grid** — agents, files, tokens, cost, critical path, confidence,
+retries, with sparklines and per-agent token bars:
+
+![KAIRO metrics](docs/screenshots/kairo-metrics.png)
 
 ### Self-heal: SigNoz alert → intervention → recovery
 
