@@ -265,7 +265,8 @@ export class LoomDaemon {
     app.get("/", (_req, res) => res.redirect("/app"));
     app.get("/app", (_req, res) => {
       // Never cache the shell: a redeployed daemon must serve its own UI.
-      res.type("html").setHeader("Cache-Control", "no-store").send(APP_HTML);
+      const signozUrl = (process.env.NOTCH_SIGNOZ_URL || "http://localhost:8080").replace(/["'<>]/g, "");
+      res.type("html").setHeader("Cache-Control", "no-store").send(APP_HTML.replace("%%SIGNOZ_URL%%", signozUrl));
     });
     app.get("/app/manifest.webmanifest", (_req, res) => {
       res

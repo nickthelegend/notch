@@ -48,6 +48,8 @@ export const APP_HTML = `<!doctype html>
 <script>
 /* Apply the saved theme before first paint so there is no flash. */
 try{if(localStorage.getItem("loomTheme")==="light")document.documentElement.classList.remove("dark")}catch(e){}
+/* SigNoz UI base for the deep links, injected by the daemon (NOTCH_SIGNOZ_URL). */
+window.__notchSignozUrl="%%SIGNOZ_URL%%";
 </script>
 <style>
   @font-face{
@@ -2501,7 +2503,7 @@ ${BRAND_SPRITE}
       el.innerHTML =
         '<div class="obhead"><div class="obtitle">' + ICONS.telescope +
           '<span>Observatory</span> <span class="obsub">agents in action \\u00b7 the one brain</span></div>' +
-          '<a class="obsignoz" href="http://localhost:8080" target="_blank" rel="noreferrer">' + ICONS.route + " View in SigNoz</a></div>" +
+          '<a class="obsignoz" href="' + signozBase() + '" target="_blank" rel="noreferrer">' + ICONS.route + " View in SigNoz</a></div>" +
         '<div class="obmetrics">' + cards + "</div>" +
         '<div class="obtabs">' + tabs + "</div>" +
         '<div class="obbody">' + body + "</div>";
@@ -2581,7 +2583,8 @@ ${BRAND_SPRITE}
       scrim.addEventListener("click", function(ev){ if (ev.target === scrim) close(); });
       document.getElementById("hx").onclick = close;
     }
-    function signozTraceUrl(id){ return "http://localhost:8080/trace/" + encodeURIComponent(id || ""); }
+    function signozBase(){ var u = window.__notchSignozUrl; return (u && u.charAt(0) !== "%" ? u : "http://localhost:8080").replace(/\\/+$/, ""); }
+    function signozTraceUrl(id){ return signozBase() + "/trace/" + encodeURIComponent(id || ""); }
     // BURN: per-agent cost over time (real ClickHouse), linear projection, budgets.
     function observatoryBurn(p){
       var host = document.getElementById("obburn"); if (!host) return;

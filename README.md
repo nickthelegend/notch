@@ -782,6 +782,7 @@ npm run dev       # run the CLI from source (tsx)
 | `NOTCH_OTEL_ENDPOINT` / `OTEL_EXPORTER_OTLP_ENDPOINT` / `SIGNOZ_ENDPOINT` | OTLP collector base URL. Default `http://localhost:4318`. |
 | `SIGNOZ_INGESTION_KEY` / `SIGNOZ_ACCESS_TOKEN` | Sent as `signoz-access-token` for SigNoz Cloud. |
 | `NOTCH_CLICKHOUSE_URL` | ClickHouse HTTP for the read-back (triage/health/burn/replay). Default `http://localhost:8123`. |
+| `NOTCH_SIGNOZ_URL` | SigNoz **UI** base for the "View in SigNoz" / trace deep links. Default `http://localhost:8080`. |
 | `DO_NOT_TRACK=1` · `NOTCH_TELEMETRY_DISABLED=1` · `NOTCH_OTEL=0` | Any one opts out of all export. |
 | `ANTHROPIC_API_KEY` | Enables LLM triage prose headlessly (else the signed-in `claude` CLI, else heuristic). |
 | `NOTCH_TRIAGE_MODEL` | Override the triage model. Default `claude-haiku-4-5-20251001`. |
