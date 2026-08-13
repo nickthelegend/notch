@@ -100,9 +100,24 @@ Three features read the spans **back out of SigNoz** — this is the agent-nativ
 
 ### Screenshots
 
-The Observatory is best seen live (`notch up` → open a project → **Observatory**). Captures of
-the Metrics/Health, Triage, Burn, Replay+Waterfall, and the raw SigNoz traces go in
-[`docs/screenshots/`](docs/screenshots/) — see its guide for the exact framing.
+**Metrics — the fleet with per-agent Health scores** (claude-code & opencode `100`, codex `63`
+after it errored) and a **⚠ Triage** button each:
+
+![Observatory Metrics with health scores](docs/screenshots/observatory-metrics.png)
+
+**Self-Triage — an agent root-caused from its own SigNoz spans**, and the **Replay → Trace
+Waterfall** with the SigNoz deep link:
+
+| Triage | Trace Waterfall |
+|---|---|
+| ![Triage](docs/screenshots/triage.png) | ![Trace waterfall](docs/screenshots/replay-waterfall.png) |
+
+**Burn rate** (per-agent cost + projection + budgets) and the **fleet readiness** panel
+(each ADE's sign-in state):
+
+| Burn | Fleet readiness |
+|---|---|
+| ![Burn rate](docs/screenshots/burn.png) | ![Agents ready](docs/screenshots/agents-setup.png) |
 
 ### Self-heal: SigNoz alert → intervention → recovery
 
