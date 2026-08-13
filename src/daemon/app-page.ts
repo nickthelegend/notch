@@ -1292,6 +1292,8 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
   .rpsignoz{background:var(--secondary);color:var(--muted-foreground)}
   .rpsignoz:hover{color:var(--primary);border-color:var(--primary)}
   .rpsignoz.wide{display:block;text-align:center;margin-top:12px}
+  .rpnote{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;line-height:1.45;color:var(--muted-foreground);background:var(--secondary);border:1px solid var(--border);border-radius:8px;padding:6px 11px}
+  .rpnote svg{width:13px;height:13px;flex:none;opacity:.7}
   /* trace waterfall */
   .wfmodal{max-width:640px;width:94vw}
   .wftotal{margin-bottom:8px}
@@ -1303,6 +1305,19 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
   .wfbar{position:absolute;top:2px;height:12px;min-width:2px;border-radius:3px;background:var(--primary)}
   .wfbar.err{background:var(--err)}
   .wfms{flex:none;width:56px;text-align:right;font-family:var(--font-mono);font-size:10.5px;color:var(--muted-foreground)}
+  .wfsum{border:1px solid var(--border);border-radius:var(--radius);background:var(--card);padding:13px 15px;margin-bottom:14px}
+  .wfsumhd{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+  .wfagent{font-size:15px;font-weight:700}
+  .wfmodel{font-size:11px;color:var(--muted-foreground);font-family:var(--font-mono)}
+  .wfstatus{margin-left:auto;font-family:var(--font-mono);font-size:10px;font-weight:700;letter-spacing:.05em;padding:2px 9px;border-radius:999px}
+  .wfstatus.ok{color:var(--ok);background:color-mix(in srgb,var(--ok) 13%,transparent)}
+  .wfstatus.err{color:var(--err);background:color-mix(in srgb,var(--err) 15%,transparent)}
+  .wfsumstats{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}
+  .wfp{font-family:var(--font-mono);font-size:11px;color:var(--foreground);background:var(--secondary);border-radius:999px;padding:3px 10px}
+  .wfp .wfpl{color:var(--muted-foreground)}
+  .wflabel{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted-foreground);margin:2px 0 8px}
+  .wfaxis{display:flex;justify-content:space-between;font-family:var(--font-mono);font-size:10px;color:var(--muted-foreground);margin:6px 2px 2px;padding-left:158px}
+  .wfempty{font-size:13px;line-height:1.55;color:var(--muted-foreground);padding:8px 2px 4px}
   /* KAIRO dense metrics */
   .kmgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px}
   .kmcard{position:relative;overflow:hidden;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);padding:12px 14px}
@@ -2839,6 +2854,7 @@ ${BRAND_SPRITE}
       api("/api/projects/" + p.id + "/insights/spans?limit=100").then(function(r){
         var turns = (r.spans || []).filter(function(s){ return s.name === "gen_ai.agent.turn"; });
         if (!turns.length){ host.innerHTML = '<div class="obnote">No turn spans yet. Run a turn and replay it here.</div>'; return; }
+        state.obReplaySrc = r.from;
         state.obReplayTurns = turns; if (state.obReplayIx == null || state.obReplayIx >= turns.length) state.obReplayIx = 0;
         renderReplay(p, host);
       }).catch(function(){ host.innerHTML = '<div class="obnote">Span replay unavailable \\u2014 SigNoz/ClickHouse unreachable.</div>'; });
@@ -2853,11 +2869,15 @@ ${BRAND_SPRITE}
           '<span class="rpstatus ' + (t.code === 2 ? "err" : "ok") + '">' + (t.code === 2 ? "ERROR" : "OK") + "</span></div>" +
         (t.msg ? '<div class="rpmsg">' + esc(t.msg) + "</div>" : "") +
         '<div class="rpmetrics">' + pill("duration ", (t.ms || 0) + "ms") + pill("in ", tokfmt(t.tin || 0)) + pill("out ", tokfmt(t.tout || 0)) + pill("cost ", money(t.cost || 0)) + "</div>" +
-        '<div class="rpactions"><button class="rpwf" data-trace="' + esc(t.traceId || "") + '">Trace waterfall</button>' +
-          (t.traceId ? '<a class="rpsignoz" href="' + signozTraceUrl(t.traceId) + '" target="_blank" rel="noreferrer">Open in SigNoz \\u2197</a>' : "") + "</div></div>";
+        '<div class="rpactions">' +
+          (t.traceId
+            ? '<button class="rpwf" data-trace="' + esc(t.traceId) + '">Trace waterfall</button><a class="rpsignoz" href="' + signozTraceUrl(t.traceId) + '" target="_blank" rel="noreferrer">Open in SigNoz \\u2197</a>'
+            : '<span class="rpnote">' + ICONS.route + " The trace waterfall + SigNoz link light up once SigNoz is reachable \\u2014 this turn is from the local event log.</span>") +
+          "</div></div>";
+      var src = state.obReplaySrc === "local-log";
       var scrub = '<div class="rpscrubwrap"><input class="rpscrub" type="range" min="0" max="' + (turns.length - 1) + '" value="' + ix + '"/>' +
         '<div class="rpscrubinfo">turn ' + (ix + 1) + " / " + turns.length + " \\u00b7 " + hh + "</div></div>";
-      host.innerHTML = '<div class="replaywrap"><div class="obmlabel">Span replay \\u00b7 scrub the fleet\\u2019s turns (from SigNoz)</div>' + scrub + frame + "</div>";
+      host.innerHTML = '<div class="replaywrap"><div class="obmlabel">Span replay \\u00b7 scrub the fleet\\u2019s turns \\u00b7 ' + (src ? "local event log" : "from SigNoz") + "</div>" + scrub + frame + "</div>";
       var range = host.querySelector(".rpscrub");
       if (range) range.oninput = function(){ state.obReplayIx = Number(range.value); renderReplay(p, host); };
       var wf = host.querySelector(".rpwf");
@@ -2876,20 +2896,31 @@ ${BRAND_SPRITE}
       document.addEventListener("keydown", onKey);
       scrim.addEventListener("click", function(ev){ if (ev.target === scrim) close(); });
       document.getElementById("wfx").onclick = close;
+      function wfpill(l, v){ return '<span class="wfp"><span class="wfpl">' + l + "</span>" + v + "</span>"; }
       api("/api/projects/" + p.id + "/insights/trace/" + encodeURIComponent(traceId)).then(function(r){
         var spans = r.spans || [], body = scrim.querySelector(".modalbody");
-        if (!spans.length){ body.innerHTML = '<div class="obsub">No spans in this trace yet.</div>' + signozLink(traceId); return; }
+        if (!spans.length){ body.innerHTML = '<div class="wfempty">No spans in this trace yet \\u2014 they land in SigNoz within about a second of the turn finishing.</div>' + signozLink(traceId); return; }
         var t0 = Math.min.apply(null, spans.map(function(s){ return s.ts; }));
         var t1 = Math.max.apply(null, spans.map(function(s){ return s.ts + (s.ms || 0); }));
         var dur = Math.max(1, t1 - t0);
+        var turn = spans.filter(function(s){ return s.name === "gen_ai.agent.turn"; })[0] || spans[0];
+        var err = spans.some(function(s){ return s.code === 2; });
+        var summary = '<div class="wfsum"><div class="wfsumhd"><span class="wfagent">' + esc(turn.agent || "agent") + "</span>" +
+          (turn.model ? '<span class="wfmodel">' + esc(turn.ade ? turn.ade + " \\u00b7 " : "") + esc(turn.model) + "</span>" : "") +
+          '<span class="wfstatus ' + (err ? "err" : "ok") + '">' + (err ? "ERROR" : "OK") + "</span></div>" +
+          '<div class="wfsumstats">' + wfpill("duration ", fmtMs(dur)) + (turn.tin ? wfpill("in ", tokfmt(turn.tin)) : "") + (turn.tout ? wfpill("out ", tokfmt(turn.tout)) : "") + (turn.cost ? wfpill("cost ", money(turn.cost)) : "") + wfpill("spans ", spans.length) + "</div></div>";
         var rows = spans.map(function(s){
-          var left = ((s.ts - t0) / dur) * 100, w = Math.max(1.5, ((s.ms || 0) / dur) * 100);
-          return '<div class="wfrow"><span class="wfname' + (s.code === 2 ? " err" : "") + '">' + esc(s.name) + "</span>" +
+          var left = ((s.ts - t0) / dur) * 100, w = Math.max(2, ((s.ms || 0) / dur) * 100);
+          var short = String(s.name).replace(/^gen_ai\\./, "").replace(/^notch\\./, "");
+          return '<div class="wfrow"><span class="wfname' + (s.code === 2 ? " err" : "") + '" title="' + esc(s.name) + '">' + esc(short) + "</span>" +
             '<span class="wftrack"><span class="wfbar' + (s.code === 2 ? " err" : "") + '" style="left:' + left.toFixed(1) + "%;width:" + w.toFixed(1) + '%"></span></span>' +
             '<span class="wfms">' + (s.ms || 0) + "ms</span></div>";
         }).join("");
-        body.innerHTML = '<div class="wftotal obsub">' + spans.length + ' spans \\u00b7 ' + dur + 'ms total</div><div class="wfrows">' + rows + '</div>' + signozLink(traceId);
-      }).catch(function(){ var body = scrim.querySelector(".modalbody"); if (body) body.innerHTML = '<div class="obsub">Trace unavailable \\u2014 SigNoz unreachable.</div>' + signozLink(traceId); });
+        body.innerHTML = summary +
+          '<div class="wflabel">Spans \\u00b7 each bar is one span, placed by when it started</div>' +
+          '<div class="wfrows">' + rows + "</div>" +
+          '<div class="wfaxis"><span>0ms</span><span>' + fmtMs(dur) + "</span></div>" + signozLink(traceId);
+      }).catch(function(){ var body = scrim.querySelector(".modalbody"); if (body) body.innerHTML = '<div class="wfempty">Trace unavailable \\u2014 SigNoz is unreachable.</div>' + signozLink(traceId); });
     }
     function signozLink(traceId){ return '<a class="rpsignoz wide" href="' + signozTraceUrl(traceId) + '" target="_blank" rel="noreferrer">View full trace in SigNoz \\u2197</a>'; }
     // ---- KAIRO-style dense metrics panels (above the fleet table) ----------
