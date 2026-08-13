@@ -1334,6 +1334,37 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
   .ttevmeta{font-size:11.5px;color:var(--muted-foreground);font-family:var(--font-mono)}
   .ttprogbar{height:6px;background:var(--secondary);border-radius:99px;overflow:hidden;margin-bottom:4px}
   .ttprogfill{height:100%;background:var(--primary);border-radius:99px;transition:width .3s}
+  /* per-project settings: gear button + modal */
+  .psetbtn{appearance:none;flex:none;margin-left:6px;width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;
+    border:none;background:none;color:var(--muted-foreground);cursor:pointer;opacity:0;border-radius:6px;transition:opacity .12s,color .12s,background .12s}
+  .srow:hover .psetbtn,.srow.sel .psetbtn{opacity:.75}
+  .psetbtn:hover{opacity:1;color:var(--primary);background:color-mix(in srgb,var(--primary) 14%,transparent)}
+  .psetbtn svg{width:14px;height:14px}
+  .psetmodal{max-width:520px;width:92vw}
+  .pshdr{margin-bottom:14px}
+  .psproj{font-size:17px;font-weight:700}
+  .pssec{font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted-foreground);margin-bottom:8px}
+  .psrows{display:flex;flex-direction:column;gap:8px}
+  .psrow{display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card)}
+  .psrow.off{opacity:.55}
+  .psinfo{flex:1;min-width:0}
+  .psname{font-size:13.5px;font-weight:600}
+  .psbaton{font-size:9px;font-weight:700;letter-spacing:.05em;color:var(--shuttle-ink,var(--shuttle));background:color-mix(in srgb,var(--shuttle) 18%,transparent);padding:1px 6px;border-radius:99px;margin-left:6px}
+  .pskind{font-size:11px;color:var(--muted-foreground);font-family:var(--font-mono);margin-top:2px}
+  .psrolewrap{display:flex;align-items:center;gap:6px;flex:none}
+  .pslabel{font-size:10px;color:var(--muted-foreground);text-transform:uppercase;letter-spacing:.06em}
+  .psrole{appearance:none;font:inherit;font-size:12px;padding:4px 26px 4px 10px;border-radius:8px;border:1px solid var(--border);background:var(--secondary);color:var(--foreground);cursor:pointer;
+    background-image:linear-gradient(45deg,transparent 50%,var(--muted-foreground) 50%),linear-gradient(135deg,var(--muted-foreground) 50%,transparent 50%);background-position:calc(100% - 14px) 50%,calc(100% - 9px) 50%;background-size:5px 5px,5px 5px;background-repeat:no-repeat}
+  .psrole:disabled{opacity:.5;cursor:default}
+  .pshint{font-size:11px;color:var(--muted-foreground);line-height:1.5;margin-top:14px}
+  /* toggle switch */
+  .psswitch{position:relative;flex:none;width:34px;height:20px;cursor:pointer}
+  .psswitch input{position:absolute;opacity:0;width:0;height:0}
+  .pssl{position:absolute;inset:0;border-radius:99px;background:var(--secondary);border:1px solid var(--border);transition:background .15s}
+  .pssl::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--muted-foreground);transition:transform .15s,background .15s}
+  .psswitch input:checked+.pssl{background:color-mix(in srgb,var(--ok) 30%,transparent);border-color:color-mix(in srgb,var(--ok) 50%,transparent)}
+  .psswitch input:checked+.pssl::after{transform:translateX(14px);background:var(--ok)}
+  .psswitch input:disabled+.pssl{opacity:.6;cursor:default}
 
   /* ── Board (work flowing from working → needs you → review → merge) ── */
   .boardview{display:flex;flex-direction:column;gap:14px;height:100%}
@@ -6780,6 +6811,61 @@ ${BRAND_SPRITE}
   // The sidebar foot and the first-run nudge open Settings on its Setup section.
   function openSetupModal(){ openSettingsModal("setup"); }
 
+  // Per-project settings: toggle agents on/off and set each agent's role. Every
+  // change lands on .loom/config.json and re-renders the fleet everywhere.
+  function openProjectSettings(pid){
+    if (document.querySelector(".scrim")) return;
+    var scrim = document.createElement("div"); scrim.className = "scrim";
+    scrim.innerHTML = '<div class="modal psetmodal"><div class="modalhead">Project settings<button class="iconbtn" id="psx" aria-label="close">' + ICONS.x + '</button></div><div class="modalbody" id="psbody"><div class="loader"><i></i><i></i><i></i><i></i></div></div></div>';
+    document.body.appendChild(scrim);
+    function close(){ scrim.remove(); document.removeEventListener("keydown", onKey); }
+    function onKey(e){ if (e.key === "Escape") close(); }
+    document.addEventListener("keydown", onKey);
+    scrim.addEventListener("click", function(ev){ if (ev.target === scrim) close(); });
+    document.getElementById("psx").onclick = close;
+    function afterChange(){
+      load();
+      if (state.refreshProjects) state.refreshProjects();
+      if (state.selectProject && state.project && state.project.id === pid) state.selectProject(pid);
+    }
+    function renderBody(p){
+      var body = document.getElementById("psbody"); if (!body) return;
+      var agents = p.agents || [];
+      var roleOpts = ["planner", "builder", "reviewer", "executor", "researcher", "general"];
+      var rows = agents.map(function(a){
+        var on = a.enabled !== false;
+        var opts = roleOpts.slice();
+        if (a.role && opts.indexOf(a.role) < 0) opts.push(a.role);
+        var roleSel = '<select class="psrole" data-agent="' + esc(a.id) + '"' + (on ? "" : " disabled") + ">" +
+          opts.map(function(r){ return '<option value="' + esc(r) + '"' + (r === a.role ? " selected" : "") + ">" + esc(r) + "</option>"; }).join("") + "</select>";
+        return '<div class="psrow' + (on ? "" : " off") + '">' +
+          '<label class="psswitch" aria-label="toggle ' + esc(a.id) + '"><input type="checkbox" class="psen" data-agent="' + esc(a.id) + '"' + (on ? " checked" : "") + (a.holdsBaton ? " disabled" : "") + '><span class="pssl"></span></label>' +
+          '<div class="psinfo"><div class="psname">' + esc(a.id) + (a.holdsBaton ? ' <span class="psbaton">baton</span>' : "") + '</div><div class="pskind">' + esc(a.kind) + (a.model ? " \\u00b7 " + esc(a.model) : "") + "</div></div>" +
+          '<div class="psrolewrap"><span class="pslabel">role</span>' + roleSel + "</div></div>";
+      }).join("");
+      body.innerHTML = '<div class="pshdr"><div class="psproj">' + esc(p.name) + '</div><div class="obsub">' + agents.length + " agents \\u00b7 baton " + esc(p.holder || "\\u2014") + "</div></div>" +
+        '<div class="pssec">Agents \\u2014 switch on/off, set each role</div><div class="psrows">' + rows + "</div>" +
+        '<div class="pshint">Off agents stay in the roster but can\\u2019t take turns or hold the baton. Changes land on the next turn \\u2014 no restart. You can\\u2019t switch off the baton holder; hand it off first.</div>';
+      Array.prototype.forEach.call(body.querySelectorAll(".psen"), function(cb){
+        cb.onchange = function(){
+          var agent = cb.getAttribute("data-agent");
+          api("/api/projects/" + pid + "/agents/" + encodeURIComponent(agent) + "/enabled", { method: "PUT", body: JSON.stringify({ enabled: cb.checked }) })
+            .then(afterChange).catch(function(err){ toast(err.message || "could not toggle"); cb.checked = !cb.checked; });
+        };
+      });
+      Array.prototype.forEach.call(body.querySelectorAll(".psrole"), function(sel){
+        sel.onchange = function(){
+          var agent = sel.getAttribute("data-agent");
+          api("/api/projects/" + pid + "/agents/" + encodeURIComponent(agent) + "/role", { method: "POST", body: JSON.stringify({ role: sel.value }) })
+            .then(afterChange).catch(function(err){ toast(err.message || "could not set role"); });
+        };
+      });
+    }
+    function load(){
+      api("/api/projects/" + pid).then(function(j){ renderBody(j.project); }).catch(function(){ var b = document.getElementById("psbody"); if (b) b.innerHTML = '<div class="obsub" style="padding:20px">Could not load project.</div>'; });
+    }
+    load();
+  }
   function openProjectModal(){
     if (document.querySelector(".scrim")) return;
     var native = !!(window.loomNative && window.loomNative.pickFolder);
@@ -7223,7 +7309,8 @@ ${BRAND_SPRITE}
           '<div class="n">' +
           '<button class="scaret' + (open ? " open" : "") + '" data-caret="' + esc(p.id) + '" aria-label="' + (open ? "collapse " : "expand ") + esc(p.name) + '" aria-expanded="' + (open ? "true" : "false") + '">' + ICONS.chevron + "</button>" +
           '<span class="pglyph' + (p.needsInput ? " hot" : "") + '" style="background:color-mix(in srgb, hsl(' + gh + ',60%,50%) 20%, transparent);color:hsl(' + gh + ',60%,var(--agent-l))">' + esc((p.name || "?").slice(0, 1).toUpperCase()) + '</span><span class="nm">' + esc(p.name) + "</span>" +
-          (act ? '<span class="badge live" style="margin-left:auto">' + (r.current + 1) + "/" + r.steps.length + "</span>" : '<span class="cnt">' + adapters.length + "</span>") + "</div>" +
+          (act ? '<span class="badge live" style="margin-left:auto">' + (r.current + 1) + "/" + r.steps.length + "</span>" : '<span class="cnt" style="margin-left:auto">' + adapters.length + "</span>") +
+          '<button class="psetbtn" data-pset="' + esc(p.id) + '" title="project settings" aria-label="settings for ' + esc(p.name) + '">' + ICONS.gear + "</button></div>" +
           '<div class="m">baton ' + esc(p.holder || "\\u2014") +
           (p.costUsd > 0 ? " \\u00b7 " + money(p.costUsd) : "") + "</div></div>";
         if (open) {
@@ -7252,6 +7339,9 @@ ${BRAND_SPRITE}
 
       Array.prototype.forEach.call(el.querySelectorAll(".srow"), function(row){
         row.onclick = function(){ select(row.getAttribute("data-id")); };
+      });
+      Array.prototype.forEach.call(el.querySelectorAll("[data-pset]"), function(btn){
+        btn.onclick = function(ev){ ev.stopPropagation(); openProjectSettings(btn.getAttribute("data-pset")); };
       });
       // The caret opens/closes a project's chats without selecting it — so you
       // can peek at another project's conversations while staying in this one.

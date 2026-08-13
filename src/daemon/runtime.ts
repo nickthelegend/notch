@@ -90,7 +90,7 @@ export class ProjectRuntime {
     // (An agent streams events long after send() returns and has no idea which
     // conversation prompted it — spawnAgent tags them with the chat that started
     // the turn, so a reply lands where the question was asked.)
-    for (const agentCfg of config.agents) this.spawnAgent(agentCfg);
+    for (const agentCfg of config.agents) if (agentCfg.enabled !== false) this.spawnAgent(agentCfg);
 
     this.routes = new RouteEngine({
       projectName: info.name,
@@ -247,7 +247,36 @@ export class ProjectRuntime {
     if (!cfg) return null;
     cfg.role = role;
     this.saveConfig();
+    this.log.append({ kind: "role_change", agentId, payload: { role } });
     return { id: agentId, role };
+  }
+
+  /**
+   * Turn an agent on or off. An off agent stays in the roster but isn't spawned,
+   * can't hold the baton, and vanishes from the fleet — its history stays. You
+   * can't switch off the baton holder or a mid-turn agent; hand it off first.
+   */
+  setAgentEnabled(agentId: string, enabled: boolean): { id: string; enabled: boolean } {
+    const cfg = this.config.agents.find((a) => a.id === agentId);
+    if (!cfg) throw new Error(`unknown agent "${agentId}"`);
+    const on = enabled !== false;
+    if (!on) {
+      if (this.validHolder() === agentId) throw new Error(`"${agentId}" holds the baton — hand it off before switching it off`);
+      const live = this.agents.get(agentId);
+      if (live && isAdapter(live) && live.busy()) throw new Error(`"${agentId}" is mid-turn — interrupt it first`);
+    }
+    cfg.enabled = on;
+    this.saveConfig();
+    const live = this.agents.get(agentId);
+    if (on && !live) {
+      this.spawnAgent(cfg); // bring it back to life
+    } else if (!on && live) {
+      void Promise.resolve(live.stop()).catch(() => {});
+      this.agents.delete(agentId);
+      this.startedAgents.delete(agentId);
+    }
+    this.log.append({ kind: on ? "agent_join" : "agent_leave", agentId, payload: { enabled: on } });
+    return { id: agentId, enabled: on };
   }
 
   /**
@@ -1216,18 +1245,25 @@ export class ProjectRuntime {
     const holder = this.validHolder();
     const agents = await Promise.all(
       this.config.agents.map(async (cfg) => {
-        const agent = this.agent(cfg.id);
+        const model = (cfg.options?.model as string | undefined) ?? "";
+        const live = this.agents.get(cfg.id);
+        // A disabled (or not-yet-spawned) agent stays in the roster but is
+        // inert: it can't be available, busy, or hold the baton.
+        if (cfg.enabled === false || !live) {
+          return { id: cfg.id, kind: cfg.kind, role: cfg.role, tier: "adapter" as const, available: false, busy: false, holdsBaton: false, model, enabled: cfg.enabled !== false };
+        }
         return {
           id: cfg.id,
           kind: cfg.kind,
           role: cfg.role,
-          tier: agent.capabilities.tier,
-          available: await agent.available().catch(() => false),
-          busy: isAdapter(agent) ? agent.busy() : false,
+          tier: live.capabilities.tier,
+          available: await live.available().catch(() => false),
+          busy: isAdapter(live) ? live.busy() : false,
           holdsBaton: holder === cfg.id,
           // The picker shows a tick next to the active model; "" means the
           // adapter's own default, which is the honest baseline.
-          model: (cfg.options?.model as string | undefined) ?? "",
+          model,
+          enabled: true,
         };
       }),
     );
