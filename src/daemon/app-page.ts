@@ -1176,6 +1176,13 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
   .obtab:hover{color:var(--foreground)}
   .obtab.on{background:var(--card);color:var(--foreground);box-shadow:0 1px 0 rgb(0 0 0 / .12)}
   .obbody{min-height:200px}
+  .obexplain{font-size:12.5px;line-height:1.6;color:var(--muted-foreground);margin:11px 2px 15px;max-width:760px}
+  .obexplain b{color:var(--foreground);font-weight:600}
+  .obexplain code{font-family:var(--font-mono);font-size:11px;background:var(--secondary);padding:1px 5px;border-radius:5px;color:var(--foreground)}
+  .obdraghint{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:var(--muted-foreground);opacity:.8;margin-left:3px}
+  .obdraghint svg{width:12px;height:12px;opacity:.8}
+  .obnode{transition:filter .12s}
+  .obnode.dragging{filter:brightness(1.18)}
   .obnote{color:var(--muted-foreground);font-size:12.5px;padding:0 2px 12px;max-width:70ch}
   .obcanvaswrap.graph{padding:8px}
   /* timeline */
@@ -2640,6 +2647,23 @@ ${BRAND_SPRITE}
       });
     }
     function obByAgent(m){ var o = {}; (m.byAgent || []).forEach(function(a){ o[a.agentId] = a; }); return o; }
+    // One plain line under the tabs so each view explains itself — the fleet's
+    // graphs mean nothing without saying what a node, an arrow, or a frame is.
+    function obExplain(view){
+      var drag = '<span class="obdraghint">' + (ICONS.move || "") + "drag any node to rearrange</span>";
+      var fx = '<b style="color:var(--shuttle)">';
+      var E = {
+        canvas: "The fleet as <b>one brain</b>: every agent shares the same memory, and the baton (in " + fx + "fuchsia</b>) marks who can edit the code right now. " + drag,
+        graph: "How the <b>baton</b> travelled between agents. Each " + fx + "\\u2192</b> is one handoff; <code>19t</code> under a name is turns taken; the fuchsia ring is who holds it now. " + drag,
+        timeline: "Every fleet event in order \\u2014 turns, handoffs, \\ud83d\\udca1 <b>decisions</b>, and SigNoz self-heal. Click a decision line to open its reasoning.",
+        metrics: "The run at a glance: spend, tokens, files, and decisions up top; then each agent with a 0\\u2013100 <b>health score</b> and a <b>\\u26a0 Triage</b> button that root-causes it from its own SigNoz spans.",
+        decisions: "What each agent <b>decided and why</b>. Filter by agent on the left; click a card for the reason, the alternatives it weighed, and the files it touched.",
+        burn: "Per-agent <b>cost over the last 24h</b> from SigNoz, with a straight-line projection \\u2014 and a daily USD budget you can set per agent.",
+        replay: "Step through each real <b>turn</b> one at a time: its model, tokens, cost, and status \\u2014 then open that turn\\u2019s <b>trace waterfall</b> and jump to SigNoz.",
+        travel: "<b>Rewind the whole run.</b> Scrub to any moment to see who held the baton, every agent\\u2019s state, the decisions made so far, and the thread \\u2014 all reconstructed from the event log."
+      };
+      return E[view] ? '<div class="obexplain">' + E[view] + "</div>" : "";
+    }
     function renderObservatory(el, p, m, events){
       var agents = (p.agents || []), byAgent = obByAgent(m);
       var active = agents.filter(function(a){ return a.busy; }).length;
@@ -2674,6 +2698,7 @@ ${BRAND_SPRITE}
           '<a class="obsignoz" href="' + signozBase() + '" target="_blank" rel="noreferrer">' + ICONS.route + " View in SigNoz</a></div>" +
         '<div class="obmetrics">' + cards + "</div>" +
         '<div class="obtabs">' + tabs + "</div>" +
+        obExplain(state.obView) +
         '<div class="obbody">' + body + "</div>";
       Array.prototype.forEach.call(el.querySelectorAll(".obtab"), function(t){
         t.onclick = function(){ state.obView = t.getAttribute("data-obv"); renderObservatory(el, p, m, events); };
@@ -3162,24 +3187,47 @@ ${BRAND_SPRITE}
     /** Drag agent nodes around the canvas; positions persist across live redraws. */
     function wireObservatoryDrag(el){
       var svg = el.querySelector(".obsvg"); if (!svg) return;
+      svg.style.touchAction = "none"; // don't let touch scroll steal the drag
       var drag = null;
-      function pt(e){ var r = svg.getBoundingClientRect(); var vb = svg.viewBox.baseVal;
-        return { x: (e.clientX - r.left) / r.width * vb.width, y: (e.clientY - r.top) / r.height * vb.height }; }
+      // Map a client point into the SVG's own user space — getScreenCTM accounts
+      // for the viewBox AND preserveAspectRatio letterboxing, so the node tracks
+      // the cursor exactly instead of drifting.
+      function pt(e){
+        var m = svg.getScreenCTM(); if (!m) return { x: 0, y: 0 };
+        var p = svg.createSVGPoint(); p.x = e.clientX; p.y = e.clientY;
+        var q = p.matrixTransform(m.inverse());
+        return { x: q.x, y: q.y };
+      }
+      function originOf(g){
+        var t = (g.getAttribute("transform") || "").match(/translate\\(\\s*([-\\d.]+)[\\s,]+([-\\d.]+)/);
+        return t ? { x: parseFloat(t[1]), y: parseFloat(t[2]) } : { x: 0, y: 0 };
+      }
       Array.prototype.forEach.call(svg.querySelectorAll(".obnode"), function(g){
         g.style.cursor = "grab";
         g.addEventListener("pointerdown", function(e){
-          e.preventDefault(); drag = { g: g, id: g.getAttribute("data-agent") };
-          g.setPointerCapture(e.pointerId); g.style.cursor = "grabbing";
+          e.preventDefault();
+          var q = pt(e), o = originOf(g);
+          // grab-offset: keep the point under the cursor fixed while dragging
+          drag = { g: g, id: g.getAttribute("data-agent"), dx: q.x - o.x, dy: q.y - o.y };
+          try { g.setPointerCapture(e.pointerId); } catch (err) {}
+          g.style.cursor = "grabbing"; g.classList.add("dragging");
         });
+        g.addEventListener("pointermove", function(e){
+          if (!drag || drag.g !== g) return;
+          var q = pt(e), x = q.x - drag.dx, y = q.y - drag.dy;
+          obNodePos[drag.id] = { x: x, y: y };
+          g.setAttribute("transform", "translate(" + x + " " + y + ")");
+        });
+        function end(e){
+          if (!drag || drag.g !== g) return;
+          try { g.releasePointerCapture(e.pointerId); } catch (err) {}
+          g.style.cursor = "grab"; g.classList.remove("dragging");
+          drag = null;
+          drawObservatory(); // snap the edges to the node's new home
+        }
+        g.addEventListener("pointerup", end);
+        g.addEventListener("pointercancel", end);
       });
-      svg.addEventListener("pointermove", function(e){
-        if (!drag) return; var q = pt(e);
-        obNodePos[drag.id] = { x: q.x, y: q.y };
-        drag.g.setAttribute("transform", "translate(" + q.x + " " + q.y + ")");
-        // redraw only the edges cheaply by re-rendering the whole svg is heavy;
-        // leave edges until next live refresh — the node follows the cursor now.
-      });
-      svg.addEventListener("pointerup", function(){ if (drag){ drag.g.style.cursor = "grab"; drag = null; drawObservatory(); } });
     }
 
     // ---- diff/preview dock (right of the chat, opens on click) --------------
