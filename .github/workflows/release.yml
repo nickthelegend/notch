@@ -28,12 +28,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14 # Apple Silicon
-            label: macOS arm64
-            args: --mac dmg --arm64
-          - os: macos-13 # Intel
-            label: macOS x64
-            args: --mac dmg --x64
+          # Both Mac architectures come off the Apple Silicon runner in one
+          # pass. electron-builder downloads the x64 Electron and packages it
+          # natively — verified locally, producing a 115 MB arm64 dmg and a
+          # 120 MB x64 dmg side by side. The dedicated Intel runner (macos-13)
+          # was dropped because it sat queued for scarce capacity, and `publish`
+          # waits on every desktop job: one starved runner meant no release at
+          # all. (This is not the QEMU problem noted above — that is about
+          # building *Linux/Windows* from macOS, which still needs its own host.)
+          - os: macos-14
+            label: macOS (arm64 + x64)
+            args: --mac dmg --arm64 --x64
           - os: windows-latest
             label: Windows x64
             args: --win nsis --x64
