@@ -19,6 +19,16 @@ export default defineConfig({
       // pointing it at nothing makes discovery hermetic without a test-only
       // code path. The discovery tests point it at a fixture of their own.
       CLAUDE_CONFIG_DIR: "/nonexistent/notch-test-claude-home",
+      // Telemetry defaults to enabled against http://localhost:4318, so the
+      // suite shipped spans, metrics and logs to a real collector whenever the
+      // developer happened to have the SigNoz stack up — and then waited on it.
+      // That is how a passing suite turned into `waitUntil: condition not met`
+      // in app-dom: nothing about the test changed, ClickHouse was just sitting
+      // at 40% CPU on the same machine, and an echo turn no longer finished
+      // inside the 8s budget. A test's result must not depend on what Docker is
+      // running. The export tests delete this var in their own setup and point
+      // the endpoint at a fake collector they control.
+      NOTCH_TELEMETRY_DISABLED: "1",
     },
   },
 });

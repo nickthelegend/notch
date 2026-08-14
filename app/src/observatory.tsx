@@ -1,23 +1,27 @@
 /**
  * The Observatory, natively.
  *
- * The desktop app (src/daemon/app-page.ts) renders six views over the fleet's
- * telemetry; this is the same six on a phone, drawn with Views instead of SVG
- * and touch instead of hover. It is not a webview and it does not re-derive
- * anything the daemon already computes — every number here comes off an
- * endpoint, and where the daemon has no number this shows an empty state and
- * says why.
+ * The desktop app (src/daemon/app-page.ts) renders eight views over the fleet's
+ * telemetry; this is the same eight on a phone, in the same order, drawn with
+ * Views instead of SVG and touch instead of hover. It is not a webview and it
+ * does not re-derive anything the daemon already computes — every number here
+ * comes off an endpoint, and where the daemon has no number this shows an empty
+ * state and says why.
  *
  *   metrics   the dashboard: hero tiles, composition, turn durations, health
  *   fleet     who is running right now and who holds the baton
  *   handoffs  the baton's routes, and how often each was walked
+ *   selfheal  who a firing alert has paused, and every past pause as an episode
  *   timeline  the chronological trace
  *   decisions what each agent decided and why
+ *   logs      what the fleet actually said, read back out of SigNoz
  *   replay    a scrubber that rewinds the run
  *
  * Provenance is shown, not assumed: /insights/* answer with `from`, which is
  * "signoz" when ClickHouse served the spans and "local-log" when it was empty
- * or down. Those two are different claims about the same panel.
+ * or down. Those two are different claims about the same panel. Logs are the one
+ * signal with no second answer — see LogsView for why "unavailable" is printed
+ * there rather than quietly rendered as an empty list.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -27,6 +31,7 @@ import {
   PanResponder,
   ScrollView,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
@@ -34,18 +39,24 @@ import {
   getDecisions,
   getEvents,
   getHealth,
+  getLogs,
   getMetrics,
+  getProject,
   getSnapshots,
   getSpans,
   getTriage,
+  liftQuarantine,
   type AgentDecision,
   type Creds,
   type DecisionStats,
   type Health,
+  type InsightLog,
   type InsightSpan,
+  type LogSource,
   type LoomEvent,
   type Metrics,
   type Project,
+  type QuarantineMap,
   type TimeSnapshot,
   type Triage,
 } from "./api";
@@ -62,19 +73,32 @@ import {
   TAP,
   Unreachable,
   dur,
+  field,
   tok,
   trunc,
 } from "./components";
 import { T, hue, radii, spacing, usd } from "./theme";
 
-type ObsView = "metrics" | "fleet" | "handoffs" | "timeline" | "decisions" | "replay";
+type ObsView =
+  | "metrics"
+  | "fleet"
+  | "handoffs"
+  | "selfheal"
+  | "timeline"
+  | "decisions"
+  | "logs"
+  | "replay";
 
+// Same order as the desktop's tab strip, so a person who learned one already
+// knows where the other keeps things.
 const OBS_VIEWS: ReadonlyArray<{ key: ObsView; label: string }> = [
   { key: "metrics", label: "Metrics" },
   { key: "fleet", label: "Live fleet" },
   { key: "handoffs", label: "Handoffs" },
+  { key: "selfheal", label: "Self-heal" },
   { key: "timeline", label: "Timeline" },
   { key: "decisions", label: "Decisions" },
+  { key: "logs", label: "Logs" },
   { key: "replay", label: "Replay" },
 ];
 
@@ -217,6 +241,18 @@ export function ObservatoryView(props: { creds: Creds; project: Project }) {
   const snapshots = useResource(() => getSnapshots(creds, project.id), `t:${project.id}`, {
     enabled: view === "replay",
   });
+  /**
+   * Self-heal reads the quarantine map, and a quarantine arrives over a SigNoz
+   * webhook at a moment nothing on this screen predicts. The `project` prop was
+   * fetched by whoever mounted the Observatory and is therefore precisely the
+   * thing that will be stale on the one view whose entire job is "right now" —
+   * so that tab fetches its own copy the moment it opens (`enabled` flips, the
+   * effect runs) and keeps it warm while it is the visible tab.
+   */
+  const fresh = useResource(() => getProject(creds, project.id), `p:${project.id}`, {
+    enabled: view === "selfheal",
+    pollMs: 8000,
+  });
 
   return (
     <View style={{ flex: 1 }}>
@@ -240,10 +276,14 @@ export function ObservatoryView(props: { creds: Creds; project: Project }) {
           <FleetView project={project} metrics={metrics} health={health} />
         ) : view === "handoffs" ? (
           <HandoffsView events={events} />
+        ) : view === "selfheal" ? (
+          <SelfHealView creds={creds} projectId={project.id} fresh={fresh} events={events} />
         ) : view === "timeline" ? (
           <TimelineView events={events} />
         ) : view === "decisions" ? (
           <DecisionsView decisions={decisions} />
+        ) : view === "logs" ? (
+          <LogsView creds={creds} projectId={project.id} />
         ) : (
           <ReplayView snapshots={snapshots} decisions={decisions} spans={spans} />
         )}
@@ -615,7 +655,292 @@ function HandoffsView(props: { events: Res<{ events: LoomEvent[] }> }) {
 }
 
 // ---------------------------------------------------------------------------
-// 4 · Timeline
+// 4 · Self-heal
+// ---------------------------------------------------------------------------
+
+/** One pause, from the alert that opened it to the recovery that closed it. */
+interface Episode {
+  agent: string;
+  alert: string;
+  /** null when the fire happened before the window of events this screen holds. */
+  from: number | null;
+  /** null while the episode is open — or while its recovery went unrecorded. */
+  to: number | null;
+  fallback: string | null;
+  via: string | null;
+  retried: boolean;
+}
+
+/**
+ * Pair each intervention with the recovery that ended it.
+ *
+ * Half-events are unreadable: "alert fired", twelve lines later "alert
+ * resolved", and the reader does the join in their head. An episode has a start,
+ * an end and a duration, which is the thing a person actually wants to know.
+ *
+ * Pairing walks oldest-first because an open episode has to be findable when its
+ * recovery turns up; the result is reversed so the newest reads at the top. A
+ * recovery with no intervention in the window keeps its own episode rather than
+ * being dropped — the fire was real, it just happened before the events this
+ * screen holds.
+ */
+function healEpisodes(events: LoomEvent[]): Episode[] {
+  const heal = events
+    .filter((e) => e.kind === "status" && String((e.payload as Record<string, unknown>).state ?? "").indexOf("signoz_") === 0)
+    .slice()
+    .sort((a, b) => a.ts - b.ts);
+
+  const open = new Map<string, Episode>();
+  const episodes: Episode[] = [];
+  for (const e of heal) {
+    const p = e.payload as Record<string, unknown>;
+    const agent = e.agentId ?? "?";
+    if (p.state === "signoz_intervention") {
+      const ep: Episode = {
+        agent,
+        alert: String(p.alert ?? "alert"),
+        from: e.ts,
+        to: null,
+        fallback: p.fallback ? String(p.fallback) : null,
+        via: null,
+        retried: false,
+      };
+      open.set(agent, ep);
+      episodes.push(ep);
+    } else if (p.state === "signoz_recovery") {
+      const ep = open.get(agent);
+      if (ep) {
+        ep.to = e.ts;
+        ep.via = p.via ? String(p.via) : "resolved";
+        ep.retried = Boolean(p.retried);
+        open.delete(agent);
+      } else {
+        episodes.push({
+          agent,
+          alert: String(p.alert ?? "alert"),
+          from: null,
+          to: e.ts,
+          fallback: null,
+          via: p.via ? String(p.via) : "resolved",
+          retried: Boolean(p.retried),
+        });
+      }
+    }
+  }
+  return episodes.reverse();
+}
+
+/**
+ * Self-heal — what SigNoz said, and what Notch did about it.
+ *
+ * Built from Notch's OWN record rather than SigNoz's API: the webhook already
+ * tells the daemon every fire and resolve, so this needs no credentials, no
+ * second service to poll, and it keeps working when SigNoz is down — which is
+ * exactly the moment you want to know which agents are still paused. SigNoz can
+ * tell you an alert fired; only this can tell you the fleet reacted.
+ */
+function SelfHealView(props: {
+  creds: Creds;
+  projectId: string;
+  fresh: Res<{ project: Project }>;
+  events: Res<{ events: LoomEvent[] }>;
+}) {
+  /**
+   * The map this view draws from is whatever answered most recently: the fresh
+   * GET, or the map the DELETE hands back. It is deliberately state rather than
+   * a read straight off `fresh.data` — a lift has to redraw from the response
+   * body, because the project object in hand was fetched before the delete and
+   * still lists the agent as paused.
+   */
+  const [live, setLive] = useState<QuarantineMap | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const served = props.fresh.data?.project.quarantine;
+
+  useEffect(() => {
+    if (props.fresh.data) setLive(served ?? {});
+  }, [props.fresh.data, served]);
+
+  const { creds, projectId } = props;
+  const eventsReload = props.events.reload;
+  const lift = useCallback(
+    (agentId: string) => {
+      setBusy(agentId);
+      setErr(null);
+      void liftQuarantine(creds, projectId, agentId)
+        .then((r) => {
+          setLive(r.quarantine ?? {});
+          // The daemon writes a signoz_recovery event for a manual lift, so the
+          // episode below can close as soon as the log is re-read. Without this
+          // nudge the history spends one poll interval calling a just-ended
+          // episode "ended (no recovery recorded)", which is only true until the
+          // event we ourselves caused arrives.
+          eventsReload();
+        })
+        .catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)))
+        .finally(() => setBusy(null));
+    },
+    [creds, projectId, eventsReload],
+  );
+
+  return (
+    <Load res={props.fresh} what="the self-heal state">
+      {() => {
+        const q = live ?? {};
+        const paused = Object.keys(q);
+        const episodes = props.events.data ? healEpisodes(props.events.data.events) : [];
+
+        return (
+          <>
+            <Panel tint={paused.length ? T.err : T.line}>
+              <SectionLabel text="Paused right now" />
+              {!paused.length ? (
+                <Text style={{ color: T.ok, fontSize: 13, lineHeight: 20 }}>
+                  ✓ Nothing is paused. Every agent can take the baton.
+                </Text>
+              ) : (
+                paused.map((a) => {
+                  const it = q[a]!;
+                  return (
+                    <View
+                      key={a}
+                      style={{
+                        borderWidth: 1,
+                        borderColor: T.line,
+                        borderLeftWidth: 2,
+                        borderLeftColor: T.err,
+                        borderRadius: radii.card,
+                        padding: 11,
+                        gap: 7,
+                      }}
+                    >
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                        <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: T.err }} />
+                        <Text style={{ color: T.text, fontSize: 14, fontWeight: "600", flex: 1 }} numberOfLines={1}>
+                          {trunc(a, 22)}
+                        </Text>
+                        <TouchableOpacity
+                          onPress={() => lift(a)}
+                          disabled={busy === a}
+                          activeOpacity={0.7}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Lift the pause on ${a} — it can take the baton again`}
+                          style={{
+                            minHeight: TAP,
+                            justifyContent: "center",
+                            paddingHorizontal: 16,
+                            borderWidth: 1,
+                            borderColor: T.line2,
+                            backgroundColor: T.raised,
+                            borderRadius: radii.key,
+                            opacity: busy === a ? 0.5 : 1,
+                          }}
+                        >
+                          <Text style={{ color: T.text, fontSize: 12.5, fontWeight: "700" }}>
+                            {busy === a ? "…" : "Lift"}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                      <Text style={{ color: T.dim, fontSize: 11.5, fontFamily: T.mono, lineHeight: 18 }}>
+                        {it.reason} · paused {elapsed(Date.now() - it.since)} ago
+                        {it.displaced ? " · the baton was taken off it" : ""}
+                      </Text>
+                    </View>
+                  );
+                })
+              )}
+              {err ? (
+                <Text style={{ color: T.err, fontSize: 11.5, fontFamily: T.mono, lineHeight: 18 }}>
+                  couldn&apos;t lift it — {err}
+                </Text>
+              ) : null}
+            </Panel>
+
+            <Panel>
+              <SectionLabel
+                text={
+                  props.events.data
+                    ? `History · ${episodes.length} episode${episodes.length === 1 ? "" : "s"}`
+                    : "History"
+                }
+              />
+              {!props.events.data ? (
+                // Not "no alert has fired yet" — that would be a claim about the
+                // fleet made from a request that hasn't come back.
+                props.events.error ? (
+                  <Unreachable
+                    what="the self-heal history"
+                    detail={props.events.error}
+                    onRetry={props.events.reload}
+                  />
+                ) : (
+                  <Sys text="reading the event log…" />
+                )
+              ) : !episodes.length ? (
+                <Empty text="No alert has fired yet. Wire the rules up from the desktop's Set up SigNoz, and every fire and recovery lands here as an episode." />
+              ) : (
+                episodes.slice(0, 25).map((ep, i) => <EpisodeRow key={`${ep.agent}-${ep.from ?? ep.to}-${i}`} ep={ep} q={q} />)
+              )}
+            </Panel>
+
+            <Text style={{ color: T.faint, fontSize: 10.5, fontFamily: T.mono, lineHeight: 17 }}>
+              Rules live in SigNoz. A firing alert refuses that agent the baton; a resolved one gives
+              it back.
+            </Text>
+          </>
+        );
+      }}
+    </Load>
+  );
+}
+
+/**
+ * One episode.
+ *
+ * The rule this row exists to get right: an intervention with no matching
+ * recovery is "still paused" ONLY if the live quarantine map still holds that
+ * agent. Otherwise the episode ended and the recovery simply was never recorded
+ * — an old run, an event window that rolled — and the row says so. Saying "still
+ * paused" about an agent the section above shows taking work would be the screen
+ * contradicting itself two panels apart.
+ */
+function EpisodeRow(props: { ep: Episode; q: QuarantineMap }) {
+  const { ep } = props;
+  const stillPaused =
+    ep.from != null && ep.to == null && Object.prototype.hasOwnProperty.call(props.q, ep.agent);
+  const lost = ep.from != null && ep.to == null && !stillPaused;
+  const tint = stillPaused ? T.err : lost ? T.dim : T.ok;
+
+  const when =
+    (ep.from != null ? new Date(ep.from).toLocaleTimeString() : "—") +
+    (ep.to != null
+      ? ` → ${new Date(ep.to).toLocaleTimeString()}${ep.from != null ? ` · held ${dur(ep.to - ep.from)}` : ""}`
+      : stillPaused
+        ? " · still paused"
+        : " · ended (no recovery recorded)") +
+    (ep.fallback ? ` · baton moved to ${ep.fallback}` : "") +
+    (ep.retried ? " · baton handed back" : "") +
+    (ep.via && ep.via !== "resolved" ? ` · via ${ep.via}` : "");
+
+  return (
+    <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 8, paddingVertical: 6 }}>
+      <View style={{ width: 7, height: 7, borderRadius: 4, marginTop: 5, backgroundColor: tint }} />
+      <View style={{ flex: 1, gap: 3 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+          <Text style={{ color: hue(ep.agent), fontSize: 12.5, fontWeight: "600", flexShrink: 1 }} numberOfLines={1}>
+            {trunc(ep.agent, 18)}
+          </Text>
+          <Badge text={trunc(ep.alert, 20)} />
+        </View>
+        <Text style={{ color: T.dim, fontSize: 10.5, fontFamily: T.mono, lineHeight: 16 }}>{when}</Text>
+      </View>
+      <Badge text={stillPaused ? "FIRING" : lost ? "ENDED" : "RECOVERED"} tint={tint} />
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 5 · Timeline
 // ---------------------------------------------------------------------------
 
 /** The same kinds the desktop's timeline admits, and what each one reads as. */
@@ -738,7 +1063,7 @@ function TimelineView(props: { events: Res<{ events: LoomEvent[] }> }) {
 }
 
 // ---------------------------------------------------------------------------
-// 5 · Decisions
+// 6 · Decisions
 // ---------------------------------------------------------------------------
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -919,7 +1244,201 @@ function DecisionSheet(props: { decision: AgentDecision | null; onClose: () => v
 }
 
 // ---------------------------------------------------------------------------
-// 6 · Replay
+// 7 · Logs
+// ---------------------------------------------------------------------------
+
+type SevKey = "all" | "ERROR" | "WARN" | "INFO" | "DEBUG";
+
+const SEVERITIES: ReadonlyArray<{ key: SevKey; label: string }> = [
+  { key: "all", label: "All" },
+  { key: "ERROR", label: "ERROR" },
+  { key: "WARN", label: "WARN" },
+  { key: "INFO", label: "INFO" },
+  { key: "DEBUG", label: "DEBUG" },
+];
+
+/**
+ * Only the levels Notch actually writes get a colour. Anything else stays
+ * graphite rather than being guessed into a severity it may not have.
+ */
+function sevTint(sev: string): string {
+  const s = sev.toUpperCase();
+  if (s === "FATAL" || s === "ERROR") return T.err;
+  if (s === "WARN" || s === "WARNING") return T.warn;
+  if (s === "INFO") return T.thread;
+  if (s === "DEBUG" || s === "TRACE") return T.faint;
+  return T.dim;
+}
+
+/**
+ * The fleet's own log lines, read back out of SigNoz.
+ *
+ * Notch has emitted all three OTel signals for a long time but could only ever
+ * read traces back, which is a strange thing to ship in an observability tool.
+ * This is the other half.
+ *
+ * There is deliberately NO local fallback, and that is the one thing this panel
+ * has to be honest about. A span has a fallback because a span is a summary of
+ * an event that is already on the daemon's disk, so /insights/spans can answer
+ * "local-log" and still be telling the truth. A log line is not: its severity,
+ * its body and its trace correlation only exist once the record was built and
+ * shipped. Rebuilding something log-shaped from the event log would be inventing
+ * data. So when ClickHouse is unreachable the daemon answers `from:
+ * "unavailable"` and this prints that, rather than rendering an empty list —
+ * which a reader would take as "nothing happened", the exact opposite claim.
+ */
+function LogsView(props: { creds: Creds; projectId: string }) {
+  const [sev, setSev] = useState<SevKey>("all");
+  const [text, setText] = useState("");
+  const [q, setQ] = useState("");
+
+  // The filter is part of the request key, so typing straight into it would fire
+  // one ClickHouse round-trip per keystroke. 350ms is the same beat the MCP
+  // registry search uses elsewhere in the app.
+  useEffect(() => {
+    const t = setTimeout(() => setQ(text.trim()), 350);
+    return () => clearTimeout(t);
+  }, [text]);
+
+  const severity = sev === "all" ? "" : sev;
+  const logs = useResource(
+    () => getLogs(props.creds, props.projectId, { severity, q, limit: 300 }),
+    `l:${props.projectId}:${severity}:${q}`,
+    { pollMs: 10000 },
+  );
+
+  return (
+    <Load res={logs} what="logs">
+      {(d) =>
+        d.from === "unavailable" ? (
+          <Unread />
+        ) : (
+          <>
+            <Panel padded={false}>
+              <Segmented options={SEVERITIES} value={sev} onChange={setSev} accent={T.primaryDim} />
+              <View style={{ paddingHorizontal: spacing.md, paddingBottom: spacing.md }}>
+                <TextInput
+                  style={{ ...field, paddingVertical: 10, fontSize: 14 }}
+                  value={text}
+                  onChangeText={setText}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  placeholder="filter text…"
+                  placeholderTextColor={T.faint}
+                  selectionColor={T.accentBlue}
+                  accessibilityLabel="Filter log lines by the text of their body"
+                />
+              </View>
+            </Panel>
+
+            <Panel padded={false}>
+              <View style={{ paddingHorizontal: 12, paddingTop: 12 }}>
+                <SectionLabel
+                  text={`Logs · ${d.logs.length} line${d.logs.length === 1 ? "" : "s"} · from SigNoz`}
+                />
+              </View>
+              {!d.logs.length ? (
+                <View style={{ padding: 12 }}>
+                  <Empty text="No log lines match. Notch ships every message, tool call, file edit and error — widen the filter." />
+                </View>
+              ) : (
+                <View>
+                  {d.logs.map((l, i) => (
+                    <LogRow key={`${l.ts}-${i}`} log={l} last={i === d.logs.length - 1} />
+                  ))}
+                </View>
+              )}
+            </Panel>
+          </>
+        )
+      }
+    </Load>
+  );
+}
+
+/** The one case where an empty list would be a lie, said out loud instead. */
+function Unread() {
+  return (
+    <Panel tint={T.warn}>
+      <SectionLabel text="Logs" />
+      <Text style={{ color: T.text, fontSize: 13.5, lineHeight: 20 }}>
+        Logs live in SigNoz, and ClickHouse isn&apos;t answering — so there is nothing to read.
+        Unlike spans, logs have no local fallback. Bring SigNoz up on the daemon&apos;s machine
+        (<Text style={{ fontFamily: T.mono, fontSize: 12.5 }}>./scripts/signoz-up.sh</Text>) and this
+        fills in.
+      </Text>
+      <Text style={{ color: T.faint, fontSize: 10.5, fontFamily: T.mono, lineHeight: 17 }}>
+        this is an unread run, not a quiet one — the fleet may have said plenty
+      </Text>
+    </Panel>
+  );
+}
+
+/**
+ * One line. Two rows rather than one: at 375pt a time, a level, an agent, a
+ * trace and a body cannot share a line without the body becoming a stub, and the
+ * body is the part anyone came for. It wraps to four lines and then truncates —
+ * never wider than the panel.
+ */
+function LogRow(props: { log: InsightLog; last: boolean }) {
+  const l = props.log;
+  const sev = (l.severity || "INFO").toUpperCase();
+  const tint = sevTint(sev);
+  return (
+    <View
+      style={{
+        borderBottomWidth: props.last ? 0 : 1,
+        borderBottomColor: T.line,
+        borderLeftWidth: 2,
+        borderLeftColor: tint,
+        paddingHorizontal: 10,
+        paddingVertical: 7,
+        gap: 3,
+      }}
+    >
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
+        <Text style={{ color: T.faint, fontSize: 10, fontFamily: T.mono }}>
+          {new Date(l.ts).toLocaleTimeString()}
+        </Text>
+        <Text style={{ color: tint, fontSize: 9.5, fontFamily: T.mono, fontWeight: "700", letterSpacing: 0.4 }}>
+          {sev}
+        </Text>
+        <Text
+          style={{ color: l.agent ? hue(l.agent) : T.faint, fontSize: 10, fontFamily: T.mono, flexShrink: 1 }}
+          numberOfLines={1}
+        >
+          {l.agent ? trunc(l.agent, 14) : "—"}
+        </Text>
+        <View style={{ flex: 1 }} />
+        {/* A short trace id, tinted by the trace it belongs to: lines from one
+            turn share a colour, which is the correlation you want while
+            scrolling. Not a link — the phone has no SigNoz base URL to build one
+            from, and inventing a host would be worse than not offering the tap. */}
+        {l.traceId ? (
+          <View
+            style={{
+              borderWidth: 1,
+              borderColor: T.line2,
+              borderRadius: radii.pill,
+              paddingHorizontal: 6,
+              paddingVertical: 1,
+            }}
+          >
+            <Text style={{ color: hue(l.traceId), fontSize: 9.5, fontFamily: T.mono }}>
+              {l.traceId.slice(0, 8)}
+            </Text>
+          </View>
+        ) : null}
+      </View>
+      <Text style={{ color: T.text, fontSize: 11.5, fontFamily: T.mono, lineHeight: 17 }} numberOfLines={4}>
+        {l.body}
+      </Text>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 8 · Replay
 // ---------------------------------------------------------------------------
 
 function ReplayView(props: {

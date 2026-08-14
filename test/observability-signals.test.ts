@@ -6,7 +6,7 @@
  * codebase cares about most — never invent a number an adapter didn't report.
  */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { LoomEvent } from "../src/types.js";
 import { NotchMetrics } from "../src/observability/metrics.js";
 import { NotchLogs, SEVERITY, eventToLogRecord, truncate } from "../src/observability/logs.js";
@@ -424,6 +424,20 @@ describe("NotchLogs (OTLP/HTTP JSON export)", () => {
 // ---------------------------------------------------------------------------
 
 describe("recordAgentEvent (one event -> span + metric + log)", () => {
+  // Every other block here builds its exporter with an explicit config object,
+  // so the suite-wide NOTCH_TELEMETRY_DISABLED never reached them. These tests
+  // are the exception: recordAgentEvent goes through the process-wide singleton,
+  // which reads the environment, and a disabled singleton posts nothing — the
+  // assertions then read [0] of an empty array. Cleared before the first `it`,
+  // which is when the singleton first wakes, and restored afterwards so the
+  // rest of the run stays hermetic.
+  const wasDisabled = process.env.NOTCH_TELEMETRY_DISABLED;
+  beforeAll(() => {
+    delete process.env.NOTCH_TELEMETRY_DISABLED;
+  });
+  afterAll(() => {
+    if (wasDisabled != null) process.env.NOTCH_TELEMETRY_DISABLED = wasDisabled;
+  });
   afterEach(() => vi.unstubAllGlobals());
 
   /** Sort a batch of posts by signal, so a test can assert on one at a time. */
