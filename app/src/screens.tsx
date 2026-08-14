@@ -1,8 +1,14 @@
-/** The three screens: Pair, Board, Project (Thread | Changes) — quiet graphite. */
+/**
+ * The three screens: Pair, Board, Project.
+ *
+ * The Project screen is a tab host. Its heavier tabs live in their own files —
+ * Observatory in observatory.tsx, Ask Noz in noz.tsx, Skills/MCP/Agents in
+ * tools.tsx — so this file stays the navigation and the thread, which is what
+ * it is actually about.
+ */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Alert,
   FlatList,
   KeyboardAvoidingView,
@@ -22,12 +28,10 @@ import {
   clearCreds,
   getChats,
   getEvents,
-  getMetrics,
   getProject,
   getProjects,
   getTasks,
   getTree,
-  getTriage,
   handoff,
   interrupt,
   saveCreds,
@@ -36,27 +40,17 @@ import {
   type Chat,
   type Creds,
   type LoomEvent,
-  type Metrics,
   type Project,
   type TaskItem,
   type TaskResult,
-  type Triage,
   type WorkingTree,
 } from "./api";
-import { Btn, DiffView, EventLine, Sys, TaskRow } from "./components";
+import { Btn, DiffView, EventLine, Sys, TaskRow, field } from "./components";
+import { NozView } from "./noz";
+import { ObservatoryView } from "./observatory";
+import { ToolsView } from "./tools";
 import { useStt } from "./stt";
 import { T, radii, spacing, usd } from "./theme";
-
-const field = {
-  backgroundColor: T.raised,
-  borderColor: T.line,
-  borderWidth: 1,
-  borderRadius: radii.input,
-  color: T.text,
-  paddingHorizontal: 12,
-  paddingVertical: 12,
-  fontSize: 15,
-} as const;
 
 /** Brand lockup: the wordmark over a short thread-cyan hairline. */
 function Wordmark(props: { size?: number }) {
@@ -623,303 +617,29 @@ export function BoardScreen(props: {
 }
 
 // ---------------------------------------------------------------------------
-// Observatory — the fleet's telemetry, mirroring the web app: metric cards,
-// a per-agent fleet with "why did I fail?" triage, and the live trace timeline
-// (the self-heal intervention gets its own violet line).
+// Project: Thread | Observatory | Noz | Tasks | Changes | Tools
 // ---------------------------------------------------------------------------
 
-/** A labelled metric tile. Value is the one loud thing; accent turns it violet. */
-function MetricCard(props: { label: string; value: string; sub?: string; accent?: boolean }) {
-  return (
-    <View
-      style={{
-        minWidth: 104,
-        backgroundColor: T.panel,
-        borderWidth: 1,
-        borderColor: props.accent ? T.primaryDim : T.line,
-        borderRadius: radii.card,
-        paddingVertical: 11,
-        paddingHorizontal: 13,
-        gap: 3,
-      }}
-    >
-      <Text style={{ color: T.faint, fontSize: 9.5, fontFamily: T.mono, letterSpacing: 0.6, textTransform: "uppercase" }}>
-        {props.label}
-      </Text>
-      <Text style={{ color: props.accent ? T.primary : T.text, fontSize: 20, fontWeight: "700" }} numberOfLines={1}>
-        {props.value}
-      </Text>
-      {props.sub ? <Text style={{ color: T.faint, fontSize: 10, fontFamily: T.mono }}>{props.sub}</Text> : null}
-    </View>
-  );
-}
+type Tab = "thread" | "observatory" | "noz" | "tasks" | "changes" | "tools";
 
-const tok = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n));
-
-/** The kinds worth a line in the trace timeline, and whether one is a self-heal. */
-const isHeal = (e: LoomEvent): boolean =>
-  e.kind === "status" && (e.payload as Record<string, unknown>).state === "signoz_intervention";
-
-function timelineLabel(e: LoomEvent): { text: string; color: string; bold?: boolean } | null {
-  const p = e.payload as Record<string, unknown>;
-  if (isHeal(e))
-    return {
-      text: `⚡ SigNoz alert · ${String(p.alert ?? "alert")} → baton forced off ${e.agentId ?? "agent"}${p.fallback ? ` to ${p.fallback}` : ""}`,
-      color: T.primary,
-      bold: true,
-    };
-  if (e.kind === "handoff") return { text: `${String(p.from ?? "?")}  ⟿  ${String(p.to ?? "?")}`, color: T.shuttle };
-  if (e.kind === "run_complete")
-    return { text: `✓ ${e.agentId ?? "agent"} finished a turn${p.durationMs ? ` · ${Math.round(Number(p.durationMs) / 100) / 10}s` : ""}`, color: T.faint };
-  if (e.kind === "error") return { text: `✗ ${String(p.message ?? "error")}`, color: T.err };
-  if (e.kind === "route_failed") return { text: `⊘ ${String(p.error ?? p.reason ?? "route failed")}`, color: T.err };
-  if (e.kind.indexOf("route_") === 0) return { text: `▸ route ${e.kind.slice(6)}`, color: T.dim };
-  if (e.kind.indexOf("memory_") === 0) return { text: `◈ brain ${e.kind.slice(7)}`, color: T.thread };
-  return null;
-}
-
-export function ObservatoryView(props: { creds: Creds; project: Project }) {
-  const { creds, project } = props;
-  const [metrics, setMetrics] = useState<Metrics | null>(null);
-  const [events, setEvents] = useState<LoomEvent[]>([]);
-  const [triageAgent, setTriageAgent] = useState<string | null>(null);
-  const [triage, setTriage] = useState<Triage | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-
-  const load = useCallback(() => {
-    void getMetrics(creds, project.id)
-      .then(({ metrics: m }) => setMetrics(m))
-      .catch(() => {});
-    void getEvents(creds, project.id, undefined, 200)
-      .then(({ events: e }) => setEvents(e))
-      .catch(() => {});
-  }, [creds, project.id]);
-
-  // Poll on open — telemetry is a glance-and-go surface, not a live socket.
-  useEffect(() => {
-    load();
-    const t = setInterval(load, 4000);
-    return () => clearInterval(t);
-  }, [load]);
-
-  const openTriage = (agentId: string) => {
-    setTriageAgent(agentId);
-    setTriage(null);
-    setErr(null);
-    void getTriage(creds, project.id, agentId)
-      .then(({ triage: r }) => setTriage(r))
-      .catch((e) => setErr(String(e instanceof Error ? e.message : e)));
-  };
-
-  const byAgent = new Map((metrics?.byAgent ?? []).map((a) => [a.agentId, a]));
-  const active = project.agents.filter((a) => a.busy).length;
-  const totalUsd = metrics?.totalUsd ?? project.costUsd ?? 0;
-  const tin = metrics?.tokensIn ?? 0;
-  const tout = metrics?.tokensOut ?? 0;
-  const rows = events.map(timelineLabel).map((l, i) => ({ l, e: events[i]! })).filter((x) => x.l);
-
-  return (
-    <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: spacing.md, gap: spacing.md, paddingBottom: 28 }}>
-      {/* metric tiles */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.sm }}>
-        <MetricCard label="Agents" value={`${active} / ${project.agents.length}`} sub="active / fleet" />
-        <MetricCard label="Baton" value={project.holder ?? "—"} sub="holds it now" accent />
-        <MetricCard label="Spend" value={usd(totalUsd) || "$0"} sub="all agents" />
-        <MetricCard label="Turns" value={String(metrics?.turns ?? 0)} sub="completed" />
-        <MetricCard label="Tokens" value={tok(tin + tout)} sub={`${tok(tin)} in · ${tok(tout)} out`} />
-      </ScrollView>
-
-      {/* fleet — each agent triages itself */}
-      <View style={{ gap: 6 }}>
-        <Text style={{ color: T.faint, fontSize: 10, fontFamily: T.mono, letterSpacing: 0.6, textTransform: "uppercase" }}>
-          Fleet
-        </Text>
-        {project.agents.map((a) => {
-          const m = byAgent.get(a.id);
-          return (
-            <View
-              key={a.id}
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                gap: spacing.sm,
-                backgroundColor: T.panel,
-                borderWidth: 1,
-                borderColor: a.holdsBaton ? T.primaryDim : T.line,
-                borderRadius: radii.card,
-                paddingVertical: 10,
-                paddingHorizontal: 12,
-              }}
-            >
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={{ color: T.text, fontSize: 13, fontWeight: "600" }} numberOfLines={1}>
-                  {a.holdsBaton ? "◆ " : ""}
-                  {a.id}
-                  <Text style={{ color: T.faint, fontWeight: "400", fontSize: 11 }}> {a.role}</Text>
-                </Text>
-                <Text style={{ color: T.faint, fontSize: 10.5, fontFamily: T.mono, marginTop: 2 }}>
-                  {usd(m?.usd ?? 0) || "$0"} · {m?.turns ?? 0} turns · {tok((m?.tokensIn ?? 0) + (m?.tokensOut ?? 0))} tok
-                </Text>
-              </View>
-              <TouchableOpacity
-                onPress={() => openTriage(a.id)}
-                activeOpacity={0.7}
-                accessibilityRole="button"
-                accessibilityLabel={`Why did ${a.id} fail? Root-cause it from its own traces`}
-                style={{
-                  borderWidth: 1,
-                  borderColor: T.primaryDim,
-                  backgroundColor: T.primaryDim,
-                  borderRadius: radii.key,
-                  paddingVertical: 5,
-                  paddingHorizontal: 10,
-                }}
-              >
-                <Text style={{ color: T.primary, fontSize: 11, fontWeight: "700" }}>⚠ Triage</Text>
-              </TouchableOpacity>
-            </View>
-          );
-        })}
-      </View>
-
-      {/* trace timeline */}
-      <View style={{ gap: 6 }}>
-        <Text style={{ color: T.faint, fontSize: 10, fontFamily: T.mono, letterSpacing: 0.6, textTransform: "uppercase" }}>
-          Trace
-        </Text>
-        {!rows.length ? (
-          <Sys text="No fleet events yet. Run a turn and the trace fills in." />
-        ) : (
-          rows.map(({ l, e }) => (
-            <View key={e.id} style={{ flexDirection: "row", alignItems: "flex-start", gap: 8, paddingVertical: 3 }}>
-              <View
-                style={{
-                  width: 6,
-                  height: 6,
-                  borderRadius: 3,
-                  marginTop: 5,
-                  backgroundColor: l!.color,
-                }}
-              />
-              <Text
-                style={{ color: l!.color, fontSize: 12, fontFamily: T.mono, flex: 1, fontWeight: l!.bold ? "700" : "400" }}
-              >
-                {l!.text}
-              </Text>
-            </View>
-          ))
-        )}
-      </View>
-
-      {/* triage modal */}
-      <Modal visible={triageAgent !== null} transparent animationType="fade" onRequestClose={() => setTriageAgent(null)}>
-        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "flex-end" }}>
-          <View
-            style={{
-              backgroundColor: T.bg,
-              borderTopLeftRadius: 18,
-              borderTopRightRadius: 18,
-              borderWidth: 1,
-              borderColor: T.line,
-              maxHeight: "82%",
-              paddingBottom: 28,
-            }}
-          >
-            <View
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                paddingHorizontal: spacing.md,
-                paddingVertical: spacing.md,
-                borderBottomWidth: 1,
-                borderBottomColor: T.line,
-              }}
-            >
-              <Text style={{ color: T.text, fontSize: 15, fontWeight: "700", flex: 1 }}>Triage · {triageAgent}</Text>
-              <TouchableOpacity onPress={() => setTriageAgent(null)} activeOpacity={0.7} accessibilityLabel="close">
-                <Text style={{ color: T.dim, fontSize: 20, lineHeight: 22 }}>✕</Text>
-              </TouchableOpacity>
-            </View>
-            <ScrollView contentContainerStyle={{ padding: spacing.md, gap: spacing.md }}>
-              {err ? (
-                <Sys color={T.err} text={err} />
-              ) : !triage ? (
-                <View style={{ alignItems: "center", paddingVertical: 40, gap: 12 }}>
-                  <ActivityIndicator color={T.primary} />
-                  <Sys text={`Reading ${triageAgent}'s traces…`} />
-                </View>
-              ) : (
-                <>
-                  <View style={{ flexDirection: "row", gap: 6, flexWrap: "wrap" }}>
-                    <Badge text={triage.source === "llm" ? "Claude" : triage.source === "no-data" ? "no data" : "rule-based"} />
-                    <Badge text={triage.from === "signoz" ? "from SigNoz" : triage.from === "local-log" ? "from event log" : "no source"} />
-                    <Badge text={`${triage.spanCount} spans · ${triage.errorCount} err`} />
-                  </View>
-                  <Callout label="Root cause" text={triage.rootCause} tint={triage.errorCount ? T.warn : T.ok} />
-                  <Callout label="Suggested fix" text={triage.suggestedFix} tint={T.primary} />
-                  {triage.evidence.length > 0 && (
-                    <View style={{ gap: 4 }}>
-                      <Text style={{ color: T.faint, fontSize: 10, fontFamily: T.mono, letterSpacing: 0.6, textTransform: "uppercase" }}>
-                        Evidence (its own spans)
-                      </Text>
-                      {triage.evidence.slice(0, 8).map((s, i) => (
-                        <View key={i} style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
-                          <Text
-                            style={{
-                              color: s.code === 2 ? T.err : T.dim,
-                              fontSize: 11,
-                              fontFamily: T.mono,
-                              flex: 1,
-                            }}
-                            numberOfLines={1}
-                          >
-                            {s.name}
-                            {s.ms ? ` · ${s.ms}ms` : ""}
-                            {s.msg ? ` · ${s.msg}` : ""}
-                          </Text>
-                        </View>
-                      ))}
-                    </View>
-                  )}
-                </>
-              )}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
-    </ScrollView>
-  );
-}
-
-function Badge(props: { text: string }) {
-  return (
-    <View style={{ borderWidth: 1, borderColor: T.line2, borderRadius: radii.pill, paddingHorizontal: 9, paddingVertical: 2 }}>
-      <Text style={{ color: T.dim, fontSize: 10, fontFamily: T.mono, letterSpacing: 0.3 }}>{props.text}</Text>
-    </View>
-  );
-}
-
-function Callout(props: { label: string; text: string; tint: string }) {
-  return (
-    <View style={{ gap: 5 }}>
-      <Text style={{ color: T.faint, fontSize: 10, fontFamily: T.mono, letterSpacing: 0.6, textTransform: "uppercase" }}>
-        {props.label}
-      </Text>
-      <View style={{ backgroundColor: T.panel, borderWidth: 1, borderColor: T.line, borderRadius: radii.card, padding: 12 }}>
-        <Text style={{ color: T.text, fontSize: 13.5, lineHeight: 20 }}>{props.text}</Text>
-      </View>
-    </View>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Project: Thread | Observatory | Tasks | Changes
-// ---------------------------------------------------------------------------
+/**
+ * Six tabs no longer fit across a phone, so the strip scrolls. The labels stay
+ * short for the same reason — "Observatory" is already the longest thing that
+ * can sit here without pushing everything else off the edge.
+ */
+const TABS: ReadonlyArray<{ key: Tab; label: string; accent?: string }> = [
+  { key: "thread", label: "Thread" },
+  { key: "observatory", label: "Observatory", accent: T.primary },
+  { key: "noz", label: "Ask Noz", accent: T.primary },
+  { key: "tasks", label: "Tasks" },
+  { key: "changes", label: "Changes" },
+  { key: "tools", label: "Tools" },
+];
 
 export function ProjectScreen(props: { creds: Creds; project: Project; onBack: () => void }) {
   const { creds } = props;
   const [project, setProject] = useState(props.project);
-  const [tab, setTab] = useState<"thread" | "observatory" | "tasks" | "changes">("thread");
+  const [tab, setTab] = useState<Tab>("thread");
   const [chatId, setChatId] = useState("main");
   const [chats, setChats] = useState<Chat[]>([]);
   const [events, setEvents] = useState<LoomEvent[]>([]);
@@ -1148,46 +868,44 @@ export function ProjectScreen(props: { creds: Creds; project: Project; onBack: (
         } />
       </View>
 
-      {/* tab strip — active tab carries a neutral 2px underline */}
+      {/* tab strip — active tab carries a 2px underline; scrolls, six don't fit */}
       <View
         style={{
-          flexDirection: "row",
-          alignItems: "stretch",
-          paddingHorizontal: spacing.md,
-          gap: spacing.lg,
           backgroundColor: T.panel,
           borderBottomWidth: 1,
           borderBottomColor: T.line,
         }}
       >
-        {(["thread", "observatory", "tasks", "changes"] as const).map((name) => (
-          <TouchableOpacity
-            key={name}
-            onPress={() => setTab(name)}
-            activeOpacity={0.7}
-            accessibilityRole="tab"
-            accessibilityState={{ selected: tab === name }}
-            style={{
-              paddingVertical: 9,
-              borderBottomWidth: 2,
-              borderBottomColor: tab === name ? (name === "observatory" ? T.primary : T.dim) : "transparent",
-              marginBottom: -1,
-            }}
-          >
-            <Text
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={{ flexGrow: 0 }}
+          contentContainerStyle={{ paddingHorizontal: spacing.md, gap: spacing.lg, alignItems: "stretch" }}
+        >
+          {TABS.map((t) => (
+            <TouchableOpacity
+              key={t.key}
+              onPress={() => setTab(t.key)}
+              activeOpacity={0.7}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: tab === t.key }}
               style={{
-                color: tab === name ? T.text : T.dim,
-                fontWeight: "600",
-                fontSize: 13,
+                justifyContent: "center",
+                minHeight: 44,
+                borderBottomWidth: 2,
+                borderBottomColor: tab === t.key ? (t.accent ?? T.dim) : "transparent",
+                marginBottom: -1,
               }}
             >
-              {name === "thread" ? "Thread" : name === "observatory" ? "Observatory" : name === "tasks" ? "Tasks" : "Changes"}
-            </Text>
-          </TouchableOpacity>
-        ))}
+              <Text style={{ color: tab === t.key ? T.text : T.dim, fontWeight: "600", fontSize: 13 }}>
+                {t.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
         {routeActive && (
-          <View style={{ marginLeft: "auto", justifyContent: "center" }}>
-            <Text style={{ color: T.thread, fontSize: 11, fontFamily: T.mono }}>
+          <View style={{ paddingHorizontal: spacing.md, paddingBottom: 6 }}>
+            <Text style={{ color: T.thread, fontSize: 11, fontFamily: T.mono }} numberOfLines={1}>
               ▸ {r!.name ?? "route"} {r!.current + 1}/{r!.steps.length}
               {r!.status === "waiting_human" ? " ⏸ reply below" : ""}
             </Text>
@@ -1375,6 +1093,21 @@ export function ProjectScreen(props: { creds: Creds; project: Project; onBack: (
         </>
       ) : tab === "observatory" ? (
         <ObservatoryView creds={creds} project={project} />
+      ) : tab === "noz" ? (
+        <NozView creds={creds} project={project} />
+      ) : tab === "tools" ? (
+        <ToolsView
+          creds={creds}
+          project={project}
+          // Enabling/disabling an agent or changing its role rewrites the roster
+          // the whole screen renders from, so pull it back immediately instead of
+          // waiting out the 4s poll and letting the switch look like it snapped back.
+          onAgentsChanged={() =>
+            void getProject(creds, project.id)
+              .then(({ project: p }) => setProject(p))
+              .catch(() => {})
+          }
+        />
       ) : tab === "tasks" ? (
         <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: spacing.md }}>
           {/* Issues / PRs */}
