@@ -55,11 +55,6 @@ export abstract class AgentBase {
  */
 export const ADAPTER_CAPABILITIES: AgentCapabilities = {
   tier: "adapter",
-  send: true,
-  stream: true,
-  injectMemory: true,
-  interrupt: true,
-  diff: true,
   // Off unless an adapter's CLI really takes MCP config — see AgentCapabilities.
   mcp: false,
 };
@@ -93,11 +88,6 @@ export abstract class AdapterBase extends AgentBase implements Adapter {
 export abstract class BridgeBase extends AgentBase implements Bridge {
   readonly capabilities: AgentCapabilities = {
     tier: "bridge",
-    send: false,
-    stream: true,
-    injectMemory: true,
-    interrupt: false,
-    diff: false,
     // A bridge drives someone else's GUI; there is no command line to put a
     // config on, and whatever MCP servers that app has are its own.
     mcp: false,

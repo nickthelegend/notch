@@ -297,13 +297,26 @@ export interface AdapterEvent {
   payload: Record<string, unknown>;
 }
 
+/**
+ * What Loom needs to know about an agent before it does something to it.
+ *
+ * Two fields, and both have a reader. This used to carry five more — `send`,
+ * `stream`, `injectMemory`, `interrupt`, `diff` — which every adapter dutifully
+ * set and nothing ever read. A capability flag nobody checks isn't a contract,
+ * it's a comment with a type annotation: `injectMemory` and `stream` were `true`
+ * on every agent that has ever existed here, and `interrupt`/`diff` were
+ * `tier === "adapter"` restated, since only an `Adapter` has those methods at
+ * all. The one flag with real variation, `send`, gated nothing — a bridge has no
+ * `send()` to call, so the type system had already settled it.
+ *
+ * The five are gone rather than wired up, because the thing they described is
+ * enforced better without them: `Adapter` *is* send + interrupt + diff, and
+ * `isAdapter()` is the check. A boolean that agrees with the interface adds a
+ * second answer that can drift from the first.
+ */
 export interface AgentCapabilities {
+  /** Adapter or bridge — who may hold the baton. Read by `isAdapter`. */
   tier: AgentTier;
-  send: boolean;
-  stream: boolean;
-  injectMemory: boolean;
-  interrupt: boolean;
-  diff: boolean;
   /**
    * Can this agent be handed the project's MCP servers for a turn?
    *
