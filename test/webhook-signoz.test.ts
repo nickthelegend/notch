@@ -3,7 +3,7 @@
  * Notch forces the baton off that agent onto a fallback. Metric → intervention.
  */
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { readDaemonConfig } from "../src/core/registry.js";
 import { DaemonClient } from "../src/daemon/client.js";
 import { LoomDaemon } from "../src/daemon/server.js";
@@ -32,6 +32,25 @@ afterAll(async () => {
 });
 
 describe("SigNoz alert -> baton intervention", () => {
+  // These cases share one daemon, and each one begins by handing the baton to a
+  // specific agent. A quarantine left behind by the previous case used to be
+  // harmless because nothing enforced it; now that a paused agent is genuinely
+  // refused, the leak has to be cleaned up or the *next* test fails on setup.
+  beforeEach(async () => {
+    const q = (await client.project(projectId)).project.quarantine ?? {};
+    for (const agentId of Object.keys(q)) {
+      await fetch(`${baseUrl}/api/webhooks/signoz`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          status: "resolved",
+          alerts: [{ status: "resolved", labels: { alertname: "cleanup", "notch.project": "heal", "gen_ai.agent.id": agentId } }],
+        }),
+      });
+    }
+    await waitUntil(async () => Object.keys((await client.project(projectId)).project.quarantine ?? {}).length === 0, { timeoutMs: 6000 });
+  });
+
   it("forces the baton off the failing agent onto a fallback", async () => {
     // give the failing agent the baton first (it starts unassigned)
     await client.handoff(projectId, "plannerbot");
@@ -110,6 +129,62 @@ describe("SigNoz alert -> baton intervention", () => {
       delete process.env.NOTCH_HEAL_MAX_RETRIES;
       process.env.NOTCH_HEAL_DISABLED = "1";
     }
+  });
+
+  // These two guard the bug that made the whole feature cosmetic: the webhook
+  // wrote a quarantine into state and *nothing read it back*, so the paused
+  // agent kept taking work and the pause was invisible to every client.
+  it("refuses to hand the baton to an agent SigNoz has paused", async () => {
+    await client.handoff(projectId, "plannerbot");
+    await fetch(`${baseUrl}/api/webhooks/signoz`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        status: "firing",
+        alerts: [{ status: "firing", labels: { alertname: "AgentErrorRateHigh", "notch.project": "heal", "gen_ai.agent.id": "execbot" } }],
+      }),
+    });
+
+    const res = await fetch(`${baseUrl}/api/projects/${projectId}/handoff`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${readDaemonConfig()!.adminToken}` },
+      body: JSON.stringify({ to: "execbot" }),
+    });
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: string; agentId: string };
+    expect(body.error).toBe("agent_quarantined");
+    expect(body.agentId).toBe("execbot");
+
+    // ...and it lets go once the alert resolves.
+    await fetch(`${baseUrl}/api/webhooks/signoz`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        status: "resolved",
+        alerts: [{ status: "resolved", labels: { alertname: "AgentErrorRateHigh", "notch.project": "heal", "gen_ai.agent.id": "execbot" } }],
+      }),
+    });
+    await waitUntil(async () => !((await client.project(projectId)).project.quarantine ?? {})["execbot"], { timeoutMs: 6000 });
+    const ok = await fetch(`${baseUrl}/api/projects/${projectId}/handoff`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${readDaemonConfig()!.adminToken}` },
+      body: JSON.stringify({ to: "execbot" }),
+    });
+    expect(ok.status).toBe(200);
+  });
+
+  it("reports the pause in the project status, not only on disk", async () => {
+    await fetch(`${baseUrl}/api/webhooks/signoz`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        status: "firing",
+        alerts: [{ status: "firing", labels: { alertname: "AgentLatencyHigh", "notch.project": "heal", "gen_ai.agent.id": "reviewbot" } }],
+      }),
+    });
+    await waitUntil(async () => Boolean(((await client.project(projectId)).project.quarantine ?? {})["reviewbot"]), { timeoutMs: 6000 });
+    const q = (await client.project(projectId)).project.quarantine ?? {};
+    expect(q["reviewbot"]?.reason).toContain("AgentLatencyHigh");
   });
 
   it("a resolved alert for an agent that was never quarantined is a no-op", async () => {

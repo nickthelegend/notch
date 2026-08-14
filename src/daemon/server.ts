@@ -22,7 +22,8 @@ import { retrieve } from "../core/brain-index.js";
 import { RouteActiveError } from "../core/routes.js";
 import { recordAgentEvent } from "../observability/index.js";
 import { triageAgent } from "../observability/triage.js";
-import { burnSeries, fetchSpans, healthScore, insightSpansFromLog, recentAgentErrors, traceSpans, type InsightSpan } from "../observability/insights.js";
+import { burnSeries, fetchMetricSeries, fetchSpans, healthScore, insightSpansFromLog, recentAgentErrors, traceSpans, NOTCH_METRIC_NAMES, type InsightSpan, type MetricSeries } from "../observability/insights.js";
+import { fetchLogs, type InsightLog } from "../observability/logs-query.js";
 import { askObservatory, type AskContext } from "../observability/ask.js";
 import { probeMcpServer, writeMcpSession } from "../core/mcp.js";
 import { searchCatalog } from "../core/mcp-catalog.js";
@@ -68,7 +69,7 @@ import { APP_HTML, APP_MANIFEST } from "./app-page.js";
 import { GEIST_WOFF2 } from "./geist-font.js";
 import { AuthManager, bearerToken } from "./auth.js";
 import { PUSH_KINDS, pushContent, sendExpoPush } from "./push.js";
-import { BudgetExceededError, ProjectRuntime } from "./runtime.js";
+import { BudgetExceededError, ProjectRuntime, QuarantinedError } from "./runtime.js";
 import { buildBoard } from "./board.js";
 import {
   ghAuthStatus,
@@ -846,6 +847,18 @@ export class LoomDaemon {
             // 409, like the other "the fleet is in a state that forbids this"
             // refusals. The numbers ride along so a client can say what the cap
             // was and what has been spent against it, without guessing.
+            // Same 409 family: a firing SigNoz alert has this agent out of
+            // rotation, and the client should say so rather than "500".
+            if (err instanceof QuarantinedError) {
+              res.status(409).json({
+                error: "agent_quarantined",
+                agentId: err.agentId,
+                reason: err.reason,
+                since: err.since,
+                message: err.message,
+              });
+              return;
+            }
             if (err instanceof BudgetExceededError) {
               res.status(409).json({
                 error: "budget_exceeded",
@@ -945,6 +958,68 @@ export class LoomDaemon {
       withRuntime(async (rt, req, res) => {
         const spans = await traceSpans(String(req.params.traceId ?? "")).catch(() => [] as InsightSpan[]);
         res.json({ traceId: String(req.params.traceId ?? ""), spans });
+      }),
+    );
+
+    /**
+     * The other two OTel signals, read back.
+     *
+     * Both differ from /insights/spans in one important way: there is no
+     * local-log fallback. A span can be reconstructed from the event log because
+     * it summarises an event Notch already stored; a log body or a metric sample
+     * cannot be, and faking one would put a number on screen that SigNoz never
+     * saw. So when ClickHouse is unreachable these return `from: "unavailable"`
+     * with an empty payload and the UI is expected to say "SigNoz unreachable"
+     * rather than render a plausible-looking empty chart.
+     *
+     * `rt.info.name` — not the project id — is the filter value, because that is
+     * what Notch stamps onto notch.project when it exports (same as the span
+     * routes above).
+     */
+    app.get(
+      "/api/projects/:id/insights/logs",
+      withRuntime(async (rt, req, res) => {
+        const limit = Math.min(1000, Math.max(1, Number(req.query.limit) || 200));
+        let from: "signoz" | "unavailable" = "signoz";
+        const logs = await fetchLogs({
+          project: rt.info.name,
+          agent: req.query.agent ? String(req.query.agent) : undefined,
+          severity: req.query.severity ? String(req.query.severity) : undefined,
+          traceId: req.query.traceId ? String(req.query.traceId) : undefined,
+          search: req.query.q ? String(req.query.q) : undefined,
+          limit,
+        }).catch(() => {
+          from = "unavailable";
+          return [] as InsightLog[];
+        });
+        res.json({ from, logs });
+      }),
+    );
+
+    app.get(
+      "/api/projects/:id/insights/metrics",
+      withRuntime(async (rt, req, res) => {
+        // `names` is a comma list; omitting it means "everything Notch emits".
+        const names = String(req.query.names ?? "")
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+        // `since` accepts either an absolute epoch-ms or a lookback in ms; a
+        // value small enough to be a duration cannot be a real 2020s timestamp.
+        const raw = Number(req.query.since) || 0;
+        const now = Date.now();
+        const sinceMs = raw <= 0 ? now - 6 * 3600_000 : raw < 1e12 ? now - raw : raw;
+        const stepMs = Math.max(1000, Number(req.query.step) || 60_000);
+        let from: "signoz" | "unavailable" = "signoz";
+        const series = await fetchMetricSeries(names.length ? names : NOTCH_METRIC_NAMES, {
+          project: rt.info.name,
+          sinceMs,
+          stepMs,
+        }).catch(() => {
+          from = "unavailable";
+          return [] as MetricSeries[];
+        });
+        res.json({ from, sinceMs, stepMs, series });
       }),
     );
 
