@@ -1473,6 +1473,22 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
     font-family:var(--font-mono);border:1px solid var(--border);color:var(--muted-foreground)}
   .decsrc.llm,.decsrc.cli{color:var(--ch2);border-color:color-mix(in srgb,var(--ch2) 40%,transparent);background:color-mix(in srgb,var(--ch2) 10%,transparent)}
   .decfoot{color:var(--muted-foreground);opacity:.75;font-size:10px}
+  /* logs — a dense reading surface, so it is monospace and tightly ruled */
+  .lgq{margin-left:auto;min-width:180px;font-size:11.5px}
+  .lglist{border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+  .lgrow{display:flex;align-items:baseline;gap:10px;padding:5px 11px;border-bottom:1px solid var(--border);
+    font-family:var(--font-mono);font-size:11.5px;line-height:1.5}
+  .lgrow:last-child{border-bottom:0}
+  .lgrow:hover{background:var(--secondary)}
+  .lgrow.error{background:color-mix(in srgb,var(--err) 7%,transparent)}
+  .lgtime{color:var(--muted-foreground);flex:none;font-variant-numeric:tabular-nums}
+  .lgsev{flex:none;width:44px;font-size:9.5px;font-weight:700;letter-spacing:.04em;color:var(--muted-foreground)}
+  .lgsev.error{color:var(--err)} .lgsev.warn{color:var(--warn)} .lgsev.info{color:var(--ch2)} .lgsev.debug{opacity:.6}
+  .lgagent{flex:none;min-width:88px;color:var(--foreground);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .lgbody{flex:1;min-width:0;color:var(--muted-foreground);overflow-wrap:anywhere}
+  .lgtrace{flex:none;color:var(--ch2);text-decoration:none;font-size:10.5px}
+  .lgtrace:hover{text-decoration:underline}
+  .lgtrace.none{color:var(--muted-foreground);opacity:.4}
   .decsl{font-size:9.5px;letter-spacing:.1em;color:var(--muted-foreground);margin:14px 0 5px}
   .decsl:first-child{margin-top:0}
   .decdt{font-size:15px;font-weight:700}
@@ -2848,6 +2864,7 @@ ${BRAND_SPRITE}
         timeline: "Every fleet event in order \\u2014 turns, handoffs, \\ud83d\\udca1 <b>decisions</b>, and SigNoz self-heal. Click a decision line to open its reasoning.",
         metrics: "<b>The dashboard.</b> Totals up top, then what the spend is made of \\u2014 tokens and calls per model \\u2014 then how it behaved over time, then each agent\\u2019s 0\\u2013100 <b>health score</b> with a <b>\\u26a0 Triage</b> button that root-causes it from its own SigNoz spans, and finally the 24h burn with per-agent budgets.",
         decisions: "What each agent <b>decided and why</b>. Filter by agent on the left; click a card for the reason, the alternatives it weighed, and the files it touched.",
+        logs: "The fleet\\u2019s <b>structured logs</b>, read back out of SigNoz \\u2014 every message, tool call, file edit and error, with the severity it was recorded at. A line that belongs to a turn carries its <b>trace</b>, so you can jump straight from a log line to the span that produced it.",
         travel: "<b>Rewind the whole run.</b> Drag the scrubber (or hit Play) to any moment and the whole app rewinds to it: who held the baton, every agent\\u2019s state, the decisions made so far, the thread \\u2014 and the <b>turn running at that instant</b> with its model, tokens, cost and trace. All reconstructed from the event log."
       };
       return E[view] ? '<div class="obexplain">' + E[view] + "</div>" : "";
@@ -3109,7 +3126,7 @@ ${BRAND_SPRITE}
       // Six views, ordered by the question people arrive with. "Replay" is the
       // old Time Travel: it absorbed the separate span-replay tab, which scrubbed
       // the same run on a second slider and left everyone asking which was which.
-      var VIEWS = [["metrics", "Metrics"], ["canvas", "Live fleet"], ["graph", "Handoffs"], ["timeline", "Timeline"], ["decisions", "Decisions"], ["travel", "Replay"]];
+      var VIEWS = [["metrics", "Metrics"], ["canvas", "Live fleet"], ["graph", "Handoffs"], ["timeline", "Timeline"], ["decisions", "Decisions"], ["logs", "Logs"], ["travel", "Replay"]];
       var tabs = VIEWS.map(function(v){
         var on = state.obView === v[0];
         return '<button class="obtab' + (on ? " on" : "") + '" role="tab" aria-selected="' + on + '" tabindex="' + (on ? "0" : "-1") + '" data-obv="' + v[0] + '">' + esc(v[1]) + "</button>";
@@ -3125,6 +3142,7 @@ ${BRAND_SPRITE}
           observatoryMetricsDetail(p, events, byAgent, state.obHealth || {}) +
           '<div id="obburn" class="obasync">' + LOADER + "</div>";
       else if (state.obView === "decisions") body = '<div id="obdecisions" class="obasync">' + LOADER + "</div>";
+      else if (state.obView === "logs") body = '<div id="oblogs" class="obasync">' + LOADER + "</div>";
       else if (state.obView === "travel") body = '<div id="obtravel" class="obasync">' + LOADER + "</div>";
       else body = '<div class="obcanvaswrap">' + observatoryCanvas(agents, p.holder, byAgent) + "</div>";
       el.innerHTML =
@@ -3207,6 +3225,7 @@ ${BRAND_SPRITE}
       if (state.obView === "canvas" || state.obView === "graph") wireObservatoryDrag(el);
       if (state.obView === "metrics") observatoryBurn(p);
       if (state.obView === "decisions") observatoryDecisions(p);
+      if (state.obView === "logs") observatoryLogs(p);
       if (state.obView === "travel") observatoryTravel(p);
     }
     // "Why did I fail?" — pull the agent's own traces and root-cause them.
@@ -3535,6 +3554,60 @@ ${BRAND_SPRITE}
         else if (decisions[0]) selectDecision(decisions[0].id);
       }).catch(function(){ host.innerHTML = '<div class="obnote">Decisions unavailable \\u2014 the daemon didn\\u2019t answer. Switch tabs and back to retry.</div>'; });
     }
+    /**
+     * The fleet's logs, read back out of SigNoz.
+     *
+     * Notch emits all three OTel signals, but for a long time it could only read
+     * traces — logs were write-only from the product's side, which is a strange
+     * thing to ship in an observability tool. There is deliberately no local
+     * fallback here: spans genuinely have one, logs do not, so when ClickHouse
+     * is unreachable this says so instead of showing an empty list that reads
+     * like "nothing happened".
+     */
+    function observatoryLogs(p){
+      var host = document.getElementById("oblogs"); if (!host) return;
+      var st = state.obLogs = state.obLogs || { severity: "", q: "" };
+      var qs = "?limit=300" + (st.severity ? "&severity=" + encodeURIComponent(st.severity) : "") +
+        (st.q ? "&q=" + encodeURIComponent(st.q) : "");
+      api("/api/projects/" + p.id + "/insights/logs" + qs).then(function(r){
+        if (r.from === "unavailable"){
+          host.innerHTML = '<div class="obnote">' + ICONS.route + " Logs live in SigNoz, and ClickHouse isn\\u2019t answering \\u2014 so there is nothing to read. Unlike spans, logs have no local fallback. Bring SigNoz up (<code>./scripts/signoz-up.sh</code>) and this fills in.</div>";
+          return;
+        }
+        var logs = r.logs || [];
+        var LEVELS = ["", "ERROR", "WARN", "INFO", "DEBUG"];
+        var chips = LEVELS.map(function(L){
+          return '<button class="decchip' + (st.severity === L ? " on" : "") + '" data-sev="' + esc(L) + '">' + (L || "All") + "</button>";
+        }).join("");
+        var rows = logs.map(function(l){
+          var sev = String(l.severity || "INFO").toUpperCase();
+          return '<div class="lgrow ' + esc(sev.toLowerCase()) + '">' +
+            '<span class="lgtime">' + new Date(l.ts).toLocaleTimeString() + "</span>" +
+            '<span class="lgsev ' + esc(sev.toLowerCase()) + '">' + esc(sev) + "</span>" +
+            '<span class="lgagent">' + esc(l.agent || "\\u2014") + "</span>" +
+            '<span class="lgbody">' + esc(l.body || "") + "</span>" +
+            (l.traceId ? '<a class="lgtrace" href="' + signozTraceUrl(l.traceId) + '" target="_blank" rel="noreferrer" title="open this trace in SigNoz">' + esc(l.traceId.slice(0, 8)) + "</a>" : '<span class="lgtrace none">\\u2014</span>') +
+            "</div>";
+        }).join("");
+        host.innerHTML =
+          '<div class="decheader"><span class="declabel">LOGS</span><span class="deccount">' + logs.length + " lines \\u00b7 from SigNoz</span></div>" +
+          '<div class="decfilters">' + chips +
+            '<input class="mcpin lgq" id="lgq" placeholder="filter text\\u2026" value="' + esc(st.q) + '"/></div>' +
+          (rows ? '<div class="lglist">' + rows + "</div>"
+                : '<div class="obnote">No log lines match. Notch ships every message, tool call, file edit and error \\u2014 widen the filter.</div>');
+        Array.prototype.forEach.call(host.querySelectorAll(".decchip"), function(c){
+          c.onclick = function(){ st.severity = c.getAttribute("data-sev"); observatoryLogs(p); };
+        });
+        var qEl = host.querySelector("#lgq"), t = null;
+        if (qEl) qEl.oninput = function(){
+          if (t) clearTimeout(t);
+          t = setTimeout(function(){ st.q = qEl.value.trim(); observatoryLogs(p); }, 320);
+        };
+      }).catch(function(){
+        host.innerHTML = '<div class="obnote">Logs unavailable \\u2014 the daemon didn\\u2019t answer. Switch tabs and back to retry.</div>';
+      });
+    }
+
     // ---- Replay — the time machine -----------------------------------------
     // This absorbed the old separate "span replay" tab. Both scrubbed the same
     // run on their own slider, which is why nobody could say what the difference
