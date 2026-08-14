@@ -36,6 +36,10 @@ export interface AgentStatus {
   available: boolean;
   busy: boolean;
   holdsBaton: boolean;
+  /** The model the adapter is pinned to, when the daemon knows one. */
+  model?: string;
+  /** Off agents stay in the roster but aren't spawned and can't hold the baton. */
+  enabled?: boolean;
 }
 
 export interface RouteState {
@@ -151,6 +155,190 @@ export type TaskResult =
   | { available: true; repo: string; items: TaskItem[]; capped: boolean }
   | { available: false; reason: "no-cli" | "no-auth" | "no-remote" | "error"; detail: string };
 
+// ---------------------------------------------------------------------------
+// Observatory: the same shapes the daemon's web app renders. Every optional
+// field below is optional in the daemon too — the phone must never fill one in.
+// ---------------------------------------------------------------------------
+
+/**
+ * One span behind an Observatory panel. `from` on the response says whether
+ * these came out of SigNoz's ClickHouse or were rebuilt from the local event
+ * log, which is a provenance fact the UI is required to show rather than hide.
+ */
+export interface InsightSpan {
+  traceId: string;
+  spanId: string;
+  ts: number;
+  ade: string;
+  model: string;
+  handoffFrom: string;
+  handoffTo: string;
+  name: string; // "gen_ai.agent.turn" | "notch.baton.handoff" | "notch.error" | …
+  ms: number;
+  code: number; // OTel status: 2 = error
+  msg: string;
+  agent: string;
+  tin: number;
+  tout: number;
+  cost: number;
+}
+
+export type SpanSource = "signoz" | "local-log";
+
+/** A 0–100 score with the four penalty buckets that subtracted from 100. */
+export interface Health {
+  score: number;
+  grade: "healthy" | "degraded" | "unhealthy";
+  turns: number;
+  errorCount: number;
+  buckets: { errorRate: number; latency: number; tokenBloat: number; recency: number };
+}
+
+export type DecisionSource = "llm" | "cli" | "heuristic";
+
+/**
+ * A decision mined out of an agent's turn.
+ *
+ * Two fields carry rules the UI has to honour. `confidence` is absent for every
+ * heuristic extraction — there is no measurement, so there is no bar to draw.
+ * And `turnTokensUsed`/`turnCostUsd` are the WHOLE TURN's usage, not this
+ * decision's share of it: a turn yielding three decisions has one price, and
+ * labelling them per-decision would triple it on screen.
+ */
+export interface AgentDecision {
+  id: string;
+  projectId: string;
+  chatId: string;
+  agentId: string;
+  agentRole: string;
+  timestamp: number;
+  turnIndex: number;
+  traceId?: string;
+  turnId?: string;
+  category: string;
+  title: string;
+  reasoning: string;
+  confidence?: number;
+  source: DecisionSource;
+  alternatives: string[];
+  filesCreated: string[];
+  filesModified: string[];
+  artifactNames: string[];
+  memoryKeys: string[];
+  upstreamDecisionIds: string[];
+  turnTokensUsed: number;
+  turnCostUsd: number;
+  durationMs: number;
+}
+
+export interface DecisionStats {
+  total: number;
+  byAgent: Record<string, number>;
+  byCategory: Record<string, number>;
+  /** null when no decision carried a confidence — "0" would read as certainty of nothing. */
+  avgConfidence: number | null;
+  confidenceSamples: number;
+  bySource: Record<DecisionSource, number>;
+  topAlternatives: string[];
+  criticalPath: string[];
+}
+
+export interface AgentSnapState {
+  turnsCompleted: number;
+  tokensUsed: number;
+  costUsd: number;
+  lastAction: string;
+  status: "idle" | "active" | "waiting" | "errored";
+}
+
+/** One scrub frame: the fleet's exact state folded from the log up to that instant. */
+export interface TimeSnapshot {
+  timestampMs: number;
+  turnIndex: number;
+  eventIndex: number;
+  batonHolder: string;
+  decisionsAtPoint: string[];
+  agentStates: Record<string, AgentSnapState>;
+  memorySnapshot: { decisionsCount: number; keyFacts: string[] };
+  threadLength: number;
+  lastMessage: { agentId: string; text: string; timestamp: number } | null;
+  filesCreatedSoFar: number;
+  filesModifiedSoFar: number;
+  triggerEvent: { type: string; agentId: string; description: string };
+}
+
+/** An Ask Noz answer, with the provenance the answer is only honest alongside. */
+export interface AskResult {
+  answer: string;
+  /** Which CLI and model actually answered, e.g. "agy · gemini-3.6-flash-high". */
+  via: string;
+  /** MCP servers handed to the model for the question (SigNoz among them, when configured). */
+  mcpServers: string[];
+  /** "signoz" when the evidence spans came from ClickHouse, "local-log" when it was empty/down. */
+  spanSource: SpanSource | string;
+  evidenceAgents?: number;
+  evidenceSpans?: number;
+  /** True when no CLI was available to answer at all — not an answer, a gap. */
+  unavailable?: boolean;
+}
+
+/** Where a skill was discovered. The four roots the daemon scans. */
+export type SkillOrigin = "project" | "user" | "plugin" | "bundled";
+
+export interface SkillEntry {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  origin: SkillOrigin;
+  /** Absolute path of the root it came from — the only proof of which copy this is. */
+  source: string;
+  /** True only for skills in the project's own skills/ dir: the ones DELETE may touch. */
+  installed: boolean;
+}
+
+/** A configured MCP server. `connected` is MEASURED by the daemon, never inferred. */
+export interface McpServer {
+  name: string;
+  url: string;
+  description?: string;
+  icon?: string;
+  transport?: string;
+  slug?: string;
+  command?: string;
+  args?: string[];
+  enabledForSession?: boolean;
+  connected: boolean;
+  probedAt?: number;
+}
+
+/** A catalog row — either a registry entry or one of the curated `featured` ones. */
+export interface McpCatalogEntry {
+  id?: string;
+  slug?: string;
+  name: string;
+  title?: string;
+  description?: string;
+  homepage?: string;
+  version?: string;
+  source?: string;
+  transport?: string;
+  url?: string;
+  command?: string;
+  args?: string[];
+  requires?: string;
+  maintainer?: string;
+  /** The registry advertises the server but not an endpoint — the user must supply one. */
+  needsUrl?: boolean;
+}
+
+export interface McpCatalog {
+  servers: McpCatalogEntry[];
+  featured: McpCatalogEntry[];
+  /** True when the registry did not answer: `servers` is empty for that reason, not because nothing matched. */
+  degraded: boolean;
+}
+
 const URL_KEY = "loomUrl";
 const TOKEN_KEY = "loomToken";
 
@@ -190,15 +378,40 @@ export function setUnauthorizedHandler(fn: (() => void) | null): void {
   onUnauthorized = fn;
 }
 
-export async function api<T>(creds: Creds, path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${creds.url}${path}`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${creds.token}`,
-      ...(init?.body ? { "Content-Type": "application/json" } : {}),
-      ...(init?.headers ?? {}),
-    },
-  });
+/**
+ * `timeoutMs` exists for one caller: Ask Noz, which shells out to a headless
+ * CLI and legitimately takes 30–60s. React Native's fetch has no timeout of its
+ * own, so a request against a daemon that went away otherwise hangs the panel
+ * forever with no error to show. Everything else leaves it unset and keeps the
+ * old behaviour exactly.
+ */
+export async function api<T>(
+  creds: Creds,
+  path: string,
+  init?: RequestInit,
+  timeoutMs?: number,
+): Promise<T> {
+  const ctl = timeoutMs ? new AbortController() : null;
+  const timer = ctl ? setTimeout(() => ctl.abort(), timeoutMs) : null;
+  let res: Response;
+  try {
+    res = await fetch(`${creds.url}${path}`, {
+      ...init,
+      ...(ctl ? { signal: ctl.signal } : {}),
+      headers: {
+        Authorization: `Bearer ${creds.token}`,
+        ...(init?.body ? { "Content-Type": "application/json" } : {}),
+        ...(init?.headers ?? {}),
+      },
+    });
+  } catch (e) {
+    // An abort reads as "Aborted"/"AbortError", which tells a user nothing about
+    // what they were waiting for. Say what actually ran out.
+    if (ctl?.signal.aborted) throw new Error(`timed out after ${Math.round(timeoutMs! / 1000)}s`);
+    throw e;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
   const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (res.status === 401) {
     await clearCreds();
@@ -240,6 +453,99 @@ export const startRoute = (c: Creds, id: string, task: string, spec: string) =>
   api(c, `/api/projects/${id}/route`, { method: "POST", body: JSON.stringify({ task, spec }) });
 export const abortRoute = (c: Creds, id: string) =>
   api(c, `/api/projects/${id}/route`, { method: "DELETE" });
+
+// --- Observatory ------------------------------------------------------------
+
+/** Turn/handoff/error spans. `from` says whether SigNoz answered or the log did. */
+export const getSpans = (c: Creds, id: string, agentId?: string, limit = 200) =>
+  api<{ from: SpanSource; spans: InsightSpan[] }>(
+    c,
+    `/api/projects/${id}/insights/spans?limit=${limit}${agentId ? `&agent=${encodeURIComponent(agentId)}` : ""}`,
+  );
+
+/** Fleet health: one score per agent plus the overall, scored from their own spans. */
+export const getHealth = (c: Creds, id: string) =>
+  api<{ from: SpanSource; overall: Health; byAgent: Record<string, Health> }>(
+    c,
+    `/api/projects/${id}/insights/health`,
+  );
+
+export const getDecisions = (c: Creds, id: string, limit = 200) =>
+  api<{ decisions: AgentDecision[]; stats: DecisionStats }>(
+    c,
+    `/api/projects/${id}/decisions?limit=${limit}`,
+  );
+
+export const getSnapshots = (c: Creds, id: string) =>
+  api<{ snapshots: TimeSnapshot[] }>(c, `/api/projects/${id}/snapshots`);
+
+/**
+ * Ask the Observatory a question. The daemon runs a headless CLI with the
+ * project's real MCP servers attached, so this is slow by construction — two
+ * minutes is the ceiling, not the expectation.
+ */
+export const askObservatory = (c: Creds, id: string, question: string) =>
+  api<AskResult>(
+    c,
+    `/api/projects/${id}/observatory/ask`,
+    { method: "POST", body: JSON.stringify({ question }) },
+    120_000,
+  );
+
+// --- Skills -----------------------------------------------------------------
+
+export const getSkillsCatalog = (c: Creds, id: string) =>
+  api<{ skills: SkillEntry[] }>(c, `/api/projects/${id}/skills/catalog`);
+
+export const setSkillEnabled = (c: Creds, id: string, skillId: string, enabled: boolean) =>
+  api<{ skills: unknown }>(c, `/api/projects/${id}/skills/${encodeURIComponent(skillId)}`, {
+    method: "PUT",
+    body: JSON.stringify({ enabled }),
+  });
+
+/** Install from a git remote or from a directory on the daemon's own machine. */
+export const installSkill = (c: Creds, id: string, from: { gitUrl?: string; dir?: string }) =>
+  api<{ skill: SkillEntry; skills: SkillEntry[] }>(c, `/api/projects/${id}/skills/install`, {
+    method: "POST",
+    body: JSON.stringify(from),
+  });
+
+// --- MCP servers ------------------------------------------------------------
+
+/** Not project-scoped: it is the same public registry for every project. */
+export const getMcpCatalog = (c: Creds, q: string) =>
+  api<McpCatalog>(c, `/api/mcp/catalog?q=${encodeURIComponent(q)}`);
+
+export const getMcps = (c: Creds, id: string) =>
+  api<{ mcps: McpServer[]; probed: boolean }>(c, `/api/projects/${id}/mcps`);
+
+export const installMcp = (c: Creds, id: string, server: Partial<McpCatalogEntry> & { name: string }) =>
+  api<{ installed: McpServer | null; mcps: McpServer[] }>(c, `/api/projects/${id}/mcps/install`, {
+    method: "POST",
+    body: JSON.stringify(server),
+  });
+
+export const removeMcp = (c: Creds, id: string, name: string) =>
+  api<{ removed: boolean; mcps: McpServer[] }>(
+    c,
+    `/api/projects/${id}/mcps/${encodeURIComponent(name)}`,
+    { method: "DELETE" },
+  );
+
+// --- Agent settings ---------------------------------------------------------
+
+/** 409 when the agent holds the baton or is mid-turn — the daemon refuses, we surface why. */
+export const setAgentEnabled = (c: Creds, id: string, agentId: string, enabled: boolean) =>
+  api<AgentStatus>(c, `/api/projects/${id}/agents/${encodeURIComponent(agentId)}/enabled`, {
+    method: "PUT",
+    body: JSON.stringify({ enabled }),
+  });
+
+export const setAgentRole = (c: Creds, id: string, agentId: string, role: string) =>
+  api<AgentStatus>(c, `/api/projects/${id}/agents/${encodeURIComponent(agentId)}/role`, {
+    method: "POST",
+    body: JSON.stringify({ role }),
+  });
 
 export function wsUrl(creds: Creds, projectId: string): string {
   const proto = creds.url.startsWith("https") ? "wss" : "ws";

@@ -1,7 +1,7 @@
 {
   "name": "notch",
-  "version": "0.1.0",
-  "description": "Notch — local-first mission control for coding agents: one CLI, shared memory, baton handoffs, routes, and live observability across Claude Code, OpenCode, and friends.",
+  "version": "0.2.0",
+  "description": "Notch \u2014 local-first mission control for coding agents: one CLI, shared memory, baton handoffs, routes, and live observability across Claude Code, OpenCode, and friends.",
   "type": "module",
   "license": "MIT",
   "publishConfig": {

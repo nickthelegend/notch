@@ -6515,8 +6515,13 @@ ${BRAND_SPRITE}
             var s = JSON.parse(decodeURIComponent(b.getAttribute("data-install")));
             var url = s.url;
             if (s.needsUrl || (!s.url && !s.command)){
-              url = window.prompt("Endpoint URL for " + (s.title || s.name) + ":", "https://");
-              if (!url) return;
+              // Some providers can't be shipped with a fixed endpoint — SigNoz
+              // Cloud embeds your account region in the hostname. The catalog
+              // hands over a template rather than guessing a URL that would
+              // simply fail, so prefill it and let the person finish it.
+              var hint = (s.requires ? s.requires + "\\n\\n" : "") + "Endpoint URL for " + (s.title || s.name) + ":";
+              url = window.prompt(hint, s.urlTemplate || "https://");
+              if (!url || url === s.urlTemplate) return;
             }
             doInstall({ name: s.title || s.name, slug: s.slug, url: url, command: s.command, args: s.args, transport: s.transport, description: s.description }, b);
           };

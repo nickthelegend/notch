@@ -316,7 +316,21 @@ export const CURATED_MCPS: CuratedProvider[] = [
 // The registry
 // ---------------------------------------------------------------------------
 
-const REGISTRY_URL = "https://registry.modelcontextprotocol.io/v0/servers";
+const DEFAULT_REGISTRY_URL = "https://registry.modelcontextprotocol.io/v0/servers";
+
+/**
+ * Which registry to ask.
+ *
+ * Read per call rather than captured at import, so a test can point it at a
+ * local stub without a module-load dance — and so anyone running one of the
+ * private subregistries the MCP spec allows can point Notch at theirs. Reading
+ * it live is also what keeps the test suite off the public registry entirely: a
+ * unit test that quietly makes a real network request is slow, flaky under
+ * load, and fails on a plane.
+ */
+function registryUrl(): string {
+  return process.env.NOTCH_MCP_REGISTRY?.trim() || DEFAULT_REGISTRY_URL;
+}
 
 /**
  * How long a search stays fresh. Short, because the point is to survive a burst
@@ -391,7 +405,7 @@ export async function searchCatalog(query?: string, limit?: number): Promise<Cat
   const featured = CURATED_MCPS;
   let result: CatalogResult;
   try {
-    const url = new URL(REGISTRY_URL);
+    const url = new URL(registryUrl());
     url.searchParams.set("limit", String(n));
     if (q) url.searchParams.set("search", q);
     const res = await fetch(url, {

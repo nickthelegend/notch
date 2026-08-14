@@ -1,10 +1,10 @@
 {
   "name": "notch-desktop",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "author": "nickthelegend",
-  "description": "Notch desktop — an Electron shell around the Notch daemon's web app. See BUILD.md for why the build config looks like this.",
+  "description": "Notch desktop \u2014 an Electron shell around the Notch daemon's web app. See BUILD.md for why the build config looks like this.",
   "main": "main.js",
   "repository": {
     "type": "git",
@@ -75,5 +75,8 @@
       "icon": "build/icon.png",
       "maintainer": "nickthelegend"
     }
+  },
+  "optionalDependencies": {
+    "dmg-license": "^1.0.11"
   }
 }
