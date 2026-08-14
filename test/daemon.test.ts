@@ -42,6 +42,11 @@ async function eventsOf(kind?: string): Promise<LoomEvent[]> {
   return kind ? events.filter((e) => e.kind === kind) : events;
 }
 
+/** For the handful of endpoints DaemonClient has no method for. */
+const adminAuth = (): Record<string, string> => ({
+  authorization: `Bearer ${readDaemonConfig()!.adminToken}`,
+});
+
 describe("loom daemon end-to-end", () => {
   it("health + board", async () => {
     const health = await fetch(`${baseUrl}/api/health`).then((r) => r.json());
@@ -267,6 +272,51 @@ describe("loom daemon end-to-end", () => {
     expect(last.payload.dirty).toBe(true);
     expect(String(last.payload.diff)).toContain("scratch.txt");
     await client.handoff(projectId, "execbot");
+  });
+
+  /**
+   * A withdrawn agent must not be creatable by guessing its name.
+   *
+   * The Antigravity CDP bridge came out of ADES when the CLI adapter replaced
+   * it, which took it off every surface that offers you an agent — except this
+   * one, which validated against the adapter *registry* instead. So POST with
+   * `kind:"antigravity"` still put a bridge in your roster that no view would
+   * ever have offered, and nothing would explain where it came from.
+   *
+   * It stays registered on purpose: every agent in .loom/config.json is
+   * constructed when the project opens, so unregistering it would turn "an agent
+   * we no longer offer" into "a project that won't open". Refuse to create new
+   * ones; keep building the ones that already exist.
+   */
+  it("refuses to add a withdrawn agent kind, and names its replacement", async () => {
+    const res = await fetch(`${baseUrl}/api/projects/${projectId}/agents`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...adminAuth() },
+      body: JSON.stringify({ kind: "antigravity", id: `withdrawn-${Date.now()}` }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: string };
+    expect(body.error).toMatch(/no longer offered/i);
+    expect(body.error, "tell them what to use instead").toMatch(/antigravity-cli/);
+
+    const { project } = await client.project(projectId);
+    expect(project.agents.some((a) => a.kind === "antigravity")).toBe(false);
+  });
+
+  /**
+   * And the picker's list says where it came from. `echo` has no model surface
+   * at all, which is a different answer from "the CLI reported none" — the UI
+   * can only tell those apart if the server says which.
+   */
+  it("serves models with the source that produced them", async () => {
+    const res = await fetch(`${baseUrl}/api/projects/${projectId}/agents/execbot/models`, {
+      headers: adminAuth(),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { kind: string; count: number; models: string[]; source: string };
+    expect(body.kind).toBe("echo");
+    expect(body.source).toBe("none");
+    expect(body.count).toBe(0);
   });
 
   it("interrupt stops a long-running turn", async () => {

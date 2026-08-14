@@ -14,7 +14,7 @@ import { ADES, adapterKinds, buildDefaultRoutes, defaultAgentConfigs } from "../
 import { codexBin } from "../src/adapters/codex.js";
 import { grokBin } from "../src/adapters/grok.js";
 import { parseGrokJson } from "../src/adapters/grok.js";
-import { createAgent, knownAgentKinds } from "../src/adapters/index.js";
+import { createAgent, isWithdrawnKind, knownAgentKinds } from "../src/adapters/index.js";
 import { isAdapter } from "../src/types.js";
 import { tmpDir } from "./helpers.js";
 
@@ -38,6 +38,40 @@ describe("ades · the list is the truth", () => {
       expect(agent.kind).toBe(ade.kind);
       // tier is what decides who may hold the baton; a bridge never may
       expect(isAdapter(agent)).toBe(ade.tier === "adapter");
+    }
+  });
+
+  /**
+   * Kiro used to carry `probe: async () => false` because the type demanded a
+   * probe from every entry. Nothing could ever call it — `detectAdes` filters to
+   * adapters first, and a bridge's real availability is whether GuiChatDriver
+   * can reach its debug port, which no probe here can answer. The spec type is
+   * now a union, so a bridge has nowhere to put one; this asserts the shape at
+   * runtime too, since a union is only as good as the next person's `as`.
+   */
+  it("gives bridges no probe — there is no question it could answer", () => {
+    for (const ade of ADES) {
+      if (ade.tier === "bridge") {
+        expect("probe" in ade, `${ade.label} carries a probe nothing can call`).toBe(false);
+      }
+    }
+  });
+
+  /**
+   * Registered and offered are different things, and the difference is the
+   * whole fix: the CDP bridge still *builds*, so a project whose config already
+   * names it still opens, but nothing advertises it and `addAgent` refuses to
+   * create one (see the daemon suite).
+   */
+  it("still builds the withdrawn Antigravity bridge, and offers it to nobody", () => {
+    const offered = ADES.map((a) => a.kind);
+    expect(knownAgentKinds()).toContain("antigravity");
+    expect(isWithdrawnKind("antigravity")).toBe(true);
+    expect(offered).not.toContain("antigravity");
+    expect(offered).toContain("antigravity-cli");
+    // and every kind Loom does offer is one it will build
+    for (const kind of offered) {
+      expect(isWithdrawnKind(kind), `${kind} is advertised and withdrawn at once`).toBe(false);
     }
   });
 

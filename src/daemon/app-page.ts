@@ -471,6 +471,7 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
     background:var(--popover,var(--background));border:1px solid var(--border);border-radius:7px;padding:6px 9px;
     font-family:var(--font-mono);font-size:12px;color:var(--foreground);outline:none}
   .cmenu .cmsearch:focus{border-color:var(--ring)}
+  .cmenu .cmfoot{padding:6px 12px 8px;font-size:10.5px;color:var(--muted-foreground);border-top:1px solid var(--border)}
   .cmlist{display:flex;flex-direction:column;gap:1px}
   .cmlist .cmi span:nth-child(2){overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
     font-family:var(--font-mono);font-size:12px}
@@ -6456,7 +6457,7 @@ ${BRAND_SPRITE}
       menuState = { kind: "modelmenu", at: 0, sel: 0, items: [] };
       m.style.display = "block";
       m.innerHTML = '<div class="cmhead">model \\u00b7 ' + esc(cur.id) + '</div>' +
-        '<input class="cmsearch" id="cmsearch" placeholder="search real models\\u2026" spellcheck="false" autocomplete="off">' +
+        '<input class="cmsearch" id="cmsearch" placeholder="search models\\u2026" spellcheck="false" autocomplete="off">' +
         '<div class="cmlist" id="cmlist">' + LOADER + '</div>';
       setTimeout(function(){ document.addEventListener("mousedown", menuAway); }, 0);
       var active = cur.model || "";
@@ -6466,8 +6467,16 @@ ${BRAND_SPRITE}
         else closeMenu();
         setModel(agentId, val);
       }
-      // The real models the tool itself reports (opencode ~500 across providers,
-      // grok its own); codex/claude are their shipped sets.
+      // Where the list came from, said out loud. Four of the five kinds are
+      // genuinely asked: opencode (~500 across providers), grok, codex (via its
+      // debug-models catalog) and the Antigravity CLI. Claude Code has no
+      // enumeration at all — asking it for "models" is not an error, it takes
+      // the word as a prompt and bills a turn writing prose about them — so its
+      // aliases are shipped constants. The response carries a source field, and
+      // the footer below prints it rather than letting the placeholder imply
+      // every list was fetched.
+      // (No backticks in this comment on purpose: the whole page is one
+      // template literal, and a stray one ends it mid-file.)
       function render(filter){
         var f = (filter || "").trim().toLowerCase();
         var shown = f ? allModels.filter(function(mm){ return mm.toLowerCase().indexOf(f) >= 0; }) : allModels;
@@ -6489,6 +6498,17 @@ ${BRAND_SPRITE}
       }
       api("/api/projects/" + pid + "/agents/" + encodeURIComponent(agentId) + "/models").then(function(j){
         allModels = (j && j.models) || [];
+        // Say where the list came from. "asked the tool" and "the aliases we
+        // ship" are different claims, and only one of them goes stale silently.
+        var mn = document.getElementById("cmenu");
+        if (mn && j && j.source){
+          var note = j.source === "cli" ? "asked " + esc(cur.kind || "the tool")
+            : j.source === "builtin" ? esc(cur.kind || "this tool") + " can\u2019t list models \u2014 these are its documented aliases"
+            : "no model list for this agent";
+          var f = document.createElement("div");
+          f.className = "cmfoot"; f.textContent = note;
+          mn.appendChild(f);
+        }
         var sb = document.getElementById("cmsearch");
         if (sb){
           var head0 = document.getElementById("cmlist");

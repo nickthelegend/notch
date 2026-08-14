@@ -133,14 +133,6 @@ export function adapterKinds(): string[] {
 }
 
 /**
- * Every kind Loom offers to add to a project — the exact set
- * GET /api/projects/:id/agents/available advertises, bridges included.
- */
-export function offeredKinds(): string[] {
-  return ADES.map((a) => a.kind);
-}
-
-/**
  * Probe every adapter on this machine, in parallel.
  *
  * Bridges are excluded on purpose: they need their GUI launched with a

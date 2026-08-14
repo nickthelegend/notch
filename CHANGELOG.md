@@ -63,6 +63,42 @@ An honest audit found them, and all four are implemented rather than hidden:
 
 ## [Unreleased]
 
+### Fixed — six small lies the audit caught
+
+- **The model picker really does ask the tool now.** The route called itself
+  "every real model this agent can run, asked of the underlying tool — not a
+  hardcoded list" while codex and Claude Code returned constants. codex is asked
+  properly (`codex debug models`, a JSON catalog — the constant had it running
+  `gpt-5-codex`/`o4-mini` where the machine reports `gpt-5.6-terra`), and so is
+  the Antigravity CLI (`agy models`), whose branch was missing entirely so its
+  picker offered nothing but "Default" and "Custom…". Claude Code has no
+  enumeration at all — `claude models` takes "models" as a *prompt* and bills a
+  turn — so its aliases stay builtin and every response now carries
+  `source: "cli" | "builtin" | "none"` saying which. The stale pinned id
+  `claude-sonnet-5`, which was never a model, is gone.
+- **Reading a CLI no longer depends on it closing stdout.** `agy` leaves a
+  language server holding the pipe after it exits, and `execFile` waits for
+  streams rather than exit — 20s to return nothing, for a CLI that answered in
+  five. Model lists are captured with `spawn` and read on exit.
+- **`AdeSpec.models` is gone**, with its serialisation. It was a second, staler
+  answer to a question `/agents/:agentId/models` already answers, and no client
+  ever read it.
+- **Triage's local-log fallback reports the turn's real cost** instead of a
+  literal `cost: 0` in the column where the SigNoz path puts a measured number.
+- **The withdrawn Antigravity CDP bridge can't be created by guessing its name.**
+  It left ADES when the CLI adapter replaced it, but `addAgent` validated against
+  the adapter registry, so the API still accepted `kind:"antigravity"`. It stays
+  registered — projects that already name it must keep opening — and is refused
+  for new agents, pointing at `antigravity-cli`. `verify-adapters` derives its
+  list from ADES now, so it stops exercising the withdrawn bridge and starts
+  exercising the CLI adapter it never covered.
+- **Five of seven `AgentCapabilities` flags removed.** `send`, `stream`,
+  `injectMemory`, `interrupt` and `diff` were set by every adapter and read by
+  nothing; two were constant `true` and two restated `tier === "adapter"`. The
+  `Adapter` interface is the contract, and `isAdapter()` is the check. A bridge's
+  ADE entry can no longer carry a `probe` either — Kiro's returned a hardcoded
+  `false` that nothing could call.
+
 ### Hardening (production-readiness pass)
 
 - **Closed a DNS-rebinding path to the admin token.** `GET /api/bootstrap` handed
