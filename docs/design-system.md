@@ -1,44 +1,64 @@
-# Loom design system — "quiet graphite"
+# Notch design system
 
-Loom's UI adopts the design language of [Orca](https://github.com/stablyai/orca)
-(MIT), the AI-orchestrator desktop app: **monochrome and quiet** — neutral
-surfaces carry the chrome, and color is reserved for *state*. Loom keeps its two
-brand accents inside that rule: **thread** cyan (`#67e8f9`) marks live activity,
-**shuttle** magenta (`#e879f9`) marks the baton moving between agents. Everything
-else is neutral.
+Notch's UI adopts the design language of [Orca](https://github.com/stablyai/orca)
+(MIT), the AI-orchestrator desktop app: **quiet** — the surfaces carry the
+chrome, and color is reserved for *state*. Notch keeps its two brand accents
+inside that rule: **thread** marks live activity, **shuttle** marks the baton
+moving between agents. Everything else is a surface.
+
+**The two surfaces do not agree yet, and this document does not pretend they
+do.** The web app and Electron shell ship a violet identity: thread `#8b5cf6`,
+shuttle `#d946ef`, and a violet-tinted dark ground (`#0b0910`). The phone app is
+still on the original "quiet graphite" palette — near-black neutral surfaces,
+thread cyan `#67e8f9`, shuttle magenta `#e879f9` — and has not been migrated.
+Each table below states which surface it describes; take the values from the
+token file, not from memory.
 
 Canonical token sources:
 
-| Surface | Token file |
-| --- | --- |
-| Web app (daemon-served) + Electron shell | `src/daemon/app-page.ts` (`:root` light / `.dark`) |
-| Phone app (Expo RN) | `app/src/theme.ts` |
+| Surface | Token file | Identity |
+| --- | --- | --- |
+| Web app (daemon-served) + Electron shell | `src/daemon/app-page.ts` (`:root` light / `.dark`) | violet (current) |
+| Phone app (Expo RN) | `app/src/theme.ts` | quiet graphite / cyan (not yet migrated) |
 
-## Color tokens — web / desktop (from Orca desktop)
+## Color tokens — web / desktop
 
-Paired *surface + foreground* roles, both themes. Dark is the default; light is
-a first-class theme behind the in-app toggle (persisted as `loomTheme`).
+The shipping values, from `src/daemon/app-page.ts`. Paired *surface + foreground*
+roles, both themes. Dark is the default; light is a first-class theme behind the
+in-app toggle (persisted as `loomTheme`).
 
 | Role | Light | Dark |
 | --- | --- | --- |
-| `--background` / `--foreground` | `#fff` / `#0a0a0a` | `#0a0a0a` / `#fafafa` |
-| `--card` / `--card-foreground` | `#fff` / `#0a0a0a` | `#171717` / `#fafafa` |
-| `--popover` | `#fff` | `#171717` |
-| `--primary` / `--primary-foreground` | `#171717` / `#fafafa` | `#e5e5e5` / `#171717` |
-| `--secondary`, `--muted`, `--accent` | `#f5f5f5` | `#262626` / `#262626` / `#404040` |
-| `--muted-foreground` | `#737373` | `#a1a1a1` |
+| `--background` / `--foreground` | `#fff` / `#0a0a0a` | `#0b0910` / `#f4f2fb` |
+| `--card` / `--card-foreground` | `#fff` / `#0a0a0a` | `#151122` / `#f4f2fb` |
+| `--popover` | `#fff` | `#181327` |
+| `--editor-surface` | `#ffffff` | `#14101d` |
+| `--primary` / `--primary-foreground` | `#7c3aed` / `#faf8ff` | `#8b5cf6` / `#faf8ff` |
+| `--secondary`, `--muted`, `--accent` | `#f5f3fb`, `#f5f3fb`, `#f2eefc` | `#221a35`, `#221a35`, `#2c2344` |
+| `--muted-foreground` | `#6b6480` | `#a99fc4` |
 | `--destructive` | `#e40014` | `#ff6568` |
-| `--border` | `#e5e5e5` | `rgb(255 255 255 / 0.07)` |
-| `--input` | `#e5e5e5` | `rgb(255 255 255 / 0.15)` |
-| `--ring` | `#a1a1a1` | `#737373` |
-| `--sidebar` / `--sidebar-accent` | `#fafafa` / `#f5f5f5` | `#171717` / `#262626` |
-| state: `--thread` / `--shuttle` | `#67e8f9` / `#e879f9` | same |
-| state: `--ok` / `--warn` / `--err` | `#15803d` / `#f59e0b` / `#e40014` | `#10b981` / `#eab308` / `#ff6568` |
+| `--border` | `#e7e2f2` | `rgb(179 140 255 / 0.12)` |
+| `--input` | `#e7e2f2` | `rgb(179 140 255 / 0.16)` |
+| `--ring` | `#8b5cf6` | `#a78bfa` |
+| `--sidebar` / `--sidebar-accent` | `#fafafa` / `#f5f5f5` | `#141020` / `#241c39` |
+| state: `--thread` / `--shuttle` | `#8b5cf6` / `#d946ef` | same (not re-declared in `.dark`) |
+| state: `--thread-ink` / `--shuttle-ink` | `#6d28d9` / `#a21caf` | `#a78bfa` / `#e879f9` |
+| state: `--ok` / `--warn` / `--err` / `--live` | `#15803d` / `#b45309` / `#e40014` / `#eab308` | `#86efac` / `#fbbf24` / `#ff6568` / `#a78bfa` |
+
+`--thread` and `--shuttle` are the same violet and magenta in both themes; only
+the `-ink` variants change, because those are the text-grade pair and text needs
+a different contrast on each ground.
+
+Charts do **not** draw from these. `--ch1`…`--ch6` are a separate, hue-separated
+categorical palette (`#7c3aed #0891b2 #d97706 #db2777 #059669 #2563eb` light;
+`#a78bfa #22d3ee #fbbf24 #f472b6 #34d399 #60a5fa` dark), because `--primary` and
+`--thread` are both violet and a donut drawn from them made its three biggest
+slices indistinguishable.
 
 Rules:
 
-- **Hairlines everywhere.** 1px `--border`; in dark mode borders are 7% white —
-  never brighter.
+- **Hairlines everywhere.** 1px `--border`; in dark mode that is violet at 12%
+  alpha, not white — never brighter.
 - **Tints via `color-mix`** against an existing token, never a new hex.
 - **Three elevation tiers only:** hairline border (default) → border + tiny
   shadow (cards) → floating `0 10px 24px rgba(0,0,0,.18)` + glass (popovers,
@@ -72,7 +92,7 @@ Rules:
 
 ## Workspace shell (desktop web + Electron, ≥900px)
 
-The Orca workspace layout, drawn from Loom's real model. Every column is
+The Orca workspace layout, drawn from Notch's real model. Every column is
 drag-resizable and persisted; double-click a handle to reset
 (`loomSbW` / `loomRailW` / `loomDockW` / `loomTermH`).
 
@@ -88,7 +108,7 @@ drag-resizable and persisted; double-click a handle to reset
   click a change: an `Update(n files)` card in the thread, or a file in
   Explorer / Search / Source Control. Per-file diff cards on
   `--editor-surface` with add/delete washes, hunk headers and old/new line
-  gutters; Loom's `.loom/` state files filtered. Closes with an X.
+  gutters; Notch's `.loom/` state files filtered. Closes with an X.
 - **Right rail (304px, `loomRail`, open by default on Explorer)** — four
   views behind an icon switcher (`loomRailView`):
   - *Explorer* — lazy project file tree; a file opens its diff if changed,
@@ -112,7 +132,7 @@ drag-resizable and persisted; double-click a handle to reset
   GitHub's own label hues, which are data, not chrome. Every unavailable
   reason (`no-cli` / `no-auth` / `no-remote`) gets a written panel — an empty
   table would claim "no issues", which is a different fact.
-- **Board pane** — Orca's board, on Loom's data. Four columns (working / needs
+- **Board pane** — Orca's board, on Notch's data. Four columns (working / needs
   you / in review / ready to merge), each a card list; a card is a status dot +
   label, the agent (with its brand mark), title, branch, and PR link or "no PR
   yet". Colour is state only: amber working/blocked, red CI, grey review, green
@@ -129,7 +149,7 @@ drag-resizable and persisted; double-click a handle to reset
   own colours. Keyed by adapter **kind**; an unknown kind keeps the hue
   monogram rather than wearing another vendor's mark. A sprite, not inline
   copies, because Antigravity and Codex carry internal ids.
-- **New Task modal** — Orca's Create Worktree, mapped to Loom: project + task
+- **New Task modal** — Orca's Create Worktree, mapped to Notch: project + task
   + **one agent, or several** (several = a pipeline through them, in the order
   you picked). Scrim + glass panel; `n` opens, Cmd/Ctrl+Enter submits, Esc
   closes.
@@ -162,9 +182,9 @@ xterm.js, served from `node_modules` at `/app/vendor/*` — no bundler, no CDN.
 - Cmd/Ctrl+C copies with a selection, interrupts without; Cmd/Ctrl+V pastes.
 
 **`pipe` — the fallback** (no node-pty). `node-pty` is a native module, so it
-is an *optionalDependency* and ships prebuilds only for macOS/Windows; Loom
-runs headless on Linux boxes that may have no toolchain, and `npm i -g
-@loompad/cli` must never break. A long-lived shell on plain pipes:
+is an *optionalDependency* and ships prebuilds only for macOS/Windows; Notch
+runs headless on Linux boxes that may have no toolchain, and `npm i -g notch`
+must never break. A long-lived shell on plain pipes:
 
 - `cd` and exported variables still persist; tabs are isolated.
 - No tty, so the daemon reports each command's exit code and cwd out of band:
@@ -205,7 +225,9 @@ the docked composer.
 ## Window chrome (Electron)
 
 Matches Orca: `titleBarStyle: hiddenInset` (macOS) with traffic lights at
-`{x:16, y:12}`, min 600×400, canvas-colored background (`#0a0a0a`). The web app
+`{x:16, y:12}`, min 600×400, background `#0a0a0a` (`BG` in `desktop/main.js` — the
+old neutral canvas; the web app's dark ground moved to `#0b0910` and this has not
+followed, so there is a hairline mismatch on the first paint). The web app
 draws 36px draggable title strips (`-webkit-app-region: drag`) keyed off the
 `data-electron` attribute set by the preload; macOS reserves an 80px
 traffic-light gutter. Sidebar strip wears `--sidebar` with an inset 1px seam.
@@ -230,12 +252,13 @@ traffic-light gutter. Sidebar strip wears `--sidebar` with an inset 1px seam.
 
 ## The weave, kept
 
-Loom's identity survives as state, per Orca's own rule:
+Notch's identity survives as state, per Orca's own rule:
 
 - **Selvage edges** — agent messages carry a 2px left border in a per-agent hue
   (`hsl(hash(agent), 50%, 52%)`).
 - **Shuttle handoff** — `a ⟿ b` rows in shuttle magenta.
-- **Woven loader** — staggered warp bars shimmering in thread cyan.
+- **Woven loader** — staggered warp bars shimmering in thread (violet on
+  web/desktop, still cyan on the phone).
 - **Warp ground** — a near-invisible vertical-thread texture on the dark canvas.
 - Live/needs-input dots pulse in thread/amber.
 

@@ -115,7 +115,17 @@ Three features read the spans **back out of SigNoz** — this is the agent-nativ
 **Metrics — the fleet with per-agent Health scores** (claude-code & opencode `100`, codex `63`
 after it errored) and a **⚠ Triage** button each:
 
-![Observatory Metrics with health scores](docs/screenshots/observatory-metrics.png)
+![Observatory Metrics — totals, per-agent tokens, and health scores, all from real turns](docs/screenshots/observatory-metrics.png)
+
+**Live fleet** — every agent hanging off the one shared brain, the baton edge marching
+between the brain and whoever holds it:
+
+![Observatory Live fleet — six agents connected to the one shared brain, baton on claude-code](docs/screenshots/observatory-livefleet.png)
+
+**Logs** — the fleet's structured logs read back out of SigNoz, each line carrying the trace
+of the turn that produced it:
+
+![Observatory Logs — severity chips, text filter, and per-turn trace ids read from SigNoz](docs/screenshots/observatory-logs.png)
 
 **Self-Triage — an agent root-caused from its own SigNoz spans**, and the **Replay → Trace
 Waterfall** with the SigNoz deep link:
@@ -765,10 +775,11 @@ exchanges it for its own client token. Then:
   there and it resumes.
 - Chrome menu → *Add to Home screen* installs it like an app.
 
-**The native app has the whole Observatory.** As of v0.2.0 the phone reaches
-`Thread · Observatory · Ask Noz · Tasks · Changes · Tools`, with the same six views under
-the same names as the desktop — Metrics, Live fleet, Handoffs, Timeline, Decisions,
-Replay — plus per-agent triage, decision detail, and a **Tools** tab covering Skills, MCP
+**The native app has the whole Observatory.** The phone reaches
+`Thread · Observatory · Ask Noz · Tasks · Changes · Tools`, with all eight views under
+the same names and in the same order as the desktop — Metrics, Live fleet, Handoffs,
+Self-heal, Timeline, Decisions, Logs, Replay — plus per-agent triage, decision detail, and
+a **Tools** tab covering Skills, MCP
 servers and agent enable/roles. It is native, not a webview: `react-native-svg` isn't a
 dependency, so the charts are proportional bars and a polyline built from plain views, and
 the replay scrubber is a pan gesture over a measured track. The same honesty rules apply —

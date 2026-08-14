@@ -39,7 +39,7 @@ docker run --rm -v "$(pwd)/..":/project -w /project/desktop \
 > or just push a `v*` tag and let CI do it (below). The **dmg builds fine natively** on the Mac.
 
 **Built here:** `desktop/npm run dist` produced working, daemon-bundled dmgs for both arches —
-`desktop/dist/Notch-Desktop-0.1.0-arm64.dmg` (~114 MB) and `…-x64.dmg` (~119 MB). The exe and
+`desktop/dist/Notch-Desktop-0.2.0-arm64.dmg` (~115 MB) and `…-x64.dmg` (~120 MB). The exe and
 AppImage need their target OS / Docker (see the table + Docker recipe above); the config is ready.
 
 Output lands in `desktop/dist/`. Builds are unsigned (hackathon artifacts): the dmg sets
@@ -75,8 +75,10 @@ cd android && ./gradlew assembleRelease   # or assembleDebug to skip signing
 
 ## iOS (bonus)
 
-`npx eas build -p ios --profile preview` (needs an Apple account), or `app/ios/` via
-`npx expo run:ios` for the simulator.
+`npx eas build -p ios --profile preview` (needs an Apple account), or `npx expo run:ios` for
+the simulator. Unlike `app/android/`, there is no `app/ios/` in the tree yet — `expo run:ios`
+generates it on first run, the same way `expo prebuild -p android` generated the Android
+project.
 
 ## CI — the one-command path to all four
 
@@ -86,7 +88,7 @@ Android apk (via `eas build` when `EXPO_TOKEN` is set as a secret, else local gr
 tag to trigger it:
 
 ```sh
-git tag v0.1.0 && git push origin v0.1.0     # or run it from the Actions tab
+git tag v0.2.1 && git push origin v0.2.1     # or run it from the Actions tab
 ```
 
 Artifacts land on the workflow run. This is the reliable way to get exe + AppImage + a signed

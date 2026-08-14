@@ -431,10 +431,20 @@ describe("web app · the thread", () => {
     ($(m, "#cform") as HTMLFormElement).dispatchEvent(
       new m.window.Event("submit", { bubbles: true, cancelable: true }),
     );
-    await waitUntil(() => {
-      const bubbles = [...m.window.document.querySelectorAll(".msg.agent .bubble.md")];
-      return bubbles.some((b) => (b.textContent ?? "").includes(`marker ${stamp}`));
-    });
+    // Longer than the 8s default because this wait is a different kind of wait:
+    // every other one in this file watches the DOM settle, and this one watches a
+    // whole turn go out through a real daemon, run the echo agent and come back.
+    // On a loaded machine — the full suite is 56 files wide — that round-trip can
+    // miss 8s while the assertion below (does the markdown render as markup?) has
+    // nothing to do with how fast the turn was. It failed only in the full run and
+    // never in isolation, which is the signature of a budget, not a bug.
+    await waitUntil(
+      () => {
+        const bubbles = [...m.window.document.querySelectorAll(".msg.agent .bubble.md")];
+        return bubbles.some((b) => (b.textContent ?? "").includes(`marker ${stamp}`));
+      },
+      { timeoutMs: 15_000 },
+    );
     const bubble = [...m.window.document.querySelectorAll(".msg.agent .bubble.md")].find((b) =>
       (b.textContent ?? "").includes(`marker ${stamp}`),
     ) as HTMLElement;
