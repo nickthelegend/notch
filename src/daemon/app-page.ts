@@ -1415,8 +1415,17 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
   .decchd{display:flex;justify-content:space-between;margin-bottom:4px}
   .deccat{font-size:9.5px;letter-spacing:.09em;font-weight:700}
   .decconf{font-size:11px;color:var(--muted-foreground);font-family:var(--font-mono)}
-  .decctitle{font-size:13px;font-weight:600;margin-bottom:3px}
-  .deccmeta{font-size:10.5px;color:var(--muted-foreground);font-family:var(--font-mono)}
+  .decctitle{font-size:13px;font-weight:600;margin-bottom:3px;line-height:1.35}
+  .deccwhy{font-size:11.5px;line-height:1.5;color:var(--muted-foreground);margin-bottom:7px}
+  .deccmeta{font-size:10.5px;color:var(--muted-foreground);font-family:var(--font-mono);display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+  .deccagent{color:var(--foreground)}
+  .deccrole,.deccalt{padding:1px 6px;border:1px solid var(--border);border-radius:99px;font-size:9.5px}
+  /* How the decision was extracted — a rated number and a pattern match are
+     different claims and must not look identical. */
+  .decsrc{display:inline-flex;align-items:center;padding:1px 7px;border-radius:99px;font-size:9.5px;font-weight:600;
+    font-family:var(--font-mono);border:1px solid var(--border);color:var(--muted-foreground)}
+  .decsrc.llm,.decsrc.cli{color:var(--ch2);border-color:color-mix(in srgb,var(--ch2) 40%,transparent);background:color-mix(in srgb,var(--ch2) 10%,transparent)}
+  .decfoot{color:var(--muted-foreground);opacity:.75;font-size:10px}
   .decsl{font-size:9.5px;letter-spacing:.1em;color:var(--muted-foreground);margin:14px 0 5px}
   .decsl:first-child{margin-top:0}
   .decdt{font-size:15px;font-weight:700}
@@ -3197,18 +3206,57 @@ ${BRAND_SPRITE}
     }
     // ---- Decision Explorer (KAIRO Decisions tab) ---------------------------
     function decCatColor(cat){ return ({ architecture: "var(--primary)", design: "var(--thread)", implementation: "var(--accentBlue)", fix: "var(--err)", refactor: "var(--warn)", test: "var(--ok)" })[cat] || "var(--muted-foreground)"; }
+    /**
+     * How this decision was pulled out of the turn, said plainly. A number a
+     * model actually produced and a number a regex stamped are not the same
+     * claim, and the UI used to render both as an identical measured "%".
+     */
+    function decSourceBadge(d){
+      // No guessing. A decision that does not say how it was extracted gets
+      // "source unknown" — inferring "a model rated this" from the mere presence
+      // of a number is how a hardcoded constant came to be displayed as a
+      // measurement in the first place.
+      var s = d.source || "unknown";
+      var L = { llm: ["model-read", "an LLM read the turn and rated its own confidence"],
+                cli: ["model-read", "a local model read the turn and rated its own confidence"],
+                heuristic: ["pattern-matched", "found by text patterns \\u2014 no confidence is claimed"],
+                unknown: ["source unknown", "this decision predates extraction-source tracking"] };
+      var e = L[s] || L.unknown;
+      return '<span class="decsrc ' + esc(s) + '" title="' + esc(e[1]) + '">' + esc(e[0]) + "</span>";
+    }
     function renderDecisionCard(d){
-      return '<div class="deccard" data-id="' + esc(d.id) + '" data-agent="' + esc(d.agentId) + '"><div class="decchd"><span class="deccat" style="color:' + decCatColor(d.category) + '">' + esc((d.category || "").toUpperCase()) + '</span><span class="decconf">' + (d.confidence || 0) + '%</span></div><div class="decctitle">' + esc(d.title) + '</div><div class="deccmeta">' + esc(d.agentId) + " \\u00b7 " + esc(d.agentRole) + "</div></div>";
+      var conf = d.confidence != null ? '<span class="decconf">' + d.confidence + "%</span>" : "";
+      return '<div class="deccard" data-id="' + esc(d.id) + '" data-agent="' + esc(d.agentId) + '">' +
+        '<div class="decchd"><span class="deccat" style="color:' + decCatColor(d.category) + '">' + esc((d.category || "").toUpperCase()) + "</span>" + conf + "</div>" +
+        '<div class="decctitle">' + esc(d.title) + "</div>" +
+        (d.reasoning ? '<div class="deccwhy">' + esc(trunc(d.reasoning, 96)) + "</div>" : "") +
+        '<div class="deccmeta"><span class="deccagent">' + esc(d.agentId) + "</span>" +
+          (d.agentRole ? '<span class="deccrole">' + esc(d.agentRole) + "</span>" : "") +
+          ((d.alternatives || []).length ? '<span class="deccalt">' + d.alternatives.length + " alt</span>" : "") +
+        "</div></div>";
     }
     function renderDecisionDetail(d){
       var alts = (d.alternatives || []).length ? '<div class="decsl">ALTERNATIVES</div>' + d.alternatives.map(function(a){ return '<div class="decalt">\\u25cb ' + esc(a) + "</div>"; }).join("") : "";
       var files = (d.filesCreated || []).concat(d.filesModified || []);
       var filesH = files.length ? '<div class="decsl">FILES</div>' + files.map(function(f){ return '<div class="decfile">\\u25a1 ' + esc(f) + "</div>"; }).join("") : "";
       var arts = (d.artifactNames || []).length ? '<div class="decsl">ARTIFACTS</div>' + d.artifactNames.map(function(a){ return '<div class="decart">\\u25c6 ' + esc(a) + "</div>"; }).join("") : "";
+      // Confidence is only drawn when something actually measured it. The turn's
+      // totals are labelled as the TURN's, because that is what they are — every
+      // decision mined from one turn used to display that turn's full cost as if
+      // it were its own.
+      var conf = d.confidence != null
+        ? '<div class="decsl">CONFIDENCE</div><div class="decconfbar"><div class="decconffill" style="width:' + d.confidence + '%"></div></div>' +
+          '<div class="decsub2">' + d.confidence + "% \\u00b7 " + decSourceBadge(d) + "</div>"
+        : '<div class="decsl">CONFIDENCE</div><div class="decsub2">not measured \\u00b7 ' + decSourceBadge(d) + "</div>";
+      var tTok = d.turnTokensUsed != null ? d.turnTokensUsed : d.tokensUsed;
+      var tUsd = d.turnCostUsd != null ? d.turnCostUsd : d.costUsd;
+      var turnLine = (tTok || tUsd)
+        ? '<div class="decsl">THE TURN IT CAME FROM</div><div class="decsub2">used ' + tokfmt(tTok || 0) + " tokens \\u00b7 " + money(tUsd || 0) +
+          ' <span class="decfoot">whole-turn totals, not this decision alone</span></div>'
+        : "";
       return '<div class="decsl">DECISION</div><div class="decdt">' + esc(d.title) + "</div>" +
         '<div class="decsl">REASON</div><div class="decdtext">' + esc(d.reasoning || "\\u2014") + "</div>" + alts +
-        '<div class="decsl">CONFIDENCE</div><div class="decconfbar"><div class="decconffill" style="width:' + (d.confidence || 0) + '%"></div></div>' +
-        '<div class="decsub2">' + (d.confidence || 0) + "% \\u00b7 " + tokfmt(d.tokensUsed) + " tok \\u00b7 " + money(d.costUsd || 0) + "</div>" + filesH + arts;
+        conf + turnLine + filesH + arts;
     }
     function selectDecision(id){
       var d = (state.obDecisions || {})[id]; if (!d) return;
@@ -3223,7 +3271,12 @@ ${BRAND_SPRITE}
         if (!decisions.length){ host.innerHTML = '<div class="obnote">No decisions captured yet. Run a turn \\u2014 with <code>ANTHROPIC_API_KEY</code> set for rich extraction \\u2014 and each agent\\u2019s choices appear here.</div>'; return; }
         var agents = []; decisions.forEach(function(d){ if (agents.indexOf(d.agentId) < 0) agents.push(d.agentId); });
         var chips = '<button class="decchip on" data-filter="all">All</button>' + agents.map(function(a){ return '<button class="decchip" data-filter="' + esc(a) + '">' + esc(a) + "</button>"; }).join("");
-        host.innerHTML = '<div class="decheader"><span class="declabel">DECISIONS</span><span class="deccount">' + (stats.total || decisions.length) + " recorded \\u00b7 avg " + (stats.avgConfidence || 0) + "%</span></div>" +
+        // Only average what was actually measured; a fleet of pattern-matched
+        // decisions has no average confidence to report.
+        var rated = decisions.filter(function(d){ return d.confidence != null; });
+        var avg = rated.length ? Math.round(rated.reduce(function(s, d){ return s + d.confidence; }, 0) / rated.length) : null;
+        host.innerHTML = '<div class="decheader"><span class="declabel">DECISIONS</span><span class="deccount">' + (stats.total || decisions.length) + " recorded" +
+          (avg != null ? " \\u00b7 avg " + avg + "% over " + rated.length + " rated" : "") + "</span></div>" +
           '<div class="decfilters">' + chips + "</div>" +
           '<div class="declayout"><div class="declist" id="declist">' + decisions.map(renderDecisionCard).join("") + '</div><div class="decdetail" id="decdetail"><div class="obsub" style="padding:20px;text-align:center">Select a decision to see its reasoning, alternatives, and files.</div></div></div>';
         Array.prototype.forEach.call(host.querySelectorAll(".decchip"), function(chip){
