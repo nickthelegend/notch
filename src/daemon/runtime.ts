@@ -23,6 +23,7 @@ import type {
 import type { RouteState, RouteStepSpec, RouterKind } from "../types.js";
 import { isAdapter, MAIN_CHAT } from "../types.js";
 import { createAgent, knownAgentKinds } from "../adapters/index.js";
+import { ADES } from "../core/ades.js";
 import { BatonManager, NotHolderError } from "../core/baton.js";
 import { Brain, CONFIDENCE_FLOOR } from "../core/brain.js";
 import { compileBrief, retrieve } from "../core/brain-index.js";
@@ -1667,7 +1668,14 @@ export class ProjectRuntime {
         // A disabled (or not-yet-spawned) agent stays in the roster but is
         // inert: it can't be available, busy, or hold the baton.
         if (cfg.enabled === false || !live) {
-          return { id: cfg.id, kind: cfg.kind, role: cfg.role, tier: "adapter" as const, available: false, busy: false, holdsBaton: false, model, enabled: cfg.enabled !== false };
+          // The tier comes from the catalog, not a constant. It used to hardcode
+          // "adapter" here, so a switched-off bridge came back claiming to be an
+          // adapter: the composer filters its chips on exactly this field, so a
+          // disabled Kiro stayed selectable, was offered a model picker for a GUI
+          // app that takes no model flag, and failed with `unknown agent` when
+          // sent to. Switching an agent off must not change what it *is*.
+          const spec = ADES.find((a) => a.kind === cfg.kind);
+          return { id: cfg.id, kind: cfg.kind, role: cfg.role, tier: spec?.tier ?? "adapter", available: false, busy: false, holdsBaton: false, model, enabled: cfg.enabled !== false };
         }
         return {
           id: cfg.id,
