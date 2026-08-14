@@ -59,7 +59,20 @@ import {
   type DecisionStats,
 } from "../observability/decisions.js";
 import { turnTraceId } from "../observability/index.js";
-import { buildSkillsBlock, loadSkills, type SkillManifest } from "../core/skills.js";
+import {
+  buildSkillsBlock,
+  discoverSkillRoots,
+  loadSkills,
+  type SkillCatalogEntry,
+  type SkillManifest,
+  type SkillRoot,
+} from "../core/skills.js";
+import {
+  installSkillFromDir,
+  installSkillFromGit,
+  SkillInstallError,
+  type SkillInstallResult,
+} from "../core/skill-install.js";
 import type { McpServerConfig } from "../types.js";
 import {
   diffSinceSnapshot,
@@ -335,14 +348,94 @@ export class ProjectRuntime {
 
   // ── Skills (SKILL.md context blocks injected into the briefing) ──
 
-  /** Where skills live: the project's own skills/, then the daemon's bundled skills/. */
-  private skillRoots(): string[] {
-    return [path.join(this.info.dir, "skills"), path.join(process.cwd(), "skills")];
+  /**
+   * Where skills live — every layout, not just ours.
+   *
+   * See core/skills.ts#discoverSkillRoots for the list and the precedence. This
+   * used to be two hardcoded directories, which meant a machine with sixty
+   * skills in `~/.claude` reported the one that shipped in this repo.
+   */
+  private skillRoots(): SkillRoot[] {
+    return discoverSkillRoots(this.info.dir, path.join(process.cwd(), "skills"));
+  }
+
+  /** The directory this project's own skills are installed into. */
+  private ownSkillsDir(): string {
+    return path.join(this.info.dir, "skills");
   }
 
   /** All available skills with this project's enabled state. */
   getSkills(): SkillManifest[] {
     return loadSkills(this.skillRoots(), this.config.skills ?? {});
+  }
+
+  /**
+   * The catalog the picker renders: every discoverable skill, without the body.
+   *
+   * The bodies are the entire point of a skill and also the reason this exists
+   * separately from `getSkills()` — a machine with sixty installed skills has
+   * megabytes of markdown, and a list screen needs none of it.
+   *
+   * `installed` means "this file is inside the project directory", which is the
+   * same question `removeSkill` asks: those are the only ones Notch put there
+   * and the only ones it may delete.
+   */
+  skillsCatalog(): SkillCatalogEntry[] {
+    const own = this.ownSkillsDir();
+    return this.getSkills().map((s) => ({
+      id: s.id,
+      name: s.name,
+      description: s.description,
+      enabled: s.enabled,
+      origin: s.origin,
+      source: s.source,
+      installed: path.resolve(s.source) === path.resolve(own),
+    }));
+  }
+
+  /**
+   * Install a skill from a local directory or a git remote, into this project.
+   *
+   * Throws SkillInstallError for anything the user can fix (bad URL, unsafe id,
+   * a name that already exists) — the route turns those into a 400 with the
+   * message, because "invalid input" tells you nothing when the real answer is
+   * "that repo has no SKILL.md in it".
+   */
+  async installSkill(input: { gitUrl?: string; dir?: string; force?: boolean }): Promise<SkillInstallResult> {
+    const gitUrl = String(input.gitUrl ?? "").trim();
+    const dir = String(input.dir ?? "").trim();
+    if (gitUrl && dir) throw new SkillInstallError("give either gitUrl or dir, not both");
+    if (gitUrl) return installSkillFromGit(gitUrl, this.info.dir, { force: input.force === true });
+    if (dir) return installSkillFromDir(dir, this.info.dir, { force: input.force === true });
+    throw new SkillInstallError("nothing to install — pass gitUrl or dir");
+  }
+
+  /**
+   * Delete a project-installed skill from disk.
+   *
+   * Refused for anything outside the project. A skill in `~/.claude/skills` is
+   * the user's, shared with every other tool they run, and a project-scoped
+   * "remove" button that reached out and deleted it would be a data-loss bug
+   * dressed as a feature. The refusal says where the skill actually lives so
+   * the answer ("go delete it yourself, here") is in the message.
+   *
+   * The enabled flag goes with it: leaving `skills[id] = true` in config for a
+   * directory that no longer exists means the next turn's briefing silently
+   * loses a block the config still claims is on.
+   */
+  removeSkill(id: string): { removed: true; id: string; path: string } {
+    const skill = this.getSkills().find((s) => s.id === id);
+    if (!skill) throw new SkillInstallError(`no skill "${id}"`);
+    const own = this.ownSkillsDir();
+    if (path.resolve(skill.source) !== path.resolve(own)) {
+      throw new SkillInstallError(
+        `"${id}" lives in ${skill.source}, outside this project — Notch didn't install it and won't delete it`,
+      );
+    }
+    const dir = path.join(own, skill.id);
+    fs.rmSync(dir, { recursive: true, force: true });
+    if (this.config.skills?.[skill.id]) this.setSkillEnabled(skill.id, false);
+    return { removed: true, id: skill.id, path: dir };
   }
 
   /** Enable/disable one skill for this project; returns the new enabled map. */
@@ -407,6 +500,29 @@ export class ProjectRuntime {
     this.config.mcps = saved;
     this.saveConfig();
     return this.getMcps();
+  }
+
+  /**
+   * Remove a configured MCP server by name.
+   *
+   * `removed` is false when nothing was configured under that name, which the
+   * route answers with a 404 rather than a cheerful 200 — "deleted a thing that
+   * wasn't there" is the kind of success that hides a typo in a server name.
+   *
+   * Note what this does to a name that is also one of the built-in suggestion
+   * rows (GitHub, Slack, …): the *configuration* goes, and the suggestion comes
+   * back with an empty url, because those rows aren't installed servers, they're
+   * placeholders getMcps() merges in. That is the honest outcome — the server is
+   * gone, and what's left is an offer to add one — but a caller diffing the list
+   * for the name will still find it, so it should compare `url`/`command`.
+   */
+  removeMcp(name: string): { removed: boolean; mcps: McpServerConfig[] } {
+    const saved = this.config.mcps ?? [];
+    const kept = saved.filter((m) => m.name !== name);
+    if (kept.length === saved.length) return { removed: false, mcps: this.getMcps() };
+    this.config.mcps = kept;
+    this.saveConfig();
+    return { removed: true, mcps: this.getMcps() };
   }
 
   /** Agents currently paused by a firing SigNoz alert (self-heal quarantine). */

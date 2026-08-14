@@ -1765,6 +1765,48 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
     border-bottom:1px solid var(--border);font-size:15px;font-weight:600}
   .modalhead .iconbtn{margin-left:auto}
   .modalbody{padding:16px;display:flex;flex-direction:column;gap:14px;max-height:70vh;overflow-y:auto}
+  /* MCP + Skills marketplace modal */
+  .mcpmodal{max-width:640px}
+  .mcpmodal .modalbody{gap:0;padding:0 0 14px}
+  .mcpsearchwrap{padding:12px 16px;border-bottom:1px solid var(--border)}
+  .mcpsearch{width:100%;background:var(--secondary);border:1px solid var(--border);border-radius:var(--radius-sm);
+    padding:9px 12px;font:inherit;font-size:13px;color:var(--foreground)}
+  .mcpsearch:focus{outline:none;border-color:var(--primary)}
+  .mcpsec{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted-foreground);padding:14px 16px 7px}
+  .mcpitem{display:flex;align-items:center;gap:11px;padding:9px 16px;border-top:1px solid var(--border)}
+  .mcpitem:hover{background:var(--secondary)}
+  .mcpitem.installed{background:color-mix(in srgb,var(--primary) 5%,transparent)}
+  .mcpmark{width:32px;height:32px;flex:none;border-radius:9px;background:var(--secondary);border:1px solid var(--border);
+    display:flex;align-items:center;justify-content:center;color:var(--muted-foreground)}
+  .mcpmark.on{color:var(--primary);border-color:color-mix(in srgb,var(--primary) 45%,transparent)}
+  .mcpmark.off{color:var(--muted-foreground);border-color:color-mix(in srgb,var(--err) 40%,transparent)}
+  .mcpmarksvg{width:17px;height:17px}
+  .mcpmono{font-size:14px;font-weight:700;font-family:var(--font-mono)}
+  .mcpinfo{flex:1;min-width:0}
+  .mcpname{font-size:13px;font-weight:600;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+  .mcpdesc{font-size:11.5px;color:var(--muted-foreground);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:1px}
+  .mcpstate{font-size:9px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;padding:1px 6px;border-radius:99px;border:1px solid}
+  .mcpstate.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 45%,transparent)}
+  .mcpstate.bad{color:var(--err);border-color:color-mix(in srgb,var(--err) 45%,transparent)}
+  .mcptr{font-size:9px;font-family:var(--font-mono);color:var(--muted-foreground);border:1px solid var(--border);border-radius:99px;padding:1px 6px}
+  .mcpbtn{appearance:none;flex:none;background:var(--primary);color:var(--primary-foreground);border:1px solid var(--primary);
+    border-radius:var(--radius-sm);padding:6px 13px;font:inherit;font-size:11.5px;font-weight:600;cursor:pointer}
+  .mcpbtn:hover:not(:disabled){filter:brightness(1.08)}
+  .mcpbtn:disabled{opacity:.6;cursor:default}
+  .mcpbtn.remove{background:transparent;color:var(--muted-foreground);border-color:var(--border)}
+  .mcpbtn.remove:hover{color:var(--err);border-color:color-mix(in srgb,var(--err) 45%,transparent)}
+  .mcpempty{padding:22px 16px;text-align:center;font-size:12px;color:var(--muted-foreground)}
+  .mcpwarn{display:flex;gap:8px;align-items:flex-start;margin:14px 16px 0;padding:9px 11px;border:1px solid var(--border);
+    border-radius:var(--radius-sm);font-size:11.5px;color:var(--muted-foreground);background:var(--secondary)}
+  .mcpwarn svg{width:13px;height:13px;flex:none;margin-top:1px}
+  .mcpcustom{border-top:1px solid var(--border);margin-top:8px}
+  .mcprow2{display:flex;gap:8px;padding:0 16px}
+  .mcpin{background:var(--secondary);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 11px;
+    font:inherit;font-size:12px;color:var(--foreground);min-width:0}
+  .mcpin.wide{flex:1}
+  .mcpin:focus{outline:none;border-color:var(--primary)}
+  .mcphint{padding:8px 16px 0;font-size:10.5px;color:var(--muted-foreground)}
+  .mcphint code{font-family:var(--font-mono);background:var(--secondary);padding:1px 4px;border-radius:4px}
   .field{display:flex;flex-direction:column;gap:6px}
   /* Setup lives inside Settings now (a status list, not a form). Its rows carry
      shell commands you copy, so the pane is wide enough that a flag never wraps. */
@@ -3316,7 +3358,11 @@ ${BRAND_SPRITE}
       var totalTok = (k.totalTokensIn || 0) + (k.totalTokensOut || 0);
       var grid = '<div class="kmgrid">' +
         c("Agents spawned", k.agentsSpawned || 0, (k.turnsCompleted || 0) + " turns", '<div class="kmsparkwrap tok">' + kmSpark(k.tokenSparkline, "tok") + "</div>") +
-        c("Files", k.filesCreated || 0, (k.filesModified || 0) + " changes", '<div class="kmsparkwrap cost">' + kmSpark(k.costSparkline, "cost") + "</div>") +
+        // filesCreated now genuinely means "new files"; the old number (distinct
+        // paths seen in a diff) is filesTouched, which is what the label meant.
+        c("Files touched", k.filesTouched != null ? k.filesTouched : (k.filesCreated || 0),
+          (k.filesCreated || 0) + " new \\u00b7 " + (k.filesModified || 0) + " changed",
+          '<div class="kmsparkwrap cost">' + kmSpark(k.costSparkline, "cost") + "</div>") +
         c("Avg turn time", fmtMs(k.avgReasoningTimeMs), "reasoning time") +
         c("Token usage", tokfmt(totalTok), tokfmt(k.totalTokensIn) + "\\u2191 " + tokfmt(k.totalTokensOut) + "\\u2193", '<div class="kmsparkwrap blue">' + kmSpark(k.tokenSparkline, "blue") + "</div>") +
         c("Est. cost", '<span class="kmcost">' + money(k.totalCostUsd || 0) + "</span>", "from CLI usage") +
@@ -3325,9 +3371,11 @@ ${BRAND_SPRITE}
         // to report. "0%" would read as "the agents were completely unsure",
         // which is a different and false claim from "nothing measured this".
         c("Avg confidence",
-          k.avgConfidence ? k.avgConfidence + "%" : '<span class="kmsm">not measured</span>',
-          (k.decisionsRecorded || 0) + " decisions",
-          k.avgConfidence ? '<div class="kmbar"><div class="kmbarfill" style="width:' + k.avgConfidence + '%"></div></div>' : "") +
+          k.avgConfidence != null ? k.avgConfidence + "%" : '<span class="kmsm">not measured</span>',
+          k.avgConfidence != null && k.confidenceSamples != null
+            ? "across " + k.confidenceSamples + " of " + (k.decisionsRecorded || 0) + " decisions"
+            : (k.decisionsRecorded || 0) + " decisions",
+          k.avgConfidence != null ? '<div class="kmbar"><div class="kmbarfill" style="width:' + k.avgConfidence + '%"></div></div>' : "") +
         c("Retries", k.retriesTotal || 0, "errors + route fails") + "</div>";
       var tba = k.tokensByAgent || {}, names = Object.keys(tba).sort(function(a, b){ return tba[b] - tba[a]; });
       var bars = names.map(function(a){
@@ -3611,15 +3659,30 @@ ${BRAND_SPRITE}
         memory_forget: ["mem", 1], needs_input: ["warn", 1], error: ["err", 1], decision: ["info", 1] };
       var isHeal = function(e){ return e.kind === "status" && (e.payload || {}).state === "signoz_intervention"; };
       var isRecover = function(e){ return e.kind === "status" && (e.payload || {}).state === "signoz_recovery"; };
+      // A refused turn and a re-admitted agent are things you must be able to
+      // see; so is the moment an agent was actually handed its MCP servers,
+      // which is the only visible proof that half of this feature is real.
+      var isBudget = function(e){ return e.kind === "status" && /^budget_/.test((e.payload || {}).state || ""); };
+      var isMcp = function(e){ return e.kind === "status" && (e.payload || {}).state === "mcp_attached"; };
       var isDecision = function(e){ return e.kind === "status" && (e.payload || {}).state === "agent_decision"; };
-      var evs = (events || []).filter(function(e){ return KINDS[e.kind] || isHeal(e) || isRecover(e) || isDecision(e); }).sort(function(a, b){ return a.ts - b.ts; });
+      var evs = (events || []).filter(function(e){ return KINDS[e.kind] || isHeal(e) || isRecover(e) || isDecision(e) || isBudget(e) || isMcp(e); }).sort(function(a, b){ return a.ts - b.ts; });
       if (!evs.length) return '<div class="obnote">No fleet events yet. Run a turn and the trace fills in.</div>';
       var base = evs[0].ts;
       var rows = evs.map(function(e){
-        var p = e.payload || {}, cls = isHeal(e) ? "heal" : isRecover(e) ? "ok" : isDecision(e) ? "decision" : KINDS[e.kind][0], label, extra = "";
-        if (isHeal(e)) label = "\\u26a1 SigNoz alert \\u00b7 " + esc(p.alert || "alert") + " \\u2192 baton forced off " + esc(e.agentId || "agent") + (p.fallback ? " to " + esc(p.fallback) : "");
+        var p = e.payload || {};
+        var cls = isHeal(e) ? "heal" : isRecover(e) ? "ok" : isDecision(e) ? "decision"
+          : isBudget(e) ? (p.state === "budget_exceeded" ? "warn" : "ok")
+          : isMcp(e) ? "info" : KINDS[e.kind][0];
+        var label, extra = "";
+        if (isBudget(e)) label = p.state === "budget_exceeded"
+          ? "\\ud83d\\udcb8 " + esc(e.agentId || "agent") + " paused \\u2014 over its daily budget" +
+            (p.budgetUsd != null ? " (" + money(p.spentTodayUsd || 0) + " of " + money(p.budgetUsd) + ")" : "")
+          : "\\u2713 " + esc(e.agentId || "agent") + " back under budget \\u2014 pause lifted";
+        else if (isMcp(e)) label = "\\ud83d\\udd0c " + esc(e.agentId || "agent") + " got MCP: " + esc(((p.servers || []).join(", ")) || "no servers");
+        else if (isHeal(e)) label = "\\u26a1 SigNoz alert \\u00b7 " + esc(p.alert || "alert") + " \\u2192 baton forced off " + esc(e.agentId || "agent") + (p.fallback ? " to " + esc(p.fallback) : "");
         else if (isRecover(e)) label = "\\u2713 SigNoz recovery \\u00b7 " + esc(p.alert || "alert") + " resolved \\u2192 " + (p.retried ? "baton retried on " + esc(e.agentId || "agent") : "quarantine lifted on " + esc(e.agentId || "agent"));
-        else if (isDecision(e)){ label = "\\ud83d\\udca1 " + esc(e.agentId || "agent") + " decided: <strong>" + esc(p.title || "decision") + '</strong> <span class="obtlconf">' + (p.confidence || 0) + "%</span>"; extra = ' data-decid="' + esc(p.decisionId || "") + '"'; }
+        else if (isDecision(e)){ label = "\\ud83d\\udca1 " + esc(e.agentId || "agent") + " decided: <strong>" + esc(p.title || "decision") + "</strong>" +
+          (p.confidence != null ? ' <span class="obtlconf">' + p.confidence + "%</span>" : ""); extra = ' data-decid="' + esc(p.decisionId || "") + '"'; }
         else if (e.kind === "run_complete") label = esc(e.agentId || "agent") + " finished a turn" + (p.durationMs ? " \\u00b7 " + (Math.round(p.durationMs / 100) / 10) + "s" : "");
         else if (e.kind === "handoff") label = p.from ? "baton \\u00b7 " + esc(p.from) + " \\u2192 " + esc(p.to || "\\u2014") : "baton \\u00b7 " + esc(p.to || "agent") + " takes it first";
         else if (e.kind.indexOf("route_") === 0) label = "route " + e.kind.slice(6) + (p.error ? " \\u00b7 " + esc(p.error) : "");
@@ -6302,51 +6365,232 @@ ${BRAND_SPRITE}
         var btn = document.getElementById("skillbtn"); if (btn){ btn.classList.toggle("active", on > 0); btn.classList.toggle("empty", !skills.length); }
       }).catch(function(){});
     }
+    /**
+     * Both of these open a modal now, not the old dropdown.
+     *
+     * The dropdown was a 280px-tall scroll box that could only flip a switch on
+     * a list you couldn't add to. Browsing a registry, reading what a server
+     * does and pasting an endpoint is a task that deserves the screen.
+     */
     function toggleComposerPanel(kind){
-      var panel = document.getElementById("cpanel"); if (!panel) return;
-      if (state.cpanel === kind){ closeComposerPanel(); return; }
-      state.cpanel = kind;
-      panel.style.display = ""; panel.innerHTML = '<div class="loader"><i></i><i></i><i></i><i></i></div>';
-      if (kind === "skills") renderSkillsPanel(panel); else renderMcpPanel(panel);
-      setTimeout(function(){ document.addEventListener("mousedown", cpanelAway); }, 0);
+      closeComposerPanel();
+      var pid = state.project && state.project.id; if (!pid) return;
+      if (kind === "skills") openSkillsModal(pid); else openMcpModal(pid);
     }
     function closeComposerPanel(){ state.cpanel = null; var p = document.getElementById("cpanel"); if (p){ p.style.display = "none"; p.innerHTML = ""; } document.removeEventListener("mousedown", cpanelAway); }
     function cpanelAway(ev){ var p = document.getElementById("cpanel"); if (!p) return; if (p.contains(ev.target)) return; if (ev.target.closest && (ev.target.closest("#skillbtn") || ev.target.closest("#mcpbtn"))) return; closeComposerPanel(); }
-    function renderSkillsPanel(panel){
-      api("/api/projects/" + pid + "/skills").then(function(r){
-        var skills = r.skills || [];
-        if (!skills.length){ panel.innerHTML = '<div class="cpanelhd"><span>Active skills</span></div><div class="obsub" style="padding:10px 12px">No skills yet. Add a <code>SKILL.md</code> under <code>skills/</code> to get started.</div>'; return; }
-        var rows = skills.map(function(s){
-          return '<div class="skrow' + (s.enabled ? " on" : "") + '"><div class="skinfo"><div class="skname">' + esc(s.name || s.id) + '</div><div class="skdesc">' + esc((s.description || "").slice(0, 130)) + '</div></div><label class="psswitch" aria-label="toggle ' + esc(s.id) + '"><input type="checkbox" class="sken" data-skill="' + esc(s.id) + '"' + (s.enabled ? " checked" : "") + '><span class="pssl"></span></label></div>';
-        }).join("");
-        panel.innerHTML = '<div class="cpanelhd"><span>Active skills</span><span class="obsub">injected into every prompt</span></div><div class="skrows">' + rows + '</div><div class="cpanelft">Context blocks prepended to the agent\\u2019s system prompt \\u00b7 from <code>skills/</code></div>';
-        Array.prototype.forEach.call(panel.querySelectorAll(".sken"), function(cb){
-          cb.onchange = function(){
-            api("/api/projects/" + pid + "/skills/" + encodeURIComponent(cb.getAttribute("data-skill")), { method: "PUT", body: JSON.stringify({ enabled: cb.checked }) })
-              .then(function(){ refreshSkillCount(); var row = cb.closest(".skrow"); if (row) row.classList.toggle("on", cb.checked); })
-              .catch(function(err){ toast(err.message); cb.checked = !cb.checked; });
-          };
-        });
-      }).catch(function(){ panel.innerHTML = '<div class="obsub" style="padding:10px">Skills unavailable.</div>'; });
+    /**
+     * Provider marks for the MCP browser.
+     *
+     * Simple single-path glyphs drawn in currentColor, not the vendors' full
+     * colour logos: the app has no build step and no CDN, it must work offline
+     * on a tailnet, and a wall of remote <img> would be both a privacy leak and
+     * a broken grid the moment the network drops. Anything not listed falls back
+     * to a monogram, exactly like the ADE brand marks do.
+     */
+    var MCPMARK = {
+      github: '<path d="M12 1.3a10.7 10.7 0 0 0-3.4 20.9c.5.1.7-.2.7-.5v-2c-3 .6-3.6-1.3-3.6-1.3-.5-1.2-1.2-1.6-1.2-1.6-1-.7.1-.7.1-.7 1.1.1 1.6 1.1 1.6 1.1 1 1.7 2.6 1.2 3.2.9.1-.7.4-1.2.7-1.5-2.4-.3-4.9-1.2-4.9-5.4 0-1.2.4-2.1 1.1-2.9-.1-.3-.5-1.4.1-2.9 0 0 .9-.3 3 1.1a10.3 10.3 0 0 1 5.5 0c2.1-1.4 3-1.1 3-1.1.6 1.5.2 2.6.1 2.9.7.8 1.1 1.7 1.1 2.9 0 4.2-2.5 5.1-4.9 5.4.4.3.7 1 .7 2v3c0 .3.2.6.7.5A10.7 10.7 0 0 0 12 1.3Z"/>',
+      linear: '<path d="M2.2 13.6 10.4 21.8a10 10 0 0 1-8.2-8.2Zm-.2-2.5 11 10.9c.7-.1 1.4-.3 2-.5L2.4 9.1c-.2.6-.3 1.3-.4 2Zm1.2-3.6 12.3 12.3c.5-.3 1-.6 1.4-.9L4.1 6.2c-.4.4-.6.9-.9 1.3Zm2-2.6L18.9 18.9A10 10 0 0 0 5.2 5Z"/>',
+      slack: '<path d="M5.1 14.5a2.1 2.1 0 1 1-2.1-2.1h2.1v2.1Zm1 0a2.1 2.1 0 0 1 4.2 0v5.3a2.1 2.1 0 0 1-4.2 0v-5.3ZM8.2 5a2.1 2.1 0 1 1 2.1-2.1v2.1H8.2Zm0 1a2.1 2.1 0 0 1 0 4.2H2.9a2.1 2.1 0 0 1 0-4.2h5.3ZM17.7 8.2a2.1 2.1 0 1 1 2.1 2.1h-2.1V8.2Zm-1 0a2.1 2.1 0 1 1-4.2 0V2.9a2.1 2.1 0 0 1 4.2 0v5.3ZM14.5 17.7a2.1 2.1 0 1 1-2.1 2.1v-2.1h2.1Zm0-1a2.1 2.1 0 0 1 0-4.2h5.3a2.1 2.1 0 0 1 0 4.2h-5.3Z"/>',
+      notion: '<path d="M4.4 3.3 15.9 2.4c1.4-.1 1.8-.1 2.7.6l3 2.1c.6.4.8.5.8 1v13.3c0 .9-.3 1.4-1.5 1.5l-13.3.8c-.8 0-1.2-.1-1.7-.7L3.1 18c-.5-.7-.7-1.2-.7-1.8V4.8c0-.7.3-1.3 2-1.5Zm11.9 1.4L5.2 5.5c-.6 0-.7.3-.5.5l1.9 1.4c.3.2.6.5 1.2.4l10.7-.6c.3 0 .1-.3-.1-.4l-1.6-1.2c-.2-.2-.5-.4-1-.4Zm-1.6 4.5-11 .6v10.9c0 .6.3.8 1 .8l10.5-.6c.6 0 .7-.4.7-.9V9.6c0-.5-.2-.7-.7-.7Z"/>',
+      sentry: '<path d="M13.2 2.6a2.4 2.4 0 0 0-4.2 0L6.8 6.4a17 17 0 0 1 8.6 13.5h-2.5A14.5 14.5 0 0 0 5.6 8.5L3.4 12.3a10 10 0 0 1 4.8 7.6H3.5c-.4 0-.6-.4-.4-.7l1.3-2.2a6.7 6.7 0 0 0-1.4-.9l-1.3 2.2A2.4 2.4 0 0 0 3.5 22h6.8a12 12 0 0 0-4.9-10.4l1-1.7a14 14 0 0 1 5.6 12.1h5.5a2.4 2.4 0 0 0 2-3.6Z"/>',
+      stripe: '<path d="M11.3 9.9c0-.8.7-1.1 1.7-1.1 1.5 0 3.4.5 4.9 1.3V5.5a13 13 0 0 0-4.9-.9c-4 0-6.7 2.1-6.7 5.6 0 5.4 7.5 4.6 7.5 6.9 0 .9-.8 1.2-1.9 1.2-1.6 0-3.8-.7-5.4-1.6v4.7c1.8.8 3.6 1.1 5.4 1.1 4.1 0 6.9-2 6.9-5.6 0-5.9-7.5-4.9-7.5-7.1Z"/>',
+      supabase: '<path d="M13.8 22.3c-.6.8-1.9.4-1.9-.6l-.3-8.2h5.5c1 0 1.6 1.2 1 2l-4.3 6.8ZM10.2 1.7c.6-.8 1.9-.4 1.9.6l.3 8.2H6.9c-1 0-1.6-1.2-1-2l4.3-6.8Z"/>',
+      figma: '<path d="M8.5 22a3.5 3.5 0 0 0 3.5-3.5V15H8.5a3.5 3.5 0 0 0 0 7Zm0-7.5H12V8H8.5a3.25 3.25 0 0 0 0 6.5ZM12 8h3.5a3.25 3.25 0 0 0 0-6.5H12V8Zm-3.5 0H12V1.5H8.5a3.25 3.25 0 0 0 0 6.5Zm7 6.5a3.25 3.25 0 1 0 0-6.5 3.25 3.25 0 0 0 0 6.5Z"/>',
+      cloudflare: '<path d="M16.5 16.3c.2-.6.1-1.1-.2-1.5-.3-.4-.8-.6-1.4-.6l-10.5-.1c-.1 0-.1 0-.2-.1v-.2c0-.1.1-.2.2-.2l10.6-.1c1.3 0 2.6-1 3.1-2.3l.6-1.5v-.2a5.9 5.9 0 0 0-11.3-.6 2.7 2.7 0 0 0-4.2 2.6A3.8 3.8 0 0 0 0 15.4c0 .2 0 .4.1.6 0 .1.1.2.2.2h15.6c.1 0 .2-.1.3-.2l.3.3Zm2.9-6.4h-.3c-.1 0-.1.1-.2.2l-.4 1.4c-.2.6-.1 1.1.2 1.5.3.4.8.6 1.4.6l2.2.1c.1 0 .1 0 .2.1v.2c0 .1-.1.2-.2.2l-2.3.1c-1.3 0-2.6 1-3.1 2.3l-.2.5c0 .1 0 .2.1.2h7.9c.1 0 .2-.1.2-.2.1-.5.2-1.1.2-1.6a5 5 0 0 0-5-5Z"/>',
+      playwright: '<path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm-3.7 7.4c.9 0 1.6.7 1.6 1.6H6.7c0-.9.7-1.6 1.6-1.6Zm7.4 0c.9 0 1.6.7 1.6 1.6h-3.2c0-.9.7-1.6 1.6-1.6ZM12 18.2a5.6 5.6 0 0 1-5.3-3.7h10.6a5.6 5.6 0 0 1-5.3 3.7Z"/>',
+      postgres: '<path d="M17.4 2.6c-1.6-.4-3.3-.5-4.9-.2-.6-.2-1.2-.3-1.8-.3-1.2 0-2.3.3-3.3.9-1-.4-3.6-1.2-5 .3C1.2 4.6 1.5 8 2.7 12.6c.6 2.3 1.4 4.3 2.2 5.6.4.6 1 1.4 1.9 1.5.6.1 1.2-.2 1.8-.8.6.2 1.3.3 2 .3h.1c.7 0 1.3-.1 1.9-.3.4.4.9.7 1.5.8h.4c1.1 0 1.9-.8 2.5-1.8 1.2-2 1.9-5.9 2-7.3.2-1.9 0-5.5-1.6-7.4-.2-.3-.6-.5-1-.6ZM8.4 7.6c-.1.9.1 1.7.4 2.4.3.9.5 1.6-.1 2.5-.6-1.4-.9-3.4-.6-4.9Zm7.3 8.7c-.5.9-.9 1.1-1.1 1.1-.4 0-.8-.5-1-.9.7-1.1.9-2.4.9-2.5v-.4c0-.2-.1-.3-.3-.4-.5-.2-1.2-.1-1.7.1.2-.9.7-1.6 1.5-2.1 1.3 1.2 2 2.8 2.2 3.9-.1.5-.3 1-.5 1.2Z"/>',
+      signoz: '<path d="M12 2 3 7v10l9 5 9-5V7l-9-5Zm0 2.3 6.8 3.8L12 11.9 5.2 8.1 12 4.3ZM5 9.8l6 3.4v6.8l-6-3.3V9.8Zm8 10.2v-6.8l6-3.4v6.9l-6 3.3Z"/>',
+      filesystem: '<path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2Z"/>'
+    };
+    function mcpMark(slug, name){
+      var d = MCPMARK[slug];
+      if (d) return '<svg class="mcpmarksvg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">' + d + "</svg>";
+      return '<span class="mcpmono">' + esc((name || "?").slice(0, 1).toUpperCase()) + "</span>";
     }
-    function renderMcpPanel(panel){
-      api("/api/projects/" + pid + "/mcps").then(function(r){
-        var mcps = r.mcps || [];
-        var rows = mcps.map(function(m){
-          var connected = !!m.url;
-          return '<div class="mcprow"><div class="mcpico' + (connected ? " on" : "") + '">' + esc((m.name || "?").slice(0, 1)) + '</div><div class="skinfo"><div class="skname">' + esc(m.name) + '</div><div class="skdesc">' + esc(m.description || "") + "</div></div>" +
-            (connected ? '<span class="mcpbadge">connected</span>' : '<button class="mcpconn" data-mcp="' + esc(m.name) + '">Connect</button>') + "</div>";
+    /**
+     * The MCP marketplace — browse real servers and install one.
+     *
+     * A modal rather than the old dropdown because this is a task, not a
+     * toggle: you search, read what a server does, decide, and sometimes have
+     * to paste a URL. The list is the official registry
+     * (registry.modelcontextprotocol.io), not a list typed into this file, so it
+     * stays true as the ecosystem moves; the featured row is a curated set of
+     * well-known providers for the empty state.
+     */
+    function openMcpModal(pid){
+      if (document.querySelector(".scrim")) return;
+      var scrim = document.createElement("div"); scrim.className = "scrim";
+      scrim.innerHTML = '<div class="modal mcpmodal"><div class="modalhead">MCP servers' +
+        '<button class="iconbtn" id="mcx" aria-label="close">' + ICONS.x + "</button></div>" +
+        '<div class="mcpsearchwrap"><input id="mcpq" class="mcpsearch" type="search" placeholder="Search the MCP registry\\u2026" autocomplete="off"/></div>' +
+        '<div class="modalbody" id="mcpbody"><div class="loader"><i></i><i></i><i></i><i></i></div></div></div>';
+      document.body.appendChild(scrim);
+      function close(){ scrim.remove(); document.removeEventListener("keydown", onKey); }
+      function onKey(e){ if (e.key === "Escape") close(); }
+      document.addEventListener("keydown", onKey);
+      scrim.addEventListener("click", function(ev){ if (ev.target === scrim) close(); });
+      document.getElementById("mcx").onclick = close;
+
+      var installed = {};
+      function load(q){
+        var body = document.getElementById("mcpbody"); if (!body) return;
+        Promise.all([
+          api("/api/mcp/catalog" + (q ? "?q=" + encodeURIComponent(q) : "")).catch(function(){ return { servers: [], featured: [], degraded: true }; }),
+          api("/api/projects/" + pid + "/mcps").catch(function(){ return { mcps: [] }; })
+        ]).then(function(res){
+          var cat = res[0] || {}, mine = (res[1] && res[1].mcps) || [];
+          installed = {}; mine.forEach(function(m){ installed[m.name] = m; });
+          var list = (q ? (cat.servers || []) : (cat.featured || []).concat(cat.servers || []));
+          renderMcpList(body, list, mine, cat.degraded, q);
+        });
+      }
+      function renderMcpList(body, list, mine, degraded, q){
+        // What's already connected comes first: this modal is also where you
+        // check on and remove what you installed, not only where you add.
+        var connectedRows = mine.filter(function(m){ return m.url || m.command; }).map(function(m){
+          var ok = !!m.connected;
+          return '<div class="mcpitem installed"><span class="mcpmark ' + (ok ? "on" : "off") + '">' + mcpMark(m.slug || String(m.name || "").toLowerCase(), m.name) + "</span>" +
+            '<div class="mcpinfo"><div class="mcpname">' + esc(m.name) +
+              '<span class="mcpstate ' + (ok ? "ok" : "bad") + '">' + (ok ? "reachable" : "unreachable") + "</span></div>" +
+              '<div class="mcpdesc">' + esc(m.url || m.command || "") + "</div></div>" +
+            '<button class="mcpbtn remove" data-remove="' + esc(m.name) + '">Remove</button></div>';
         }).join("");
-        panel.innerHTML = '<div class="cpanelhd"><span>MCP connections</span><span class="obsub">passed to the agent each turn</span></div><div class="skrows">' + rows + '</div><div class="cpanelft">Connect a server to give agents its tools.</div>';
-        Array.prototype.forEach.call(panel.querySelectorAll(".mcpconn"), function(btn){
-          btn.onclick = function(){
-            var name = btn.getAttribute("data-mcp"), url = window.prompt("MCP server URL for " + name + ":", "https://");
-            if (!url) return;
-            api("/api/projects/" + pid + "/mcps", { method: "PATCH", body: JSON.stringify({ mcp: { name: name, url: url, enabledForSession: true } }) })
-              .then(function(){ renderMcpPanel(panel); }).catch(function(err){ toast(err.message); });
+        var rows = list.filter(function(s){ return !installed[s.name || s.title]; }).map(function(s){
+          var key = s.name || s.title;
+          var dest = s.url || (s.command ? s.command + " " + ((s.args || []).join(" ")) : "");
+          return '<div class="mcpitem"><span class="mcpmark">' + mcpMark(s.slug, s.title || s.name) + "</span>" +
+            '<div class="mcpinfo"><div class="mcpname">' + esc(s.title || s.name) +
+              (s.transport ? '<span class="mcptr">' + esc(s.transport) + "</span>" : "") + "</div>" +
+              '<div class="mcpdesc">' + esc(s.description || dest || "") + "</div></div>" +
+            '<button class="mcpbtn" data-install="' + esc(encodeURIComponent(JSON.stringify(s))) + '">' + (s.needsUrl ? "Add\\u2026" : "Install") + "</button></div>";
+        }).join("");
+        body.innerHTML =
+          (degraded ? '<div class="mcpwarn">' + ICONS.route + " The public registry didn\\u2019t answer \\u2014 showing well-known providers only. Search needs the registry.</div>" : "") +
+          (connectedRows ? '<div class="mcpsec">Installed in this project</div>' + connectedRows : "") +
+          '<div class="mcpsec">' + (q ? "Registry results" : "Popular providers") + "</div>" +
+          (rows || '<div class="mcpempty">Nothing matched \\u201c' + esc(q || "") + '\\u201d.</div>') +
+          '<div class="mcpcustom"><div class="mcpsec">Add one by hand</div>' +
+            '<div class="mcprow2"><input id="mcpcn" class="mcpin" placeholder="Name"/><input id="mcpcu" class="mcpin wide" placeholder="https://\\u2026/mcp or a command"/>' +
+            '<button class="mcpbtn" id="mcpcadd">Add</button></div></div>';
+        Array.prototype.forEach.call(body.querySelectorAll("[data-install]"), function(b){
+          b.onclick = function(){
+            var s = JSON.parse(decodeURIComponent(b.getAttribute("data-install")));
+            var url = s.url;
+            if (s.needsUrl || (!s.url && !s.command)){
+              url = window.prompt("Endpoint URL for " + (s.title || s.name) + ":", "https://");
+              if (!url) return;
+            }
+            doInstall({ name: s.title || s.name, slug: s.slug, url: url, command: s.command, args: s.args, transport: s.transport, description: s.description }, b);
           };
         });
-      }).catch(function(){ panel.innerHTML = '<div class="obsub" style="padding:10px">MCPs unavailable.</div>'; });
+        Array.prototype.forEach.call(body.querySelectorAll("[data-remove]"), function(b){
+          b.onclick = function(){
+            b.disabled = true; b.textContent = "\\u2026";
+            api("/api/projects/" + pid + "/mcps/" + encodeURIComponent(b.getAttribute("data-remove")), { method: "DELETE" })
+              .then(function(){ load(document.getElementById("mcpq").value.trim()); })
+              .catch(function(err){ toast(err.message); b.disabled = false; b.textContent = "Remove"; });
+          };
+        });
+        var addBtn = body.querySelector("#mcpcadd");
+        if (addBtn) addBtn.onclick = function(){
+          var n = body.querySelector("#mcpcn").value.trim(), u = body.querySelector("#mcpcu").value.trim();
+          if (!n || !u) return void toast("Name and endpoint are both required.");
+          var isUrl = /^https?:\\/\\//.test(u);
+          doInstall(isUrl ? { name: n, url: u, transport: "http" } : { name: n, command: u.split(/\\s+/)[0], args: u.split(/\\s+/).slice(1), transport: "stdio" }, addBtn);
+        };
+      }
+      function doInstall(payload, btn){
+        var old = btn.textContent; btn.disabled = true; btn.textContent = "Installing\\u2026";
+        api("/api/projects/" + pid + "/mcps/install", { method: "POST", body: JSON.stringify(payload) })
+          .then(function(){ toast(payload.name + " installed"); load(document.getElementById("mcpq").value.trim()); })
+          .catch(function(err){ toast(err.message || "install failed"); btn.disabled = false; btn.textContent = old; });
+      }
+      var qEl = document.getElementById("mcpq"), qT = null;
+      qEl.oninput = function(){ if (qT) clearTimeout(qT); qT = setTimeout(function(){ load(qEl.value.trim()); }, 280); };
+      qEl.focus();
+      load("");
+    }
+    /**
+     * The Skills modal — everything installable on this machine, and a way to
+     * bring in more.
+     *
+     * Skills used to be a toggle list over two directories, so the dozens a
+     * person already has under ~/.claude/skills were invisible and there was no
+     * way to add one. This browses every real root (project, user, plugins) and
+     * installs from a git URL or a folder.
+     */
+    function openSkillsModal(pid){
+      if (document.querySelector(".scrim")) return;
+      var scrim = document.createElement("div"); scrim.className = "scrim";
+      scrim.innerHTML = '<div class="modal mcpmodal"><div class="modalhead">Skills' +
+        '<button class="iconbtn" id="skx" aria-label="close">' + ICONS.x + "</button></div>" +
+        '<div class="mcpsearchwrap"><input id="skq" class="mcpsearch" type="search" placeholder="Filter skills\\u2026" autocomplete="off"/></div>' +
+        '<div class="modalbody" id="skbody"><div class="loader"><i></i><i></i><i></i><i></i></div></div></div>';
+      document.body.appendChild(scrim);
+      function close(){ scrim.remove(); document.removeEventListener("keydown", onKey); if (state.refreshComposer) state.refreshComposer(); }
+      function onKey(e){ if (e.key === "Escape") close(); }
+      document.addEventListener("keydown", onKey);
+      scrim.addEventListener("click", function(ev){ if (ev.target === scrim) close(); });
+      document.getElementById("skx").onclick = close;
+
+      var all = [];
+      function load(){
+        var body = document.getElementById("skbody"); if (!body) return;
+        api("/api/projects/" + pid + "/skills/catalog")
+          .catch(function(){ return api("/api/projects/" + pid + "/skills"); })
+          .then(function(r){ all = r.skills || []; draw(); })
+          .catch(function(){ body.innerHTML = '<div class="mcpempty">Skills unavailable \\u2014 the daemon didn\\u2019t answer.</div>'; });
+      }
+      function draw(){
+        var body = document.getElementById("skbody"); if (!body) return;
+        var q = (document.getElementById("skq").value || "").trim().toLowerCase();
+        var list = all.filter(function(s){
+          return !q || (s.id + " " + (s.name || "") + " " + (s.description || "")).toLowerCase().indexOf(q) >= 0;
+        });
+        var ORIGINS = { project: "in this project", user: "your skills", plugin: "from a plugin", bundled: "bundled" };
+        var groups = {};
+        list.forEach(function(s){ var o = s.origin || "bundled"; (groups[o] = groups[o] || []).push(s); });
+        var html = "";
+        ["project", "user", "plugin", "bundled"].forEach(function(o){
+          var g = groups[o]; if (!g || !g.length) return;
+          html += '<div class="mcpsec">' + esc(ORIGINS[o] || o) + " \\u00b7 " + g.length + "</div>" +
+            g.map(function(s){
+              return '<div class="mcpitem"><span class="mcpmark ' + (s.enabled ? "on" : "") + '">' + mcpMark("", s.name || s.id) + "</span>" +
+                '<div class="mcpinfo"><div class="mcpname">' + esc(s.name || s.id) +
+                  (s.enabled ? '<span class="mcpstate ok">on</span>' : "") + "</div>" +
+                  '<div class="mcpdesc">' + esc(s.description || "") + "</div></div>" +
+                '<button class="mcpbtn' + (s.enabled ? " remove" : "") + '" data-tog="' + esc(s.id) + '" data-on="' + (s.enabled ? "1" : "0") + '">' +
+                  (s.enabled ? "Disable" : "Enable") + "</button></div>";
+            }).join("");
+        });
+        body.innerHTML = (html || '<div class="mcpempty">No skills matched.</div>') +
+          '<div class="mcpcustom"><div class="mcpsec">Install a skill</div>' +
+          '<div class="mcprow2"><input id="skgit" class="mcpin wide" placeholder="https://github.com/\\u2026 (git) or /path/to/skill"/>' +
+          '<button class="mcpbtn" id="skadd">Install</button></div>' +
+          '<div class="mcphint">Needs a <code>SKILL.md</code> at the root. It is copied into this project\\u2019s <code>skills/</code>.</div></div>';
+        Array.prototype.forEach.call(body.querySelectorAll("[data-tog]"), function(b){
+          b.onclick = function(){
+            var on = b.getAttribute("data-on") === "1";
+            b.disabled = true;
+            api("/api/projects/" + pid + "/skills/" + encodeURIComponent(b.getAttribute("data-tog")),
+              { method: "PUT", body: JSON.stringify({ enabled: !on }) })
+              .then(load).catch(function(err){ toast(err.message); b.disabled = false; });
+          };
+        });
+        body.querySelector("#skadd").onclick = function(){
+          var v = (body.querySelector("#skgit").value || "").trim();
+          if (!v) return void toast("Paste a git URL or a folder path.");
+          var btn = this; btn.disabled = true; btn.textContent = "Installing\\u2026";
+          var payload = /^(https?:|git@|ssh:)/.test(v) ? { gitUrl: v } : { dir: v };
+          api("/api/projects/" + pid + "/skills/install", { method: "POST", body: JSON.stringify(payload) })
+            .then(function(r){ toast("Installed " + ((r && r.installed && r.installed.id) || "skill")); load(); })
+            .catch(function(err){ toast(err.message || "install failed"); })
+            .then(function(){ btn.disabled = false; btn.textContent = "Install"; });
+        };
+      }
+      document.getElementById("skq").oninput = draw;
+      load();
     }
     var _sugT = null;
     function scheduleSkillSuggest(text){ if (_sugT) clearTimeout(_sugT); _sugT = setTimeout(function(){ doSkillSuggest(text); }, 300); }
