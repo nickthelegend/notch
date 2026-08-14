@@ -26,6 +26,7 @@ import { burnSeries, fetchSpans, healthScore, insightSpansFromLog, recentAgentEr
 import { askObservatory, type AskContext } from "../observability/ask.js";
 import { probeMcpServer, writeMcpSession } from "../core/mcp.js";
 import { searchCatalog } from "../core/mcp-catalog.js";
+import { defaultWebhookUrl, provisionSignoz } from "../core/signoz-provision.js";
 import { buildSnapshots } from "../observability/snapshots.js";
 import { SkillInstallError } from "../core/skill-install.js";
 import { suggestSkill } from "../core/skills.js";
@@ -1067,6 +1068,37 @@ export class LoomDaemon {
     //   resolved → lift the quarantine and hand the baton BACK to the original
     //              agent — a real pause-then-retry, not a one-way failover.
     // Closing the loop from metric breach → intervention → recovery → retry.
+    /**
+     * Wire SigNoz up from this side: create the dashboard, the alert rules, and
+     * the webhook channel that points back at the receiver below.
+     *
+     * The self-heal loop already worked, but only for someone who had first
+     * hand-built the alerts in SigNoz's own UI and imported a JSON dashboard.
+     * That is a lot of setup in another product before Notch's most interesting
+     * behaviour is reachable. Credentials are taken per-request and never
+     * stored — this is a one-shot setup call, not a saved integration.
+     */
+    app.post("/api/signoz/provision", (req, res) => {
+      void (async () => {
+        const { url, email, password, webhookHost } = (req.body ?? {}) as Record<string, string | undefined>;
+        const base = url || process.env.NOTCH_SIGNOZ_URL || "http://localhost:8080";
+        if (!email || !password) {
+          return void res.status(400).json({ error: "email and password for SigNoz are required" });
+        }
+        try {
+          const result = await provisionSignoz(
+            { url: base, email, password },
+            { webhookUrl: defaultWebhookUrl(this.port, webhookHost || "host.docker.internal") },
+          );
+          res.json(result);
+        } catch (err) {
+          // 502, not 500: the failure is upstream in SigNoz, and the message is
+          // the whole value of the reply.
+          res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+        }
+      })();
+    });
+
     app.post("/api/webhooks/signoz", (req, res) => {
       void (async () => {
         const secret = process.env.NOTCH_WEBHOOK_SECRET;
