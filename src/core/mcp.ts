@@ -73,7 +73,15 @@ export function resolveMcpServers(mcps: McpServerConfig[] | undefined): Resolved
     if (seen.has(key)) continue; // first wins; a duplicate key would overwrite it
     seen.add(key);
     const entry: McpServerEntry = url
-      ? { type: transportOf(m, url), url }
+      ? {
+          type: transportOf(m, url),
+          url,
+          // `headers` is the documented field of the mcp.json remote entry, and
+          // it is how a hosted server that wants an `Authorization: Bearer …`
+          // gets one. Only emitted when there is something to say, so a config
+          // for a server that needs no auth reads exactly as it did before.
+          ...(m.headers && Object.keys(m.headers).length ? { headers: stringValues(m.headers) } : {}),
+        }
       : {
           type: "stdio",
           command,
@@ -155,6 +163,13 @@ function tomlInline(entry: McpServerEntry): string {
     }
   } else {
     fields.push(`url=${tomlString(entry.url)}`);
+    // Headers are NOT emitted here, and that is a deliberate gap rather than an
+    // oversight. `url` was verified against codex-cli 0.144.6 by running it;
+    // the key codex wants for per-server HTTP headers was not, and a guessed
+    // TOML key is either ignored (silent) or rejected (turn fails). A server
+    // that needs an Authorization header will fail to authenticate under codex
+    // until this is verified — which is a visible, diagnosable failure, unlike
+    // an invented field name.
   }
   return `{${fields.join(",")}}`;
 }

@@ -52,7 +52,7 @@ describe("loadSkills", () => {
 
 describe("buildSkillsBlock", () => {
   it("frames the enabled skills' bodies, and is empty when none are on", () => {
-    const mk = (id: string, body: string, enabled: boolean): SkillManifest => ({ id, name: id, description: "", path: "", body, enabled });
+    const mk = (id: string, body: string, enabled: boolean): SkillManifest => ({ id, name: id, description: "", path: "", body, enabled, source: "", origin: "project" });
     const block = buildSkillsBlock([mk("a", "AAA", true), mk("b", "BBB", true), mk("c", "CCC", false)]);
     expect(block).toContain("ACTIVE SKILLS");
     expect(block).toContain("AAA");
@@ -64,8 +64,8 @@ describe("buildSkillsBlock", () => {
 
 describe("suggestSkill", () => {
   const skills: SkillManifest[] = [
-    { id: "signoz-agent-multi-agent-triage", name: "", description: "", path: "", body: "", enabled: false },
-    { id: "signoz-generating-queries", name: "", description: "", path: "", body: "", enabled: false },
+    { id: "signoz-agent-multi-agent-triage", name: "", description: "", path: "", body: "", enabled: false, source: "", origin: "project" },
+    { id: "signoz-generating-queries", name: "", description: "", path: "", body: "", enabled: false, source: "", origin: "project" },
   ];
   it("suggests triage for a 'why is my agent failing' message", () => {
     expect(suggestSkill("why is my agent failing?", skills)!.id).toBe("signoz-agent-multi-agent-triage");

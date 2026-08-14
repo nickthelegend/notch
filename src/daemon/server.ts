@@ -24,8 +24,10 @@ import { recordAgentEvent } from "../observability/index.js";
 import { triageAgent } from "../observability/triage.js";
 import { burnSeries, fetchSpans, healthScore, insightSpansFromLog, recentAgentErrors, traceSpans, type InsightSpan } from "../observability/insights.js";
 import { askObservatory, type AskContext } from "../observability/ask.js";
-import { writeMcpSession } from "../core/mcp.js";
+import { probeMcpServer, writeMcpSession } from "../core/mcp.js";
+import { searchCatalog } from "../core/mcp-catalog.js";
 import { buildSnapshots } from "../observability/snapshots.js";
+import { SkillInstallError } from "../core/skill-install.js";
 import { suggestSkill } from "../core/skills.js";
 import { ADES, buildDefaultRoutes, defaultAgentConfigs, detectAdes } from "../core/ades.js";
 import { logbook, type LogLevel } from "../core/logbook.js";
@@ -1281,6 +1283,72 @@ export class LoomDaemon {
       }),
     );
 
+    // The skill picker's list: every skill discoverable from this project, from
+    // all four roots (project, ~/.claude, plugin caches, bundled), without the
+    // bodies. `origin` and `source` say where each one lives, and `installed`
+    // marks the ones in the project's own skills/ dir — the only ones DELETE
+    // will touch.
+    app.get(
+      "/api/projects/:id/skills/catalog",
+      withRuntime(async (rt, _req, res) => {
+        res.json({ skills: rt.skillsCatalog() });
+      }),
+    );
+
+    // Install a skill: from a git remote, or from a directory on this machine.
+    // Everything the user can fix — a URL that isn't git, a repo with no
+    // SKILL.md, a name already taken — comes back as a 400 with the reason,
+    // because "invalid input" is useless when the real answer is "that repo has
+    // no SKILL.md in it".
+    app.post(
+      "/api/projects/:id/skills/install",
+      withRuntime(async (rt, req, res) => {
+        const body = (req.body ?? {}) as { gitUrl?: string; dir?: string; force?: boolean };
+        try {
+          const skill = await rt.installSkill(body);
+          res.json({ skill, skills: rt.skillsCatalog() });
+        } catch (err) {
+          if (err instanceof SkillInstallError) {
+            return void res.status(400).json({ error: err.message });
+          }
+          throw err;
+        }
+      }),
+    );
+
+    // Remove a project-installed skill from disk. Refused (400) for a skill
+    // that lives in ~/.claude or a plugin cache: those are shared with every
+    // other tool on the machine and are not ours to delete.
+    app.delete(
+      "/api/projects/:id/skills/:skillId",
+      withRuntime(async (rt, req, res) => {
+        try {
+          const removed = rt.removeSkill(String(req.params.skillId));
+          res.json({ ...removed, skills: rt.skillsCatalog() });
+        } catch (err) {
+          if (err instanceof SkillInstallError) {
+            return void res.status(400).json({ error: err.message });
+          }
+          throw err;
+        }
+      }),
+    );
+
+    // The MCP catalog: the official registry, searchable, plus a hand-verified
+    // shortlist for the empty state. Not project-scoped — it is the same
+    // catalog for everyone, and caching it per-project would multiply the
+    // requests against somebody else's public service by the project count.
+    //
+    // `degraded: true` means the registry did not answer and `servers` is
+    // therefore empty; `featured` needs no network and is always there.
+    app.get("/api/mcp/catalog", (req, res) => {
+      void (async () => {
+        const q = String(req.query.q ?? "").trim();
+        const limit = req.query.limit ? Number(req.query.limit) : undefined;
+        res.json(await searchCatalog(q, limit));
+      })();
+    });
+
     // MCP servers: the connect/toggle list. PATCH upserts one by name.
     //
     // `connected` on each row is measured here, not inferred from the presence
@@ -1300,6 +1368,77 @@ export class LoomDaemon {
         const body = (req.body ?? {}) as { mcp?: { name?: string } };
         if (!body.mcp?.name) return void res.status(400).json({ error: "mcp.name required" });
         res.json({ mcps: rt.upsertMcp(body.mcp as Parameters<typeof rt.upsertMcp>[0]) });
+      }),
+    );
+
+    // Install a server picked out of the catalog.
+    //
+    // Two things separate this from the PATCH above. It refuses a server with
+    // neither a url nor a command — that is the exact shape of the old
+    // placeholder rows, and the whole point of the catalog is that a row means
+    // something now. And it probes what it just wrote, so the response carries a
+    // measured `connected` rather than leaving the UI to render a green badge
+    // off the presence of a string.
+    app.post(
+      "/api/projects/:id/mcps/install",
+      withRuntime(async (rt, req, res) => {
+        const body = (req.body ?? {}) as {
+          name?: string;
+          url?: string;
+          command?: string;
+          args?: unknown;
+          transport?: string;
+          headers?: Record<string, string>;
+          env?: Record<string, string>;
+          description?: string;
+          slug?: string;
+        };
+        const name = String(body.name ?? "").trim();
+        if (!name) return void res.status(400).json({ error: "name required" });
+        const url = String(body.url ?? "").trim();
+        const command = String(body.command ?? "").trim();
+        if (!url && !command) {
+          return void res.status(400).json({
+            error: `"${name}" has neither a url nor a command — an MCP server needs somewhere to connect to or something to run`,
+          });
+        }
+        if (url && !/^https?:\/\//i.test(url)) {
+          return void res.status(400).json({ error: `"${url}" is not an http(s) URL` });
+        }
+        const transport = body.transport === "sse" || body.transport === "http" ? body.transport : undefined;
+        const args = Array.isArray(body.args) ? body.args.map((a) => String(a)) : undefined;
+        const mcps = rt.upsertMcp({
+          name,
+          url,
+          ...(command ? { command } : {}),
+          ...(args?.length ? { args } : {}),
+          ...(url && transport ? { transport } : {}),
+          ...(body.headers && Object.keys(body.headers).length ? { headers: body.headers } : {}),
+          ...(body.env && Object.keys(body.env).length ? { env: body.env } : {}),
+          ...(body.description ? { description: String(body.description) } : {}),
+          ...(body.slug ? { slug: String(body.slug) } : {}),
+          enabledForSession: true,
+        });
+        // Probe after persisting: the answer describes what is now configured,
+        // and a server that fails its probe is still installed — unreachable is
+        // a state to show, not a reason to refuse to save.
+        const installed = mcps.find((m) => m.name === name);
+        const connected = url ? await probeMcpServer(url).catch(() => false) : false;
+        res.json({
+          installed: installed ? { ...installed, connected, probedAt: Date.now() } : null,
+          mcps: await rt.getMcpsProbed(),
+        });
+      }),
+    );
+
+    // Uninstall a server. 404 when nothing was configured under that name —
+    // "deleted a thing that wasn't there" hides a typo in a server name.
+    app.delete(
+      "/api/projects/:id/mcps/:name",
+      withRuntime(async (rt, req, res) => {
+        const { removed, mcps } = rt.removeMcp(String(req.params.name));
+        if (!removed) return void res.status(404).json({ error: `no configured MCP server "${req.params.name}"` });
+        res.json({ removed: true, mcps });
       }),
     );
 

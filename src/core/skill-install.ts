@@ -289,8 +289,14 @@ export async function installSkillFromGit(
   }
 }
 
-/** The repo root if it is itself a skill, else the first child directory that is. */
-function findSkillDir(root: string): string | null {
+/**
+ * The repo root if it is itself a skill, else the first child directory that is.
+ *
+ * Exported for the tests: the two layouts this handles are the whole of the
+ * git installer's judgement, and a clone is the one part of that path a test
+ * can't reach offline.
+ */
+export function findSkillDir(root: string): string | null {
   if (fs.existsSync(path.join(root, "SKILL.md"))) return root;
   let children: string[] = [];
   try {
