@@ -1204,6 +1204,13 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
   .obask{appearance:none;display:inline-flex;align-items:center;gap:6px;background:var(--primary);color:var(--primary-foreground);
     border:1px solid var(--primary);border-radius:var(--radius-sm);padding:6px 12px;font:inherit;font-size:12px;font-weight:600;cursor:pointer;margin-right:8px}
   .obask:hover{filter:brightness(1.08)}
+  .obprov{appearance:none;display:inline-flex;align-items:center;gap:6px;background:var(--secondary);color:var(--foreground);
+    border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 12px;font:inherit;font-size:12px;font-weight:600;cursor:pointer;margin-right:8px}
+  .obprov:hover{border-color:var(--primary)}
+  .obprov svg{width:13px;height:13px}
+  .pvl{display:flex;flex-direction:column;gap:5px;font-size:11.5px;color:var(--muted-foreground)}
+  .pvrow{display:flex;align-items:center;gap:8px;font-size:12px;padding:4px 0}
+  .pverr{font-size:11.5px;color:var(--err);padding:4px 0}
   .obask svg{width:13px;height:13px}
   .obaskpanel{position:fixed;top:0;right:0;bottom:0;width:min(420px,92vw);background:var(--card);border-left:1px solid var(--border);
     display:none;flex-direction:column;z-index:60;box-shadow:-18px 0 42px -22px rgb(0 0 0 / .55)}
@@ -2846,6 +2853,59 @@ ${BRAND_SPRITE}
       return E[view] ? '<div class="obexplain">' + E[view] + "</div>" : "";
     }
 
+    /**
+     * One-shot SigNoz setup: the dashboard, the alert rules, and the webhook
+     * that routes those alerts back here so the self-heal loop can act on them.
+     *
+     * Credentials are typed here and posted once — the daemon never stores them.
+     * That is stated on the form, because asking someone for a password without
+     * saying where it goes is not a thing this app should do.
+     */
+    function openProvisionModal(){
+      if (document.querySelector(".scrim")) return;
+      var scrim = document.createElement("div"); scrim.className = "scrim";
+      scrim.innerHTML = '<div class="modal"><div class="modalhead">Set up SigNoz' +
+        '<button class="iconbtn" id="pvx" aria-label="close">' + ICONS.x + "</button></div>" +
+        '<div class="modalbody" id="pvbody">' +
+          '<div class="obsub">Creates the <b>Notch dashboard</b>, two <b>alert rules</b> (turn errors, turn latency) and a <b>webhook channel</b> pointing back at this daemon \\u2014 so a firing alert quarantines the agent it names, and resolving it hands the baton back.</div>' +
+          '<label class="pvl">SigNoz URL<input class="mcpin wide" id="pvurl" value="' + esc(signozBase()) + '"/></label>' +
+          '<label class="pvl">Email<input class="mcpin wide" id="pvemail" autocomplete="off" placeholder="you@example.com"/></label>' +
+          '<label class="pvl">Password<input class="mcpin wide" id="pvpass" type="password" autocomplete="off"/></label>' +
+          '<div class="mcphint">Used once to call SigNoz\\u2019s API. Not stored, not logged.</div>' +
+          '<button class="mcpbtn" id="pvgo">Set it up</button>' +
+          '<div id="pvout"></div>' +
+        "</div></div>";
+      document.body.appendChild(scrim);
+      function close(){ scrim.remove(); document.removeEventListener("keydown", onKey); }
+      function onKey(e){ if (e.key === "Escape") close(); }
+      document.addEventListener("keydown", onKey);
+      scrim.addEventListener("click", function(ev){ if (ev.target === scrim) close(); });
+      document.getElementById("pvx").onclick = close;
+      document.getElementById("pvgo").onclick = function(){
+        var btn = this, out = document.getElementById("pvout");
+        var body = {
+          url: document.getElementById("pvurl").value.trim(),
+          email: document.getElementById("pvemail").value.trim(),
+          password: document.getElementById("pvpass").value
+        };
+        if (!body.email || !body.password){ out.innerHTML = '<div class="pverr">Email and password are required.</div>'; return; }
+        btn.disabled = true; btn.textContent = "Setting up\\u2026"; out.innerHTML = "";
+        api("/api/signoz/provision", { method: "POST", body: JSON.stringify(body) })
+          .then(function(r){
+            var line = function(label, made){ return '<div class="pvrow"><span class="mcpstate ' + (made ? "ok" : "") + '">' + (made ? "created" : "already there") + "</span>" + esc(label) + "</div>"; };
+            var h = "";
+            if (r.channel) h += line("webhook channel \\u00b7 " + r.channel.name, r.channel.created);
+            (r.rules || []).forEach(function(x){ h += line("alert \\u00b7 " + x.alert, x.created); });
+            if (r.dashboard) h += line("dashboard \\u00b7 " + r.dashboard.title, r.dashboard.created);
+            h += '<div class="mcphint">Alerts will POST to <code>' + esc(r.webhookUrl) + "</code></div>";
+            (r.notes || []).forEach(function(n){ h += '<div class="pverr">' + esc(n) + "</div>"; });
+            out.innerHTML = h;
+          })
+          .catch(function(err){ out.innerHTML = '<div class="pverr">' + esc(err.message || "failed") + "</div>"; })
+          .then(function(){ btn.disabled = false; btn.textContent = "Set it up"; });
+      };
+    }
+
     // ---- Ask Noz — the fleet's own telemetry, asked in English --------------
     // Backed by POST /observatory/ask, which assembles the evidence from the
     // same sources this screen renders (status, metrics, health, spans,
@@ -3071,6 +3131,7 @@ ${BRAND_SPRITE}
         '<div class="obhead"><div class="obtitle">' + ICONS.telescope +
           '<span>Observatory</span> <span class="obsub">agents in action \\u00b7 the one brain</span></div>' +
           '<button class="obask" id="obaskbtn" type="button">' + (ICONS.spark || ICONS.route) + " Ask Noz</button>" +
+          '<button class="obprov" id="obprovbtn" type="button" title="create the Notch dashboard, alert rules and the self-heal webhook in SigNoz">' + (ICONS.gear || "") + " Set up SigNoz</button>" +
           '<a class="obsignoz" href="' + signozBase() + '" target="_blank" rel="noreferrer">' + ICONS.route + " View in SigNoz</a></div>" +
         '<div class="obmetrics">' + cards + "</div>" +
         '<div class="obtabs" role="tablist" aria-label="Observatory views">' + tabs + "</div>" +
@@ -3140,6 +3201,8 @@ ${BRAND_SPRITE}
       state.obAsk = state.obAsk || { open: false, msgs: [], busy: false };
       var askBtn = el.querySelector("#obaskbtn");
       if (askBtn) askBtn.onclick = function(){ state.obAsk.open = !state.obAsk.open; renderAskPanel(); };
+      var provBtn = el.querySelector("#obprovbtn");
+      if (provBtn) provBtn.onclick = openProvisionModal;
       renderAskPanel();
       if (state.obView === "canvas" || state.obView === "graph") wireObservatoryDrag(el);
       if (state.obView === "metrics") observatoryBurn(p);
