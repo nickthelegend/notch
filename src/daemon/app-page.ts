@@ -1490,6 +1490,22 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
   .lgtrace{flex:none;color:var(--ch2);text-decoration:none;font-size:10.5px}
   .lgtrace:hover{text-decoration:underline}
   .lgtrace.none{color:var(--muted-foreground);opacity:.4}
+  /* metric explorer — one row per series, shape not scale */
+  .obmexhd{display:flex;align-items:baseline;gap:10px;margin:22px 2px 8px;flex-wrap:wrap}
+  .mexwins{margin-left:auto;display:inline-flex;gap:4px}
+  .mexlist{border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+  .mexrow{display:flex;align-items:center;gap:14px;padding:8px 13px;border-bottom:1px solid var(--border)}
+  .mexrow:last-child{border-bottom:0}
+  .mexrow:hover{background:var(--secondary)}
+  .mexinfo{flex:1;min-width:0}
+  .mexname{font-size:12px;font-weight:600;font-family:var(--font-mono);display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+  .mextype{font-size:9.5px;font-weight:500;color:var(--muted-foreground);border:1px solid var(--border);border-radius:99px;padding:0 6px}
+  .mexlbls{display:flex;gap:6px;flex-wrap:wrap;margin-top:3px}
+  .mexlbl{font-size:10px;color:var(--muted-foreground);font-family:var(--font-mono)}
+  .mexspark{width:110px;height:20px;flex:none;opacity:.9}
+  .mexflat{width:110px;flex:none;font-size:10px;color:var(--muted-foreground);text-align:center}
+  .mexval{flex:none;min-width:80px;text-align:right;font-size:13px;font-weight:600;font-variant-numeric:tabular-nums}
+  .mexagg{display:block;font-size:9px;font-weight:500;color:var(--muted-foreground);letter-spacing:.04em;text-transform:uppercase}
   /* self-heal — episodes, not a firehose: what fired, what Notch did, how long */
   .alwrap{display:flex;flex-direction:column}
   .alsec{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted-foreground);margin:16px 2px 8px}
@@ -3169,7 +3185,8 @@ ${BRAND_SPRITE}
         // nobody asked separately from "what is this costing me".
         body = renderKairoMetrics(state.obKairo || {}) + obCharts(p, events, byAgent) +
           observatoryMetricsDetail(p, events, byAgent, state.obHealth || {}) +
-          '<div id="obburn" class="obasync">' + LOADER + "</div>";
+          '<div id="obburn" class="obasync">' + LOADER + "</div>" +
+          '<div id="obmex" class="obasync">' + LOADER + "</div>";
       else if (state.obView === "decisions") body = '<div id="obdecisions" class="obasync">' + LOADER + "</div>";
       else if (state.obView === "logs") body = '<div id="oblogs" class="obasync">' + LOADER + "</div>";
       else if (state.obView === "alerts") body = '<div id="obalerts" class="obasync">' + LOADER + "</div>";
@@ -3254,6 +3271,7 @@ ${BRAND_SPRITE}
       renderAskPanel();
       if (state.obView === "canvas" || state.obView === "graph") wireObservatoryDrag(el);
       if (state.obView === "metrics") observatoryBurn(p);
+      if (state.obView === "metrics") observatoryMetricExplorer(p);
       if (state.obView === "decisions") observatoryDecisions(p);
       if (state.obView === "logs") observatoryLogs(p);
       if (state.obView === "alerts") observatoryAlerts(p, events);
@@ -3695,6 +3713,75 @@ ${BRAND_SPRITE}
             })
             .catch(function(err){ toast(err.message); b.disabled = false; b.textContent = "Lift"; });
         };
+      });
+    }
+
+    /**
+     * Metric explorer — the raw series behind the dashboard.
+     *
+     * The panels above answer fixed questions. This answers "what is Notch
+     * actually recording, and what does each series look like right now",
+     * which is the question you have when a panel disagrees with your
+     * expectation. Every series is read back out of SigNoz through
+     * /insights/metrics; nothing here is computed locally.
+     *
+     * Deliberately a section of the dashboard rather than a ninth tab: it is
+     * the same subject at a lower altitude, and the tab strip has already been
+     * cut once for being a list of things to learn before you could look.
+     */
+    function observatoryMetricExplorer(p){
+      var host = document.getElementById("obmex"); if (!host) return;
+      var st = state.obMex = state.obMex || { sinceMs: 86400000 };
+      var WINDOWS = [[3600000, "1h"], [21600000, "6h"], [86400000, "24h"], [604800000, "7d"]];
+      api("/api/projects/" + p.id + "/insights/metrics?since=" + st.sinceMs).then(function(r){
+        if (r.from === "unavailable"){
+          host.innerHTML = '<div class="obmexhd"><span class="declabel">METRIC EXPLORER</span></div>' +
+            '<div class="obnote">' + ICONS.route + " Metrics live in SigNoz, and ClickHouse isn\u2019t answering. Bring it up with <code>./scripts/signoz-up.sh</code> and the series appear.</div>";
+          return;
+        }
+        var series = (r.series || []).slice().sort(function(a, b){
+          return String(a.metric).localeCompare(String(b.metric));
+        });
+        var chips = WINDOWS.map(function(w){
+          return '<button class="decchip' + (st.sinceMs === w[0] ? " on" : "") + '" data-win="' + w[0] + '">' + w[1] + "</button>";
+        }).join("");
+        var rows = series.map(function(sr){
+          var pts = sr.points || [];
+          var key = sr.prefer === "avg" ? "avg" : "sum";
+          var vals = pts.map(function(pt){ return Number(pt[key] != null ? pt[key] : pt.sum) || 0; });
+          var last = vals.length ? vals[vals.length - 1] : null;
+          var total = vals.reduce(function(a, v){ return a + v; }, 0);
+          var labels = Object.keys(sr.labels || {}).filter(function(k){ return k !== "notch.project"; })
+            .map(function(k){ return '<span class="mexlbl">' + esc(k.replace(/^gen_ai\./, "")) + "=" + esc(String(sr.labels[k])) + "</span>"; }).join("");
+          // A one-line sparkline over this series only — the shape is the point,
+          // so it carries no axis and claims no absolute scale.
+          var spark = "";
+          if (vals.length > 1){
+            var mx = Math.max.apply(null, vals) || 1;
+            var pl = vals.map(function(v, i){
+              return (i / (vals.length - 1) * 100).toFixed(1) + "," + (18 - (v / mx) * 16).toFixed(1);
+            }).join(" ");
+            spark = '<svg class="mexspark" viewBox="0 0 100 20" preserveAspectRatio="none"><polyline points="' + pl +
+              '" fill="none" stroke="var(--ch2)" stroke-width="1.4"/></svg>';
+          } else spark = '<span class="mexflat">single point</span>';
+          var shown = sr.prefer === "avg" ? (last == null ? "\u2014" : (Math.round(last * 100) / 100)) : Math.round(total * 100) / 100;
+          return '<div class="mexrow"><div class="mexinfo"><div class="mexname">' + esc(sr.metric) +
+            '<span class="mextype">' + esc(sr.type || "") + (sr.unit ? " \u00b7 " + esc(sr.unit) : "") + "</span></div>" +
+            '<div class="mexlbls">' + (labels || '<span class="mexlbl">no labels</span>') + "</div></div>" +
+            spark +
+            '<div class="mexval">' + shown + '<span class="mexagg">' + (sr.prefer === "avg" ? "latest" : "total") + "</span></div></div>";
+        }).join("");
+        host.innerHTML =
+          '<div class="obmexhd"><span class="declabel">METRIC EXPLORER</span>' +
+            '<span class="deccount">' + series.length + " series \u00b7 from SigNoz</span>" +
+            '<span class="mexwins">' + chips + "</span></div>" +
+          (rows ? '<div class="mexlist">' + rows + "</div>"
+                : '<div class="obnote">No series in this window. Notch records turns, cost, tokens, handoffs, live agent count and turn duration \u2014 run a turn, or widen the window.</div>');
+        Array.prototype.forEach.call(host.querySelectorAll("[data-win]"), function(b){
+          b.onclick = function(){ st.sinceMs = Number(b.getAttribute("data-win")); observatoryMetricExplorer(p); };
+        });
+      }).catch(function(){
+        host.innerHTML = '<div class="obnote">Metric explorer unavailable \u2014 the daemon didn\u2019t answer. Switch tabs and back to retry.</div>';
       });
     }
 
