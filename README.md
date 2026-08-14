@@ -127,6 +127,12 @@ of the turn that produced it:
 
 ![Observatory Logs — severity chips, text filter, and per-turn trace ids read from SigNoz](docs/screenshots/observatory-logs.png)
 
+**Metric Explorer** — every series Notch exports, queried back out of SigNoz over a 1h/6h/24h/7d
+window, with its instrument type, unit and labels. A series with one datapoint says "single
+point" rather than drawing a line through nothing:
+
+![Metric Explorer — 13 series read back from SigNoz with instrument type, unit and labels](docs/screenshots/observatory-metric-explorer.png)
+
 **Self-Triage — an agent root-caused from its own SigNoz spans**, and the **Replay → Trace
 Waterfall** with the SigNoz deep link:
 
