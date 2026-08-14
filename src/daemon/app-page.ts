@@ -1228,6 +1228,19 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
   .obdraghint svg{width:12px;height:12px;opacity:.8}
   .obnode{transition:filter .12s}
   .obnode.dragging{filter:brightness(1.18)}
+  /* A live edge marches from the brain toward the agent that is using it. */
+  .obedge.live{stroke-dasharray:5 7;animation:obflow 1.1s linear infinite}
+  @keyframes obflow{to{stroke-dashoffset:-24}}
+  @media (prefers-reduced-motion:reduce){.obedge.live{animation:none;stroke-dasharray:none}}
+  .oblegend{display:flex;flex-wrap:wrap;align-items:center;gap:14px;padding:9px 4px 2px;font-size:11px;color:var(--muted-foreground)}
+  .oblg{display:inline-flex;align-items:center;gap:6px}
+  .oblgline{width:16px;height:2px;border-radius:2px;flex:none}
+  .oblgline.dash{background:repeating-linear-gradient(90deg,var(--border) 0 3px,transparent 3px 7px)}
+  .oblglive{margin-left:auto;display:inline-flex;align-items:center;gap:6px;font-variant-numeric:tabular-nums}
+  .oblgline.recent{box-shadow:0 0 0 2px color-mix(in srgb,var(--shuttle) 30%,transparent)}
+  .oblgx{font-family:var(--font-mono);font-size:10px;font-weight:700;color:var(--shuttle-ink)}
+  .obhop.recent{filter:drop-shadow(0 0 3px color-mix(in srgb,var(--shuttle) 55%,transparent))}
+  .oblgdot{width:6px;height:6px;border-radius:50%;background:var(--live);box-shadow:0 0 0 3px color-mix(in srgb,var(--live) 22%,transparent)}
   .obnote{color:var(--muted-foreground);font-size:12.5px;padding:0 2px 12px;max-width:70ch}
   .obcanvaswrap.graph{padding:8px}
   /* timeline */
@@ -3362,11 +3375,26 @@ ${BRAND_SPRITE}
         byLayer[l].forEach(function(id, r){ pos[id] = { x: PADX + Number(l) * COL, y: PADY + r * ROW }; }); });
       ids.forEach(function(id){ if (obNodePos["g:" + id]) pos[id] = obNodePos["g:" + id]; });
       var W = PADX * 2 + maxLayer * COL + NW, H = Math.max(220, PADY * 2 + (maxRows - 1) * ROW + NH);
+      // The last handoff that actually happened, so "where the baton just came
+      // from" is visible instead of inferred.
+      var lastHop = null;
+      for (var li = (events || []).length - 1; li >= 0; li--){
+        var le = events[li];
+        if (le.kind === "handoff" && le.payload && le.payload.from && le.payload.to){ lastHop = le.payload.from + "\\u0001" + le.payload.to; break; }
+      }
+      var maxN = edges.reduce(function(m, e){ return Math.max(m, e.n); }, 1);
       var edgeSvg = edges.map(function(e){
         var a = pos[e.from], b = pos[e.to]; if (!a || !b) return "";
         var x1 = a.x + NW, y1 = a.y + NH / 2, x2 = b.x, y2 = b.y + NH / 2, mid = (x1 + x2) / 2;
-        return '<path d="M ' + x1 + " " + y1 + " C " + mid + " " + y1 + ", " + mid + " " + y2 + ", " + x2 + " " + y2 +
-          '" fill="none" stroke="var(--shuttle)" stroke-width="1.5" opacity="0.55" marker-end="url(#obarrow)"/>';
+        var recent = lastHop === (e.from + "\\u0001" + e.to);
+        // Thickness carries how heavily this route was used — a path walked 12
+        // times and one walked once are not the same fact.
+        var w = 1.2 + (e.n / maxN) * 2.4;
+        var lx = (x1 + x2) / 2, ly = (y1 + y2) / 2 - 7;
+        return '<path class="' + (recent ? "obhop recent" : "obhop") + '" d="M ' + x1 + " " + y1 + " C " + mid + " " + y1 + ", " + mid + " " + y2 + ", " + x2 + " " + y2 +
+          '" fill="none" stroke="var(--shuttle)" stroke-width="' + w.toFixed(1) + '" opacity="' + (recent ? "0.95" : "0.5") + '" marker-end="url(#obarrow)"><title>' +
+          esc(e.from + " \\u2192 " + e.to + ": " + e.n + (e.n === 1 ? " handoff" : " handoffs")) + "</title></path>" +
+          '<text x="' + lx.toFixed(0) + '" y="' + ly.toFixed(0) + '" text-anchor="middle" font-size="9" font-weight="700" fill="var(--shuttle-ink)">\\u00d7' + e.n + "</text>";
       }).join("");
       var nodeSvg = ids.map(function(id){
         var a = byId[id] || { id: id }, c = byAgent[id] || {}, baton = id === holder, busy = a.busy, pp = pos[id];
@@ -3381,9 +3409,15 @@ ${BRAND_SPRITE}
           "</g>";
       }).join("");
       var note = edges.length ? "" : '<div class="obnote">No baton handoffs yet \\u2014 the flow graph draws itself as the baton moves between agents.</div>';
+      var totalHops = edges.reduce(function(s, e){ return s + e.n; }, 0);
+      var legend = edges.length ? '<div class="oblegend">' +
+        '<span class="oblg"><span class="oblgline" style="background:var(--shuttle)"></span>a handoff \\u2014 thicker means walked more often</span>' +
+        '<span class="oblg"><span class="oblgx">\\u00d7n</span>times the baton took that route</span>' +
+        '<span class="oblg"><span class="oblgline recent" style="background:var(--shuttle)"></span>most recent handoff</span>' +
+        '<span class="oblglive">' + totalHops + (totalHops === 1 ? " handoff" : " handoffs") + " total</span></div>" : "";
       return note + '<div class="obcanvaswrap"><svg viewBox="0 0 ' + W + " " + H + '" class="obsvg" preserveAspectRatio="xMidYMid meet">' +
         '<defs><marker id="obarrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--shuttle)"/></marker></defs>' +
-        edgeSvg + nodeSvg + "</svg></div>";
+        edgeSvg + nodeSvg + "</svg></div>" + legend;
     }
     // TIMELINE: the chronological trace — turns, handoffs, routes, memory folds.
     function observatoryTimeline(events){
@@ -3465,9 +3499,12 @@ ${BRAND_SPRITE}
         var baton = nd.a.id === holder, busy = nd.a.busy;
         var col = baton ? "var(--shuttle)" : busy ? "var(--thread)" : "var(--border)";
         var mid = (bx + nd.x) / 2;
-        return '<path d="M ' + (bx + 30) + " " + by + " C " + mid + " " + by + ", " + mid + " " + nd.y + ", " + nd.x + " " + nd.y +
-          '" fill="none" stroke="' + col + '" stroke-width="' + (baton ? 2 : 1.2) + '" ' +
-          (busy || baton ? '' : 'stroke-dasharray="3 6" ') + 'opacity="' + (busy || baton ? "0.85" : "0.4") + '"/>';
+        // A live edge flows: the dash marches from the brain toward the agent, so
+        // "this one is reading and writing the shared memory right now" is
+        // something you see rather than something you decode from a colour.
+        return '<path class="' + (baton || busy ? "obedge live" : "obedge") + '" d="M ' + (bx + 30) + " " + by + " C " + mid + " " + by + ", " + mid + " " + nd.y + ", " + nd.x + " " + nd.y +
+          '" fill="none" stroke="' + col + '" stroke-width="' + (baton ? 2.2 : busy ? 1.8 : 1.2) + '" ' +
+          (busy || baton ? "" : 'stroke-dasharray="3 6" ') + 'opacity="' + (busy || baton ? "0.9" : "0.35") + '"/>';
       }).join("");
       var brain =
         '<g transform="translate(' + bx + " " + by + ')">' +
@@ -3481,19 +3518,32 @@ ${BRAND_SPRITE}
         var a = nd.a, c = byAgent[a.id] || {}, baton = a.id === holder, busy = a.busy;
         var stroke = baton ? "var(--shuttle)" : busy ? "var(--thread)" : "var(--border)";
         var dot = busy ? "var(--thread)" : baton ? "var(--shuttle)" : "var(--muted-foreground)";
+        // The live line is the point of this view: what is this agent doing this
+        // second, and what has it cost so far. Anything already answered by the
+        // Metrics dashboard stays there.
+        var statusText = a.enabled === false ? "off" : busy ? "running now" : baton ? "holds the baton \\u00b7 idle" : "idle";
+        var statusCol = busy ? "var(--thread-ink)" : baton ? "var(--shuttle-ink)" : "var(--muted-foreground)";
+        var work = (c.turns ? c.turns + (c.turns === 1 ? " turn" : " turns") : "no turns yet") + (c.usd ? " \\u00b7 " + money(c.usd) : "");
         return '<g class="obnode' + (busy ? " busy" : "") + '" data-agent="' + esc(a.id) +
           '" transform="translate(' + nd.x + " " + nd.y + ')">' +
-          '<rect x="0" y="-22" width="156" height="44" rx="11" fill="var(--card)" stroke="' + stroke + '" stroke-width="' + (busy || baton ? 2 : 1) + '"/>' +
-          '<circle cx="17" cy="0" r="4" fill="' + dot + '"' + (busy ? ' class="obdotpulse"' : "") + "/>" +
-          '<text x="31" y="-3" fill="var(--card-foreground)" font-size="12.5" font-weight="600">' + esc(trunc(a.id, 15)) + "</text>" +
-          '<text x="31" y="13" fill="var(--muted-foreground)" font-size="10.5">' + esc(a.kind || "agent") + (c.usd ? " \\u00b7 " + money(c.usd) : "") + "</text>" +
-          (baton ? '<text x="146" y="-9" text-anchor="end" fill="var(--shuttle-ink)" font-size="8.5" font-weight="700" letter-spacing="0.06em">BATON</text>' : "") +
+          '<rect x="0" y="-27" width="172" height="54" rx="12" fill="var(--card)" stroke="' + stroke + '" stroke-width="' + (busy || baton ? 2 : 1) + '"/>' +
+          '<circle cx="18" cy="-8" r="4" fill="' + dot + '"' + (busy ? ' class="obdotpulse"' : "") + "/>" +
+          '<text x="32" y="-4" fill="var(--card-foreground)" font-size="12.5" font-weight="600">' + esc(trunc(a.id, 15)) + "</text>" +
+          '<text x="32" y="10" fill="' + statusCol + '" font-size="10" font-weight="600">' + statusText + "</text>" +
+          '<text x="32" y="22" fill="var(--muted-foreground)" font-size="9.5">' + esc(work) + "</text>" +
+          (baton ? '<text x="162" y="-13" text-anchor="end" fill="var(--shuttle-ink)" font-size="8.5" font-weight="700" letter-spacing="0.06em">BATON</text>' : "") +
           "</g>";
       }).join("");
+      var running = agents.filter(function(a){ return a.busy; }).length;
+      var legend = '<div class="oblegend">' +
+        '<span class="oblg"><span class="oblgline live" style="background:var(--shuttle)"></span>holds the baton \\u2014 only this one may edit code</span>' +
+        '<span class="oblg"><span class="oblgline live" style="background:var(--thread)"></span>running a turn now</span>' +
+        '<span class="oblg"><span class="oblgline dash"></span>idle \\u2014 still shares the same memory</span>' +
+        '<span class="oblglive">' + (running ? '<span class="oblgdot"></span>' + running + " running" : "fleet idle") + "</span></div>";
       return '<svg viewBox="0 0 ' + W + " " + H + '" class="obsvg" preserveAspectRatio="xMidYMid meet">' +
         '<defs><radialGradient id="obglow" cx="50%" cy="38%"><stop offset="0%" stop-color="color-mix(in srgb, var(--primary) 46%, var(--card))"/>' +
         '<stop offset="100%" stop-color="color-mix(in srgb, var(--primary) 12%, var(--card))"/></radialGradient></defs>' +
-        edges + brain + an + "</svg>";
+        edges + brain + an + "</svg>" + legend;
     }
     /** Drag agent nodes around the canvas; positions persist across live redraws. */
     function wireObservatoryDrag(el){
