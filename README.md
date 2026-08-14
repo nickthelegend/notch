@@ -705,6 +705,16 @@ exchanges it for its own client token. Then:
   there and it resumes.
 - Chrome menu → *Add to Home screen* installs it like an app.
 
+**The native app has the whole Observatory.** As of v0.2.0 the phone reaches
+`Thread · Observatory · Ask Noz · Tasks · Changes · Tools`, with the same six views under
+the same names as the desktop — Metrics, Live fleet, Handoffs, Timeline, Decisions,
+Replay — plus per-agent triage, decision detail, and a **Tools** tab covering Skills, MCP
+servers and agent enable/roles. It is native, not a webview: `react-native-svg` isn't a
+dependency, so the charts are proportional bars and a polyline built from plain views, and
+the replay scrubber is a pan gesture over a measured track. The same honesty rules apply —
+an unmeasured confidence says so rather than showing 0%, and an empty run draws an empty
+state rather than a decorative sparkline.
+
 **Push notifications** come with the native app ([`app/`](app/README.md)): open it once
 after pairing and it registers its Expo push token with the daemon. From then on your
 phone buzzes when an agent **needs input**, when a **route completes or fails**, and
