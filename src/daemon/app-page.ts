@@ -81,6 +81,11 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
     --thread:#8b5cf6;--shuttle:#d946ef;
     --thread-ink:#6d28d9;--shuttle-ink:#a21caf;
     --ok:#15803d;--warn:#b45309;--err:#e40014;--live:#eab308;
+    /* Categorical chart palette. Deliberately NOT the semantic tokens: --primary
+       and --thread are both violet, so a donut drawn from them made its three
+       biggest slices indistinguishable. These are hue-separated on purpose and
+       ordered so the first three — which carry most charts — are unmistakable. */
+    --ch1:#7c3aed;--ch2:#0891b2;--ch3:#d97706;--ch4:#db2777;--ch5:#059669;--ch6:#2563eb;
     --git-add:#587c0c;--git-mod:#895503;--git-del:#ad0707;
     --agent-l:36%;--selvage-l:44%;
     --warp:rgba(0,0,0,.018);
@@ -106,6 +111,8 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
     --glass-highlight:rgba(179,140,255,.07);
     --thread-ink:#a78bfa;--shuttle-ink:#e879f9;
     --ok:#86efac;--warn:#fbbf24;--err:#ff6568;--live:#a78bfa;
+    /* Same hues as light, lifted for a dark surface (see the light block). */
+    --ch1:#a78bfa;--ch2:#22d3ee;--ch3:#fbbf24;--ch4:#f472b6;--ch5:#34d399;--ch6:#60a5fa;
     --git-add:#81b88b;--git-mod:#e2c08d;--git-del:#c74e39;
     --agent-l:70%;--selvage-l:52%;
     --warp:rgba(179,140,255,.03);
@@ -1192,6 +1199,28 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
   .obtab:hover{color:var(--foreground)}
   .obtab.on{background:var(--card);color:var(--foreground);box-shadow:0 1px 0 rgb(0 0 0 / .12)}
   .obbody{min-height:200px}
+  /* dashboard charts — donuts for composition, lines for behaviour over time */
+  .obchartgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;margin:14px 0}
+  .obchart{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px 10px;min-width:0}
+  .obchart.wide{grid-column:1/-1}
+  .obcht{display:flex;align-items:baseline;gap:8px;margin-bottom:10px}
+  .obchtt{font-size:12.5px;font-weight:600;color:var(--foreground)}
+  .obchts{font-size:11px;color:var(--muted-foreground)}
+  .obchempty{font-size:12px;color:var(--muted-foreground);padding:22px 0;text-align:center}
+  .obdonutwrap{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  .obdonut{width:132px;height:132px;flex:none}
+  .obdcv{font-size:19px;font-weight:700;fill:var(--foreground);text-anchor:middle;font-variant-numeric:tabular-nums}
+  .obdcs{font-size:8.5px;fill:var(--muted-foreground);text-anchor:middle;letter-spacing:.08em;text-transform:uppercase}
+  .obdlegend{display:flex;flex-direction:column;gap:5px;min-width:0;flex:1}
+  .obdli{display:flex;align-items:center;gap:7px;font-size:11.5px;min-width:0}
+  .obdsw{width:8px;height:8px;border-radius:2px;flex:none}
+  .obdlk{color:var(--muted-foreground);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
+  .obdlv{color:var(--foreground);font-variant-numeric:tabular-nums;font-weight:600;flex:none}
+  .obsvgline{width:100%;height:130px;display:block}
+  .obgl{stroke:var(--border);stroke-width:1}
+  .obax{font-size:8px;fill:var(--muted-foreground);font-variant-numeric:tabular-nums}
+  .obslegend{display:flex;flex-wrap:wrap;gap:12px;margin-top:6px}
+  .obsli{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--muted-foreground)}
   .obexplain{font-size:12.5px;line-height:1.6;color:var(--muted-foreground);margin:11px 2px 15px;max-width:760px}
   .obexplain b{color:var(--foreground);font-weight:600}
   .obexplain code{font-family:var(--font-mono);font-size:11px;background:var(--secondary);padding:1px 5px;border-radius:5px;color:var(--foreground)}
@@ -1421,6 +1450,13 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
   .ttevmeta{font-size:11.5px;color:var(--muted-foreground);font-family:var(--font-mono)}
   .ttprogbar{height:6px;background:var(--secondary);border-radius:99px;overflow:hidden;margin-bottom:4px}
   .ttprogfill{height:100%;width:100%;background:var(--primary);border-radius:99px;transform-origin:left;transform:scaleX(0);transition:transform .3s ease-out}
+  /* the folded-in span replay: the turn running at the scrubbed instant */
+  .ttturn{margin-top:12px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:11px 13px}
+  .ttturn.err{border-color:color-mix(in srgb,var(--err) 40%,var(--border))}
+  .ttthead{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;margin:5px 0 7px}
+  .ttturn .rpmsg{font-size:12px;color:var(--muted-foreground);margin-bottom:7px;overflow-wrap:break-word}
+  .ttturn .rpmetrics{display:flex;flex-wrap:wrap;gap:6px}
+  .ttturn .rpactions{margin-top:9px;display:flex;gap:8px;flex-wrap:wrap}
   /* per-project settings: gear button + modal */
   .psetbtn{appearance:none;flex:none;margin-left:6px;width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;
     border:none;background:none;color:var(--muted-foreground);cursor:pointer;opacity:0;border-radius:6px;transition:opacity .12s,color .12s,background .12s}
@@ -2674,7 +2710,11 @@ ${BRAND_SPRITE}
       var el = document.getElementById("pane-observatory"); if (!el) return;
       var p = state.project;
       if (!p){ el.innerHTML = '<div class="obempty"><div class="biglogo">notch</div><div class="hair"></div><div class="obsub">Open a project to watch its fleet in action.</div></div>'; return; }
-      if (!state.obView) state.obView = "canvas";
+      // Metrics leads: "how is the fleet doing and what is it costing" is the
+      // question people actually arrive with. The node views answer a narrower
+      // one and used to greet everybody first.
+      if (!state.obView) state.obView = "metrics";
+      if (state.obView === "replay") state.obView = "travel"; // merged; old links still land
       Promise.all([
         api("/api/projects/" + p.id + "/metrics").catch(function(){ return {}; }),
         api("/api/projects/" + p.id + "/events?limit=500").catch(function(){ return {}; }),
@@ -2692,16 +2732,122 @@ ${BRAND_SPRITE}
       var drag = '<span class="obdraghint">' + (ICONS.move || "") + "drag any node to rearrange</span>";
       var fx = '<b style="color:var(--shuttle)">';
       var E = {
-        canvas: "The fleet as <b>one brain</b>: every agent shares the same memory, and the baton (in " + fx + "fuchsia</b>) marks who can edit the code right now. " + drag,
-        graph: "How the <b>baton</b> travelled between agents. Each " + fx + "\\u2192</b> is one handoff; <code>19t</code> under a name is turns taken; the fuchsia ring is who holds it now. " + drag,
+        canvas: "<b>Right now.</b> Who is running this second, who is idle, and where the " + fx + "baton</b> is \\u2014 the ring pulses on whoever holds it. Every agent hangs off the <b>one shared brain</b> in the middle: that is the memory they all read and write, which is the whole point of the fleet. Updates live as turns start and finish. " + drag,
+        graph: "<b>What already happened.</b> The baton\\u2019s actual route through the fleet, left to right, oldest handoff first. Each " + fx + "\\u2192</b> is one real handoff from the event log; <code>19t</code> under a name is turns that agent took. Live view is the <b>Live fleet</b> tab \\u2014 this one is history. " + drag,
         timeline: "Every fleet event in order \\u2014 turns, handoffs, \\ud83d\\udca1 <b>decisions</b>, and SigNoz self-heal. Click a decision line to open its reasoning.",
-        metrics: "The run at a glance: spend, tokens, files, and decisions up top; then each agent with a 0\\u2013100 <b>health score</b> and a <b>\\u26a0 Triage</b> button that root-causes it from its own SigNoz spans.",
+        metrics: "<b>The dashboard.</b> Totals up top, then what the spend is made of \\u2014 tokens and calls per model \\u2014 then how it behaved over time, then each agent\\u2019s 0\\u2013100 <b>health score</b> with a <b>\\u26a0 Triage</b> button that root-causes it from its own SigNoz spans, and finally the 24h burn with per-agent budgets.",
         decisions: "What each agent <b>decided and why</b>. Filter by agent on the left; click a card for the reason, the alternatives it weighed, and the files it touched.",
-        burn: "Per-agent <b>cost over the last 24h</b> from SigNoz, with a straight-line projection \\u2014 and a daily USD budget you can set per agent.",
-        replay: "Step through each real <b>turn</b> one at a time: its model, tokens, cost, and status \\u2014 then open that turn\\u2019s <b>trace waterfall</b> and jump to SigNoz.",
-        travel: "<b>Rewind the whole run.</b> Scrub to any moment to see who held the baton, every agent\\u2019s state, the decisions made so far, and the thread \\u2014 all reconstructed from the event log."
+        travel: "<b>Rewind the whole run.</b> Drag the scrubber (or hit Play) to any moment and the whole app rewinds to it: who held the baton, every agent\\u2019s state, the decisions made so far, the thread \\u2014 and the <b>turn running at that instant</b> with its model, tokens, cost and trace. All reconstructed from the event log."
       };
       return E[view] ? '<div class="obexplain">' + E[view] + "</div>" : "";
+    }
+
+    // ---- Dashboard charts ---------------------------------------------------
+    // Donuts for composition ("what is the spend made of"), lines for behaviour
+    // over time. Every value here comes from /metrics byAgent or the real event
+    // log — there is no sample data path, so an empty fleet draws an empty state
+    // rather than a decorative shape.
+    var OBPAL = ["var(--ch1)", "var(--ch2)", "var(--ch3)", "var(--ch4)", "var(--ch5)", "var(--ch6)"];
+    function obChartCard(title, sub, inner, wide){
+      return '<div class="obchart' + (wide ? " wide" : "") + '"><div class="obcht"><span class="obchtt">' + esc(title) + "</span>" +
+        (sub ? '<span class="obchts">' + esc(sub) + "</span>" : "") + "</div>" + inner + "</div>";
+    }
+    /** Ring chart: slices are {k,v,label}; the centre carries the total. */
+    function obDonut(slices, centreVal, centreSub){
+      slices = slices.filter(function(s){ return s.v > 0; });
+      var total = slices.reduce(function(a, s){ return a + s.v; }, 0);
+      if (!total) return '<div class="obchempty">nothing recorded yet</div>';
+      var r = 52, circ = 2 * Math.PI * r, off = 0;
+      var rings = slices.map(function(s, i){
+        var len = (s.v / total) * circ;
+        var seg = '<circle cx="70" cy="70" r="' + r + '" fill="none" stroke="' + OBPAL[i % OBPAL.length] +
+          '" stroke-width="20" stroke-dasharray="' + len.toFixed(2) + " " + (circ - len).toFixed(2) +
+          '" stroke-dashoffset="' + (-off).toFixed(2) + '"><title>' + esc(s.k + " \\u00b7 " + s.label) + "</title></circle>";
+        off += len; return seg;
+      }).join("");
+      var legend = slices.map(function(s, i){
+        return '<div class="obdli"><span class="obdsw" style="background:' + OBPAL[i % OBPAL.length] + '"></span>' +
+          '<span class="obdlk">' + esc(s.k) + '</span><span class="obdlv">' + esc(s.label) + "</span></div>";
+      }).join("");
+      return '<div class="obdonutwrap"><svg viewBox="0 0 140 140" class="obdonut" role="img" aria-label="' + esc(centreSub + " " + centreVal) + '">' +
+        '<g transform="rotate(-90 70 70)">' + rings + "</g>" +
+        '<text x="70" y="70" class="obdcv">' + esc(centreVal) + "</text>" +
+        '<text x="70" y="86" class="obdcs">' + esc(centreSub) + "</text></svg>" +
+        '<div class="obdlegend">' + legend + "</div></div>";
+    }
+    /** Multi-series line chart over a shared time axis. series: {k,pts:[n]}. */
+    function obSeries(series, fmtY, xlabels){
+      var max = 0;
+      series.forEach(function(s){ s.pts.forEach(function(v){ if (v > max) max = v; }); });
+      if (!max) return '<div class="obchempty">nothing recorded yet</div>';
+      var W = 600, H = 130, PL = 44, PR = 10, PT = 8, PB = 20;
+      var iw = W - PL - PR, ih = H - PT - PB;
+      var lines = series.map(function(s, i){
+        var n = s.pts.length; if (n < 2) return "";
+        var pts = s.pts.map(function(v, j){
+          return (PL + (j / (n - 1)) * iw).toFixed(1) + "," + (PT + ih - (v / max) * ih).toFixed(1);
+        }).join(" ");
+        return '<polyline points="' + pts + '" fill="none" stroke="' + OBPAL[i % OBPAL.length] + '" stroke-width="1.6" stroke-linejoin="round"/>';
+      }).join("");
+      var grid = [0, 0.5, 1].map(function(f){
+        var y = (PT + ih - f * ih).toFixed(1);
+        return '<line x1="' + PL + '" y1="' + y + '" x2="' + (W - PR) + '" y2="' + y + '" class="obgl"/>' +
+          '<text x="' + (PL - 6) + '" y="' + (Number(y) + 3).toFixed(1) + '" class="obax" text-anchor="end">' + esc(fmtY(max * f)) + "</text>";
+      }).join("");
+      var xs = (xlabels || []).map(function(l, j, arr){
+        var x = PL + (arr.length < 2 ? 0 : (j / (arr.length - 1)) * iw);
+        return '<text x="' + x.toFixed(1) + '" y="' + (H - 6) + '" class="obax" text-anchor="' + (j === 0 ? "start" : j === arr.length - 1 ? "end" : "middle") + '">' + esc(l) + "</text>";
+      }).join("");
+      var legend = series.map(function(s, i){
+        return '<span class="obsli"><span class="obdsw" style="background:' + OBPAL[i % OBPAL.length] + '"></span>' + esc(s.k) + "</span>";
+      }).join("");
+      return '<svg viewBox="0 0 ' + W + " " + H + '" class="obsvgline" preserveAspectRatio="none">' + grid + lines + xs + "</svg>" +
+        '<div class="obslegend">' + legend + "</div>";
+    }
+    /** The Metrics dashboard's chart band, all from real telemetry. */
+    function obCharts(p, events, byAgent){
+      var k = state.obKairo || {};
+      var modelOf = {};
+      (p.agents || []).forEach(function(a){ modelOf[a.id] = (a.options && a.options.model) || ""; });
+      var rows = Object.keys(byAgent).map(function(id){ return byAgent[id]; })
+        .filter(function(a){ return a && (a.turns || a.tokensIn || a.tokensOut); });
+      var tokSlices = rows.map(function(a){
+        var t = (a.tokensIn || 0) + (a.tokensOut || 0);
+        return { k: a.agentId + (modelOf[a.agentId] ? " \\u00b7 " + modelOf[a.agentId] : ""), v: t, label: tokfmt(t) };
+      }).sort(function(x, y){ return y.v - x.v; });
+      var callSlices = rows.map(function(a){ return { k: a.agentId, v: a.turns || 0, label: String(a.turns || 0) }; })
+        .sort(function(x, y){ return y.v - x.v; });
+      var totalTok = tokSlices.reduce(function(s, x){ return s + x.v; }, 0);
+      var totalCalls = callSlices.reduce(function(s, x){ return s + x.v; }, 0);
+
+      // Turn duration over time, per agent, bucketed from real run_complete events.
+      var done = (events || []).filter(function(e){ return e.kind === "run_complete" && e.payload && e.payload.durationMs; });
+      var durSeries = [], xl = [];
+      if (done.length > 1){
+        var t0 = done[0].ts, t1 = done[done.length - 1].ts, span = Math.max(1, t1 - t0), N = 16;
+        var per = {};
+        done.forEach(function(e){
+          var b = Math.min(N - 1, Math.floor(((e.ts - t0) / span) * N));
+          var a = e.agentId || "?";
+          (per[a] = per[a] || []);
+          (per[a][b] = per[a][b] || []).push(e.payload.durationMs / 1000);
+        });
+        durSeries = Object.keys(per).map(function(a){
+          var pts = []; for (var i = 0; i < N; i++){ var arr = per[a][i]; pts.push(arr ? arr.reduce(function(s, v){ return s + v; }, 0) / arr.length : 0); }
+          return { k: a, pts: pts };
+        });
+        var f = function(ms){ var d = new Date(ms); return ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2); };
+        xl = [f(t0), f(t0 + span / 2), f(t1)];
+      }
+      var tokSpark = (k.tokenSparkline || []).slice(), costSpark = (k.costSparkline || []).slice();
+
+      return '<div class="obchartgrid">' +
+        obChartCard("Token distribution", "by agent \\u00b7 model", obDonut(tokSlices, tokfmt(totalTok), "tokens")) +
+        obChartCard("Turns", "by agent", obDonut(callSlices, String(totalCalls), "turns")) +
+        obChartCard("Turn duration over time", "seconds \\u00b7 per agent", obSeries(durSeries, function(v){ return v.toFixed(1) + "s"; }, xl), true) +
+        obChartCard("Token usage", "over the run", obSeries(tokSpark.length ? [{ k: "tokens", pts: tokSpark }] : [], tokfmt, []), true) +
+        obChartCard("Spend", "cumulative USD", obSeries(costSpark.length ? [{ k: "cost", pts: costSpark }] : [], money, []), true) +
+        "</div>";
     }
     function renderObservatory(el, p, m, events){
       var agents = (p.agents || []), byAgent = obByAgent(m);
@@ -2718,7 +2864,10 @@ ${BRAND_SPRITE}
         card("Spend", money(totalUsd), "across all agents", true) +
         card("Turns", String(turns), "completed") +
         card("Tokens", tokfmt(tin + tout), tokfmt(tin) + " in \\u00b7 " + tokfmt(tout) + " out");
-      var VIEWS = [["canvas", "Canvas"], ["graph", "Graph"], ["timeline", "Timeline"], ["metrics", "Metrics"], ["decisions", "Decisions"], ["burn", "Burn"], ["replay", "Replay"], ["travel", "Time Travel"]];
+      // Six views, ordered by the question people arrive with. "Replay" is the
+      // old Time Travel: it absorbed the separate span-replay tab, which scrubbed
+      // the same run on a second slider and left everyone asking which was which.
+      var VIEWS = [["metrics", "Metrics"], ["canvas", "Live fleet"], ["graph", "Handoffs"], ["timeline", "Timeline"], ["decisions", "Decisions"], ["travel", "Replay"]];
       var tabs = VIEWS.map(function(v){
         var on = state.obView === v[0];
         return '<button class="obtab' + (on ? " on" : "") + '" role="tab" aria-selected="' + on + '" tabindex="' + (on ? "0" : "-1") + '" data-obv="' + v[0] + '">' + esc(v[1]) + "</button>";
@@ -2726,10 +2875,14 @@ ${BRAND_SPRITE}
       var body;
       if (state.obView === "graph") body = observatoryGraph(agents, p.holder, events, byAgent);
       else if (state.obView === "timeline") body = observatoryTimeline(events);
-      else if (state.obView === "metrics") body = renderKairoMetrics(state.obKairo || {}) + observatoryMetricsDetail(p, events, byAgent, state.obHealth || {});
+      else if (state.obView === "metrics")
+        // The dashboard: tiles, then the composition donuts, then behaviour over
+        // time, then spend. Burn used to be its own tab answering a question
+        // nobody asked separately from "what is this costing me".
+        body = renderKairoMetrics(state.obKairo || {}) + obCharts(p, events, byAgent) +
+          observatoryMetricsDetail(p, events, byAgent, state.obHealth || {}) +
+          '<div id="obburn" class="obasync">' + LOADER + "</div>";
       else if (state.obView === "decisions") body = '<div id="obdecisions" class="obasync">' + LOADER + "</div>";
-      else if (state.obView === "burn") body = '<div id="obburn" class="obasync">' + LOADER + "</div>";
-      else if (state.obView === "replay") body = '<div id="obreplay" class="obasync">' + LOADER + "</div>";
       else if (state.obView === "travel") body = '<div id="obtravel" class="obasync">' + LOADER + "</div>";
       else body = '<div class="obcanvaswrap">' + observatoryCanvas(agents, p.holder, byAgent) + "</div>";
       el.innerHTML =
@@ -2799,8 +2952,7 @@ ${BRAND_SPRITE}
         li.onclick = function(){ state.obPendingDecision = li.getAttribute("data-decid"); state.obView = "decisions"; renderObservatory(el, p, m, events); };
       });
       if (state.obView === "canvas" || state.obView === "graph") wireObservatoryDrag(el);
-      if (state.obView === "burn") observatoryBurn(p);
-      if (state.obView === "replay") observatoryReplay(p);
+      if (state.obView === "metrics") observatoryBurn(p);
       if (state.obView === "decisions") observatoryDecisions(p);
       if (state.obView === "travel") observatoryTravel(p);
     }
@@ -3074,17 +3226,28 @@ ${BRAND_SPRITE}
         else if (decisions[0]) selectDecision(decisions[0].id);
       }).catch(function(){ host.innerHTML = '<div class="obnote">Decisions unavailable \\u2014 the daemon didn\\u2019t answer. Switch tabs and back to retry.</div>'; });
     }
-    // ---- Time-Travel Replay (KAIRO Replay — the time machine) --------------
+    // ---- Replay — the time machine -----------------------------------------
+    // This absorbed the old separate "span replay" tab. Both scrubbed the same
+    // run on their own slider, which is why nobody could say what the difference
+    // was. One timeline now drives both readings: the reconstructed fleet state
+    // at that moment (left) and the actual turn running then (right).
     function observatoryTravel(p){
       var host = document.getElementById("obtravel"); if (!host) return;
+      state.obTravelProject = p; // the frame's waterfall button needs it later
       Promise.all([
         api("/api/projects/" + p.id + "/snapshots").catch(function(){ return {}; }),
-        api("/api/projects/" + p.id + "/decisions").catch(function(){ return {}; })
+        api("/api/projects/" + p.id + "/decisions").catch(function(){ return {}; }),
+        api("/api/projects/" + p.id + "/insights/spans?limit=200").catch(function(){ return {}; })
       ]).then(function(res){
         var snaps = (res[0] && res[0].snapshots) || [], decs = (res[1] && res[1].decisions) || [];
+        var spans = (res[2] && res[2].spans) || [];
+        state.obReplaySrc = (res[2] && res[2].from) || "";
         if (!snaps.length){ host.innerHTML = '<div class="obnote">No replay data yet \\u2014 run some agents to build a timeline.</div>'; return; }
         var byId = {}; decs.forEach(function(d){ byId[d.id] = d; });
-        state.obTravel = { snaps: snaps, byId: byId, i: 0, timer: null };
+        // Turns, oldest first, so a frame can find the one running at its instant.
+        var turns = spans.filter(function(s){ return s.name === "gen_ai.agent.turn" && s.agent; })
+          .slice().sort(function(a, b){ return (a.ts || 0) - (b.ts || 0); });
+        state.obTravel = { snaps: snaps, byId: byId, turns: turns, i: 0, timer: null };
         var markers = snaps.map(function(s, i){
           var pct = (snaps.length <= 1 ? 0 : (i / (snaps.length - 1)) * 100);
           var col = s.triggerEvent.type === "error" ? "var(--err)" : s.triggerEvent.type === "decision" ? "var(--primary)" : "var(--border)";
@@ -3132,8 +3295,40 @@ ${BRAND_SPRITE}
         var col = s.triggerEvent.type === "error" ? "var(--err)" : s.triggerEvent.type === "decision" ? "var(--primary)" : "var(--thread)";
         var pct = t.snaps.length > 1 ? Math.round((t.i / (t.snaps.length - 1)) * 100) : 100;
         evEl.innerHTML = '<div class="ttevcard" style="border-color:' + col + '"><div class="ttevtype" style="color:' + col + '">' + esc(String(s.triggerEvent.type).toUpperCase().replace(/_/g, " ")) + '</div><div class="ttevdesc">' + esc(s.triggerEvent.description) + '</div><div class="ttevmeta">Agent: ' + esc(s.triggerEvent.agentId) + " \\u00b7 " + new Date(s.timestampMs).toLocaleTimeString() + "</div></div>" +
+          ttTurnCard(t, s) +
           '<div class="ttprog"><div class="ttsl">RUN PROGRESS</div><div class="ttprogbar"><div class="ttprogfill" style="transform:scaleX(' + (pct / 100) + ')"></div></div><div class="ttdc">' + pct + "% complete</div></div>";
+        var wf = evEl.querySelector(".rpwf");
+        if (wf) wf.onclick = function(){ openWaterfall(state.obTravelProject, wf.getAttribute("data-trace")); };
       }
+    }
+    /**
+     * The turn that was running at this frame's instant — the old span-replay
+     * tab, folded in. "Running at" means the last turn to have started at or
+     * before this moment, which is the one whose work produced the state on the
+     * left. When SigNoz is unreachable the local event log has no trace id, so
+     * the waterfall link is replaced by an honest note rather than a dead button.
+     */
+    function ttTurnCard(t, s){
+      var turns = (t && t.turns) || [];
+      if (!turns.length) return "";
+      var at = s.timestampMs, cur = null;
+      for (var i = 0; i < turns.length; i++){ if ((turns[i].ts || 0) <= at) cur = turns[i]; else break; }
+      if (!cur) return '<div class="ttsec"><div class="ttsl">TURN AT THIS MOMENT</div><div class="obsub">nothing had run yet</div></div>';
+      function pill(l, v){ return '<span class="rppill"><span class="rppl">' + l + "</span>" + v + "</span>"; }
+      var err = cur.code === 2;
+      return '<div class="ttturn' + (err ? " err" : "") + '">' +
+        '<div class="ttsl">TURN AT THIS MOMENT</div>' +
+        '<div class="ttthead"><span class="rpagent">' + esc(cur.agent) + "</span>" +
+          (cur.model ? '<span class="rpade">' + esc(cur.model) + "</span>" : "") +
+          '<span class="rpstatus ' + (err ? "err" : "ok") + '">' + (err ? "ERROR" : "OK") + "</span></div>" +
+        (cur.msg ? '<div class="rpmsg">' + esc(cur.msg) + "</div>" : "") +
+        '<div class="rpmetrics">' + pill("took ", ((cur.ms || 0) / 1000).toFixed(1) + "s") +
+          pill("in ", tokfmt(cur.tin || 0)) + pill("out ", tokfmt(cur.tout || 0)) + pill("cost ", money(cur.cost || 0)) + "</div>" +
+        (cur.traceId
+          ? '<div class="rpactions"><button class="rpwf" data-trace="' + esc(cur.traceId) + '">Trace waterfall</button>' +
+            '<a class="rpsignoz" href="' + signozTraceUrl(cur.traceId) + '" target="_blank" rel="noreferrer">Open in SigNoz \\u2197</a></div>'
+          : '<div class="rpnote">' + ICONS.route + " Trace waterfall lights up once SigNoz is reachable \\u2014 this turn came from the local event log.</div>") +
+        "</div>";
     }
     // GRAPH: the baton/handoff DAG — agents in columns by handoff depth, edges
     // are the passes of the baton. Draggable, like the canvas.
