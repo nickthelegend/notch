@@ -26,6 +26,7 @@ export interface TimeSnapshot {
   memorySnapshot: { decisionsCount: number; keyFacts: string[] };
   threadLength: number;
   lastMessage: { agentId: string; text: string; timestamp: number } | null;
+  /** Files that were untracked ("??") when a turn touched them — i.e. new. */
   filesCreatedSoFar: number;
   filesModifiedSoFar: number;
   triggerEvent: { type: string; agentId: string; description: string };
@@ -93,8 +94,17 @@ export function buildSnapshots(events: LoomEvent[]): TimeSnapshot[] {
         break;
       }
       case "turn_diff": {
-        const files = Array.isArray(p.files) ? (p.files as unknown[]).length : 0;
-        filesModified += files; // Notch attributes tree changes per turn
+        // A turn_diff carries ChangedFile[] — a porcelain XY status and a path.
+        // "??" is git's code for a file that wasn't tracked before this turn,
+        // which is the only thing in the log that means "created". Counting it
+        // is what makes `filesCreatedSoFar` a real number: it was initialised to
+        // 0, never incremented, and shipped through the API as a count of
+        // created files that was structurally always zero.
+        const files = Array.isArray(p.files) ? (p.files as Array<string | { status?: string }>) : [];
+        filesModified += files.length; // Notch attributes tree changes per turn
+        for (const f of files) {
+          if (typeof f !== "string" && String(f?.status ?? "").trim() === "??") filesCreated += 1;
+        }
         break;
       }
       case "message": {

@@ -38,6 +38,9 @@ export class AntigravityBridge extends BridgeBase {
     injectMemory: true,
     interrupt: false,
     diff: false,
+    // The IDE owns whatever MCP servers it has; there's no command line here
+    // for Notch to put a config on.
+    mcp: false,
   };
 
   protected driver: GuiChatDriver;

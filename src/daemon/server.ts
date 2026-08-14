@@ -23,6 +23,8 @@ import { RouteActiveError } from "../core/routes.js";
 import { recordAgentEvent } from "../observability/index.js";
 import { triageAgent } from "../observability/triage.js";
 import { burnSeries, fetchSpans, healthScore, insightSpansFromLog, recentAgentErrors, traceSpans, type InsightSpan } from "../observability/insights.js";
+import { askObservatory, type AskContext } from "../observability/ask.js";
+import { writeMcpSession } from "../core/mcp.js";
 import { buildSnapshots } from "../observability/snapshots.js";
 import { suggestSkill } from "../core/skills.js";
 import { ADES, buildDefaultRoutes, defaultAgentConfigs, detectAdes } from "../core/ades.js";
@@ -63,7 +65,7 @@ import { APP_HTML, APP_MANIFEST } from "./app-page.js";
 import { GEIST_WOFF2 } from "./geist-font.js";
 import { AuthManager, bearerToken } from "./auth.js";
 import { PUSH_KINDS, pushContent, sendExpoPush } from "./push.js";
-import { ProjectRuntime } from "./runtime.js";
+import { BudgetExceededError, ProjectRuntime } from "./runtime.js";
 import { buildBoard } from "./board.js";
 import {
   ghAuthStatus,
@@ -205,13 +207,22 @@ function kairoMetrics(rt: ProjectRuntime): Record<string, unknown> {
   const runs = events.filter((e) => e.kind === "run_complete");
   const recent = runs.slice(-10);
   const num = (v: unknown): number => Number(v) || 0;
+  // Distinct paths any turn touched, and how many touches there were. The set
+  // used to be reported as `filesCreated`, which it never was — a file edited
+  // in five turns is one path here, and creating it was not what put it there.
   const filePaths = new Set<string>();
   let fileChanges = 0;
+  let filesCreated = 0;
   for (const e of events) {
     if (e.kind !== "turn_diff") continue;
-    const files = Array.isArray(e.payload.files) ? (e.payload.files as Array<{ path?: string }>) : [];
+    const files = Array.isArray(e.payload.files) ? (e.payload.files as Array<{ path?: string; status?: string }>) : [];
     fileChanges += files.length;
-    for (const f of files) if (f.path) filePaths.add(f.path);
+    for (const f of files) {
+      if (f.path) filePaths.add(f.path);
+      // "??" is git porcelain for untracked — the turn is where the file
+      // started existing, which is the only "created" this log can support.
+      if (String(f.status ?? "").trim() === "??") filesCreated += 1;
+    }
   }
   const tokensByAgent: Record<string, number> = {};
   const costByAgent: Record<string, number> = {};
@@ -223,10 +234,14 @@ function kairoMetrics(rt: ProjectRuntime): Record<string, unknown> {
     agentsSpawned: new Set(runs.map((e) => e.agentId).filter(Boolean)).size,
     turnsCompleted: cs.turns,
     avgReasoningTimeMs: cs.turns ? Math.round(cs.totalMs / cs.turns) : 0,
-    filesCreated: filePaths.size,
+    filesTouched: filePaths.size,
+    filesCreated,
     filesModified: fileChanges,
     decisionsRecorded: decisions.length,
+    // null when no decision carries a measured confidence — see decisionStats.
     avgConfidence: stats.avgConfidence,
+    confidenceSamples: stats.confidenceSamples,
+    decisionsBySource: stats.bySource,
     totalCostUsd: cs.totalUsd,
     totalTokensIn: cs.tokensIn,
     totalTokensOut: cs.tokensOut,
@@ -819,6 +834,19 @@ export class LoomDaemon {
               res.status(409).json({ error: "route_active", message: err.message });
               return;
             }
+            // 409, like the other "the fleet is in a state that forbids this"
+            // refusals. The numbers ride along so a client can say what the cap
+            // was and what has been spent against it, without guessing.
+            if (err instanceof BudgetExceededError) {
+              res.status(409).json({
+                error: "budget_exceeded",
+                agentId: err.agentId,
+                budgetUsd: err.budgetUsd,
+                spentTodayUsd: err.spentUsd,
+                message: err.message,
+              });
+              return;
+            }
             // A 500 used to be a sentence for one caller and nothing else: no
             // stack, no record, gone the moment the fetch resolved. Now the
             // Console gets it with the stack and the route that produced it.
@@ -910,13 +938,80 @@ export class LoomDaemon {
         res.json({ traceId: String(req.params.traceId ?? ""), spans });
       }),
     );
+
+    /**
+     * Ask the Observatory a question about this fleet.
+     *
+     * The evidence is assembled from the same sources the Observatory renders —
+     * status, metrics, health, spans, decisions — so an answer can never cite a
+     * number the screen doesn't also show. Any configured SigNoz MCP server is
+     * handed to the model for the turn, which is the Noz shape: let it query the
+     * telemetry itself rather than trusting a summary.
+     */
+    app.post(
+      "/api/projects/:id/observatory/ask",
+      withRuntime(async (rt, req, res) => {
+        const question = String((req.body ?? {}).question ?? "").trim();
+        if (!question) return void res.status(400).json({ error: "missing question" });
+
+        const status = await rt.status();
+        const metrics = rt.costSummary();
+        const byAgent = new Map(metrics.byAgent.map((a) => [a.agentId, a]));
+
+        let spans = await fetchSpans(rt.info.name, { limit: 120 }).catch(() => [] as InsightSpan[]);
+        let spanSource = "signoz";
+        if (!spans.length) {
+          spans = insightSpansFromLog(rt.log.list({ limit: 300 })).slice(0, 120);
+          spanSource = "local-log";
+        }
+
+        const ctx: AskContext = {
+          projectName: rt.info.name,
+          spendUsd: metrics.totalUsd ?? 0,
+          turns: metrics.turns ?? 0,
+          tokensIn: metrics.tokensIn ?? 0,
+          tokensOut: metrics.tokensOut ?? 0,
+          holder: status.holder ?? null,
+          agents: status.agents.map((a) => {
+            const mine = spans.filter((s) => s.agent === a.id);
+            return {
+              id: a.id, kind: a.kind, role: a.role, busy: a.busy,
+              turns: byAgent.get(a.id)?.turns, usd: byAgent.get(a.id)?.usd,
+              // Scored the same way the Metrics tab scores it: this agent's own
+              // spans, so the answer and the screen can never disagree.
+              health: mine.length ? healthScore(mine).score : null,
+            };
+          }),
+          recentSpans: spans.slice(-40).map((s) => ({ ts: s.ts, agent: s.agent, name: s.name, ms: s.ms, code: s.code, model: s.model, msg: s.msg })),
+          decisions: rt.getDecisions().map((d) => ({ agentId: d.agentId, title: d.title, category: d.category, confidence: d.confidence, source: d.source })),
+          spanSource,
+        };
+
+        // Hand over the project's real MCP servers (SigNoz among them) for this
+        // question, exactly as a turn would get them.
+        const session = writeMcpSession(rt.config.mcps);
+        try {
+          const result = await askObservatory(question, ctx, {
+            cwd: rt.info.dir,
+            mcpConfigPath: session?.configPath,
+            mcpServers: (session?.servers ?? []).map((s) => s.name),
+          });
+          res.json({ ...result, spanSource, evidenceAgents: ctx.agents.length, evidenceSpans: ctx.recentSpans.length });
+        } finally {
+          session?.cleanup?.();
+        }
+      }),
+    );
     app.get(
       "/api/projects/:id/insights/burn",
       withRuntime(async (rt, req, res) => {
         const hours = Math.min(720, Math.max(1, Number(req.query.hours) || 24));
         const buckets = Math.min(60, Math.max(2, Number(req.query.buckets) || 12));
         const series = await burnSeries(rt.info.name, { hours, buckets }).catch(() => null);
-        res.json({ burn: series, budgets: rt.budgets() });
+        // `budgetStatus` is what the caps are actually measured against — the
+        // day's real spend per agent and whether it has run out. The bare
+        // `budgets` map stays for the inputs that edit it.
+        res.json({ burn: series, budgets: rt.budgets(), budgetStatus: rt.budgetStatus() });
       }),
     );
     app.get(
@@ -939,18 +1034,22 @@ export class LoomDaemon {
       }),
     );
 
-    // Budget CRUD for the burn-rate panel — per-agent USD/day, persisted in state.
+    // Budget CRUD for the burn-rate panel — per-agent USD/day, persisted in
+    // state and enforced on every dispatch (see ProjectRuntime#enforceBudget).
+    // `status` carries today's real spend against each cap, so the panel can
+    // show how close an agent is instead of only what was typed in.
     app.get(
       "/api/projects/:id/budgets",
       withRuntime(async (rt, _req, res) => {
-        res.json({ budgets: rt.budgets() });
+        res.json({ budgets: rt.budgets(), status: rt.budgetStatus() });
       }),
     );
     app.put(
       "/api/projects/:id/budgets/:agentId",
       withRuntime(async (rt, req, res) => {
         const usd = Number((req.body as Record<string, unknown>)?.usdPerDay ?? 0);
-        res.json({ budgets: rt.setBudget(String(req.params.agentId ?? ""), usd) });
+        const budgets = rt.setBudget(String(req.params.agentId ?? ""), usd);
+        res.json({ budgets, status: rt.budgetStatus() });
       }),
     );
 
@@ -1183,10 +1282,16 @@ export class LoomDaemon {
     );
 
     // MCP servers: the connect/toggle list. PATCH upserts one by name.
+    //
+    // `connected` on each row is measured here, not inferred from the presence
+    // of a url — every configured endpoint gets a bounded probe (2s, in
+    // parallel) and reports what actually answered. `?probe=0` skips it for a
+    // caller that only wants the configured list back fast.
     app.get(
       "/api/projects/:id/mcps",
-      withRuntime(async (rt, _req, res) => {
-        res.json({ mcps: rt.getMcps() });
+      withRuntime(async (rt, req, res) => {
+        const probe = String(req.query.probe ?? "1") !== "0";
+        res.json({ mcps: probe ? await rt.getMcpsProbed() : rt.getMcps(), probed: probe });
       }),
     );
     app.patch(

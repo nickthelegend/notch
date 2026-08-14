@@ -36,6 +36,7 @@ import {
   readNativeMemory,
   type ImportedBlock,
 } from "../core/memory.js";
+import { probeMcpServers, writeMcpSession } from "../core/mcp.js";
 import { notify } from "../core/notify.js";
 import { RouteEngine } from "../core/routes.js";
 import { buildBriefing, buildProjection } from "../core/projection.js";
@@ -50,7 +51,14 @@ import {
   type BoardTask,
 } from "../core/registry.js";
 import { suggestHandoff } from "../core/suggestions.js";
-import { decisionStats, extractDecisions, type AgentDecision, type DecisionStats } from "../observability/decisions.js";
+import {
+  decisionStats,
+  extractDecisions,
+  normalizeStoredDecision,
+  type AgentDecision,
+  type DecisionStats,
+} from "../observability/decisions.js";
+import { turnTraceId } from "../observability/index.js";
 import { buildSkillsBlock, loadSkills, type SkillManifest } from "../core/skills.js";
 import type { McpServerConfig } from "../types.js";
 import {
@@ -61,6 +69,39 @@ import {
 } from "../core/worktree.js";
 
 const PROJECTION_WINDOW = 400; // recent events distilled on handoff
+
+/**
+ * How a budget pause is labelled in the shared quarantine map, so this guard
+ * can tell its own pauses from the ones a SigNoz alert put there.
+ */
+const BUDGET_PAUSE_REASON = "budget ";
+
+/** Local midnight — the day a "USD/day" budget is measured against. */
+function startOfDay(now: number): number {
+  const d = new Date(now);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+/**
+ * A turn refused because the agent is at or over its daily spend budget.
+ *
+ * Typed (like NotHolderError) because the callers need to tell it apart: the
+ * API answers it with a 409 and the numbers, and a route reports which step
+ * couldn't start and why, rather than a generic failure.
+ */
+export class BudgetExceededError extends Error {
+  constructor(
+    public readonly agentId: string,
+    public readonly budgetUsd: number,
+    public readonly spentUsd: number,
+  ) {
+    super(
+      `agent "${agentId}" has spent $${spentUsd.toFixed(4)} today, at or over its $${budgetUsd.toFixed(2)}/day budget — raise the budget or wait for the day to roll over`,
+    );
+    this.name = "BudgetExceededError";
+  }
+}
 
 export class ProjectRuntime {
   readonly info: ProjectInfo;
@@ -207,6 +248,91 @@ export class ProjectRuntime {
     return budgets;
   }
 
+  /**
+   * What one agent has really spent since local midnight.
+   *
+   * Read from the log, using the same rule the running cost totals use: a
+   * turn's money arrives on a `turn_cost` status and nowhere else. (The same
+   * figure is copied onto `run_complete` for the exported span; counting both
+   * would double every turn.) Adapters that report tokens but no dollars —
+   * codex, agy — contribute 0, honestly, because they hand us no price.
+   */
+  spendTodayFor(agentId: string, now = Date.now()): number {
+    const since = startOfDay(now);
+    let usd = 0;
+    for (const e of this.log.list({ kinds: ["status"] })) {
+      if (e.agentId !== agentId || e.ts < since) continue;
+      if (e.payload.state !== "turn_cost") continue;
+      usd += Number(e.payload.costUsd ?? 0) || 0;
+    }
+    return usd;
+  }
+
+  /** Every budgeted agent: its cap, what it has spent today, and whether it's out. */
+  budgetStatus(now = Date.now()): Record<string, { budgetUsd: number; spentTodayUsd: number; over: boolean }> {
+    const out: Record<string, { budgetUsd: number; spentTodayUsd: number; over: boolean }> = {};
+    for (const [agentId, budgetUsd] of Object.entries(this.budgets())) {
+      const spentTodayUsd = this.spendTodayFor(agentId, now);
+      out[agentId] = { budgetUsd, spentTodayUsd, over: spentTodayUsd >= budgetUsd };
+    }
+    return out;
+  }
+
+  /**
+   * Refuse a turn an agent can't afford.
+   *
+   * A budget that nothing checks is a text field, and that is all this was: the
+   * burn panel wrote USD/day into state and no code path ever read it back, so
+   * an agent with a $1 cap would happily spend $40. Now every dispatch — a
+   * message you send, a baton hop, a route step — passes through here first.
+   *
+   * At or over the cap the agent is quarantined and the turn throws, taking the
+   * same route through the UI as the SigNoz self-heal pause (same state map,
+   * same shape) so a paused agent looks paused however it got there. The pause
+   * lifts itself: the spend is measured against the current day, so when the
+   * day rolls over — or you raise the cap — the next attempt clears it and logs
+   * the recovery. A budget of 0/unset means no budget, and nothing is enforced.
+   */
+  private enforceBudget(agentId: string, now = Date.now()): void {
+    const budgetUsd = this.budgets()[agentId];
+    if (!Number.isFinite(budgetUsd) || !budgetUsd || budgetUsd <= 0) {
+      this.liftBudgetPause(agentId, now);
+      return;
+    }
+    const spentUsd = this.spendTodayFor(agentId, now);
+    if (spentUsd < budgetUsd) {
+      this.liftBudgetPause(agentId, now);
+      return;
+    }
+    if (!this.quarantined()[agentId]) {
+      this.quarantine(agentId, `${BUDGET_PAUSE_REASON}$${budgetUsd.toFixed(2)}/day`, false, now);
+    }
+    // One event per refusal, not one per pause: the thread should show every
+    // turn that didn't happen, not just the first.
+    this.log.append({
+      kind: "status",
+      agentId,
+      payload: { state: "budget_exceeded", budgetUsd, spentTodayUsd: spentUsd },
+    });
+    throw new BudgetExceededError(agentId, budgetUsd, spentUsd);
+  }
+
+  /**
+   * Lift a pause this guard put there, and only that one — a quarantine from a
+   * firing SigNoz alert is somebody else's to lift, and clearing it here would
+   * un-pause an agent that is still broken.
+   */
+  private liftBudgetPause(agentId: string, now = Date.now()): void {
+    const q = this.quarantined()[agentId];
+    if (!q?.reason.startsWith(BUDGET_PAUSE_REASON)) return;
+    this.unquarantine(agentId);
+    this.log.append({
+      kind: "status",
+      agentId,
+      payload: { state: "budget_recovered", reason: q.reason, pausedMs: Math.max(0, now - q.since) },
+    });
+  }
+
   // ── Skills (SKILL.md context blocks injected into the briefing) ──
 
   /** Where skills live: the project's own skills/, then the daemon's bundled skills/. */
@@ -251,6 +377,27 @@ export class ProjectRuntime {
     const byName = new Map(ProjectRuntime.DEFAULT_MCPS.map((m) => [m.name, { ...m }]));
     for (const m of saved) byName.set(m.name, { ...(byName.get(m.name) ?? {}), ...m });
     return [...byName.values()];
+  }
+
+  /**
+   * The same list, with `connected` MEASURED rather than assumed.
+   *
+   * The old reading of that field was "a url is typed into this row", which the
+   * UI rendered as a green "connected" badge — a claim about a live connection
+   * made without ever opening one. Here every configured URL gets a bounded
+   * probe (see core/mcp.ts) and the answer is whatever came back. Rows with no
+   * URL aren't probed and report false, because "not configured" is not
+   * "connected".
+   */
+  async getMcpsProbed(timeoutMs = 2_000): Promise<McpServerConfig[]> {
+    const mcps = this.getMcps();
+    const reachable = await probeMcpServers(mcps, timeoutMs).catch(() => ({}) as Record<string, boolean>);
+    const probedAt = Date.now();
+    return mcps.map((m) => ({
+      ...m,
+      connected: reachable[m.name] ?? false,
+      ...(m.name in reachable ? { probedAt } : {}),
+    }));
   }
 
   /** Add or update one MCP (by name); persists only the real (non-default) fields. */
@@ -928,12 +1075,17 @@ export class ProjectRuntime {
     return this.log.list({ kinds: ["run_complete"] }).filter((e) => e.agentId === agentId).length;
   }
 
-  /** All captured decisions for this project, newest first. */
+  /**
+   * All captured decisions for this project, newest first, in today's shape —
+   * see normalizeStoredDecision for what that does to records written before
+   * a decision had to say where its confidence came from.
+   */
   getDecisions(): AgentDecision[] {
     try {
       const raw = fs.readFileSync(this.decisionsFile(), "utf8");
       const arr = JSON.parse(raw) as AgentDecision[];
-      return Array.isArray(arr) ? [...arr].sort((a, b) => b.timestamp - a.timestamp) : [];
+      if (!Array.isArray(arr)) return [];
+      return arr.map(normalizeStoredDecision).sort((a, b) => b.timestamp - a.timestamp);
     } catch {
       return [];
     }
@@ -968,16 +1120,23 @@ export class ProjectRuntime {
       filesChanged = execSync("git diff --name-only HEAD", { cwd: this.info.dir, encoding: "utf8" })
         .trim().split("\n").filter(Boolean);
     } catch { /* not a git repo, or nothing changed */ }
+    // The SigNoz trace this turn's spans went out under, when telemetry is on.
+    // Undefined otherwise — see observability/index.ts#turnTraceId; a decision
+    // that can't link to a trace must carry no trace id rather than "".
+    const traceId = turnTraceId(agentId);
     const decisions = await extractDecisions({
       agentId,
       agentRole: this.agentRole(agentId),
       projectId: this.info.id,
       chatId: this.turnChat.get(agentId) ?? MAIN_CHAT,
       turnIndex: this.turnCountFor(agentId),
-      traceId: "",
+      ...(traceId ? { traceId } : {}),
+      ...(lastTurn ? { turnId: String(lastTurn.id) } : {}),
       turnText,
-      tokensUsed: Number(p.inputTokens ?? 0) + Number(p.outputTokens ?? 0),
-      costUsd: Number(p.costUsd ?? 0),
+      // The turn's totals, carried as the TURN's — not divided between the
+      // decisions mined from it, and not stamped on each as if each cost this.
+      turnTokensUsed: Number(p.inputTokens ?? 0) + Number(p.outputTokens ?? 0),
+      turnCostUsd: Number(p.costUsd ?? 0),
       durationMs: Number(p.durationMs ?? 0),
       filesChanged,
       anthropicApiKey: process.env.ANTHROPIC_API_KEY,
@@ -985,13 +1144,22 @@ export class ProjectRuntime {
     if (!decisions.length) return;
     this.storeDecisions(decisions);
     // Surface each on the Timeline / snapshots via a status event (no new EventKind,
-    // and no collision with the brain's memory `decision` events).
+    // and no collision with the brain's memory `decision` events). `source` rides
+    // along so a renderer can say where the confidence came from — or that there
+    // isn't one, which is what a heuristic decision carries.
     for (const d of decisions) {
       this.log.append({
         kind: "status",
         agentId: d.agentId,
         ...(d.chatId && d.chatId !== MAIN_CHAT ? { chat: d.chatId } : {}),
-        payload: { state: "agent_decision", decisionId: d.id, title: d.title, category: d.category, confidence: d.confidence },
+        payload: {
+          state: "agent_decision",
+          decisionId: d.id,
+          title: d.title,
+          category: d.category,
+          source: d.source,
+          ...(d.confidence !== undefined ? { confidence: d.confidence } : {}),
+        },
       });
     }
   }
@@ -1076,6 +1244,10 @@ export class ProjectRuntime {
     if (!isAdapter(agent)) {
       throw new Error(`agent "${target}" is a bridge (read-only) — it cannot take turns`);
     }
+    // Before anything is committed — the baton, the message in the thread, the
+    // process — check the agent can afford the turn. Refusing after the message
+    // is logged would leave a prompt in the conversation that nothing answers.
+    this.enforceBudget(target);
 
     const holder = this.validHolder();
     if (holder === null) {
@@ -1100,18 +1272,40 @@ export class ProjectRuntime {
     // Prepend the enabled skills so every turn carries them, alongside any
     // one-shot handoff briefing. Empty when no skills are on.
     const briefing = [this.activeSkillsBlock(), pendingBriefing].filter(Boolean).join("\n").trim() || undefined;
-    const input: SendInput = briefing ? { text, briefing } : { text };
+    // The project's configured MCP servers, rendered to a temp config file the
+    // adapter hands to its CLI. Null when nothing is configured — or when this
+    // adapter's CLI has no flag for it, because an "MCP attached" note on a
+    // turn that dropped the config would be the same lie in a new place.
+    const mcp = agent.capabilities.mcp ? writeMcpSession(this.config.mcps) : null;
+    const input: SendInput = {
+      text,
+      ...(briefing ? { briefing } : {}),
+      ...(mcp ? { mcp: { configPath: mcp.configPath, servers: mcp.servers } } : {}),
+    };
+    if (mcp) {
+      this.log.append({
+        kind: "status",
+        agentId: target,
+        payload: { state: "mcp_attached", servers: mcp.servers.map((s) => s.name) },
+      });
+    }
     // Snapshot the tree so this prompt's changes can be attributed to it.
     this.preTurnTree.set(target, await porcelainStatus(this.info.dir));
     // Fire-and-notify: the turn runs in the background; progress streams
     // into the log and completion lands as run_complete.
-    void agent.send(input).catch((err) => {
-      this.log.append({
-        kind: "error",
-        agentId: target,
-        payload: { message: String(err instanceof Error ? err.message : err) },
-      });
-    });
+    void agent
+      .send(input)
+      .catch((err) => {
+        this.log.append({
+          kind: "error",
+          agentId: target,
+          payload: { message: String(err instanceof Error ? err.message : err) },
+        });
+      })
+      // The config file exists for exactly this turn. Cleaned up whether the
+      // turn succeeded, failed or was interrupted — a temp file per turn that
+      // nothing removes is a slow leak of the project's server URLs.
+      .finally(() => mcp?.cleanup());
     return { agentId: target };
   }
 
@@ -1150,6 +1344,11 @@ export class ProjectRuntime {
     if (!isAdapter(target)) {
       throw new Error(`cannot hand the baton to "${to}" — bridges are read-only by design`);
     }
+    // Handing the baton to an agent that can't afford a turn is the same
+    // refusal as sending it one — and it has to be caught HERE, before the
+    // current holder is interrupted, or a route would strand the baton on an
+    // agent that will refuse every prompt it gets.
+    this.enforceBudget(to);
     if ((opts.source ?? "user") === "user") this.routes.onManualHandoff();
 
     // Audit trail: snapshot the outgoing holder's working-tree state into the

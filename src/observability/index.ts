@@ -20,6 +20,13 @@ let singleton: NotchTelemetry | null = null;
 // that turn (tool calls, the completion), cleared when it ends — so SigNoz shows
 // a real span tree per turn instead of one orphan span per event.
 const turnTrace = new Map<string, string>();
+/**
+ * The trace of the turn that most recently CLOSED, per agent. The decision
+ * miner runs off `run_complete` — i.e. after the turn's trace has been retired
+ * — and still needs the id to link each decision to the spans it came out of.
+ * One entry per agent, so this is bounded by the roster, not by history.
+ */
+const lastTurnTrace = new Map<string, string>();
 
 /** The trace id a span belongs to, advancing the per-agent turn as it goes. */
 function traceIdFor(event: LoomEvent): string {
@@ -27,8 +34,24 @@ function traceIdFor(event: LoomEvent): string {
   const isTurnStart = event.kind === "status" && (event.payload as Record<string, unknown>)?.state === "turn_started";
   if (isTurnStart || !turnTrace.has(agent)) turnTrace.set(agent, newTraceId());
   const id = turnTrace.get(agent)!;
-  if (event.kind === "run_complete") turnTrace.delete(agent); // this span closes the turn
+  if (event.kind === "run_complete") {
+    lastTurnTrace.set(agent, id);
+    turnTrace.delete(agent); // this span closes the turn
+  }
   return id;
+}
+
+/**
+ * The trace id of an agent's in-flight turn, or the one that just finished.
+ *
+ * Undefined when telemetry is off, because then no trace was ever minted and
+ * there is nothing in SigNoz to link to. Callers must leave the field out
+ * rather than substituting "" — an empty trace id renders as a link that opens
+ * a search for nothing, which reads as a broken feature rather than an absent
+ * one.
+ */
+export function turnTraceId(agentId: string): string | undefined {
+  return turnTrace.get(agentId) ?? lastTurnTrace.get(agentId);
 }
 
 export function telemetry(): NotchTelemetry {
