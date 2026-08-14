@@ -93,7 +93,7 @@ function buildMenu() {
         submenu: [
           {
             label: "Loom on GitHub",
-            click: () => shell.openExternal("https://github.com/nickthelegend/loom"),
+            click: () => shell.openExternal("https://github.com/nickthelegend/notch"),
           },
         ],
       },

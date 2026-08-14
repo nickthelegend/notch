@@ -14,14 +14,15 @@ and **every turn, handoff, route, and memory fold is traced to SigNoz** as OpenT
 
 Today that means **Claude Code, Codex, OpenCode, Grok Code and the Antigravity CLI**
 (offload a turn to Gemini to save tokens) as full agents, each verified against a real
-version, plus the **Antigravity IDE and Kiro** driven through their own
-windows — see [Supported agents](#supported-agents) for exactly how far each one goes, and
+version, plus **Kiro** driven through its own
+window — see [Supported agents](#supported-agents) for exactly how far each one goes, and
 [How memory actually reaches a model](#how-memory-actually-reaches-a-model) for the part
 most tools gloss over.
 
 Notch is **not** another IDE. It's the thin layer *between* your agents — the continuity,
-memory, and **observability** they don't have on their own. It's a fork of
-[loom](https://github.com/nickthelegend/notch) with a purple-dark identity, an in-app
+memory, and **observability** they don't have on their own. It grew out of an
+earlier orchestrator called *loom* — which is still the name of the CLI binary and
+the `.loom/` directory — and adds a purple-dark identity, an in-app
 **[Observatory](#observability--signoz)** (live canvas, handoff graph, event timeline, fleet
 metrics), and end-to-end SigNoz instrumentation built on top.
 
@@ -73,7 +74,7 @@ The write path is the top arrow (fleet → daemon → SigNoz). The two bottom ar
 
 ### The Observatory
 
-A tab next to the Brain — **six live views** over the running project, all backed by real
+A tab next to the Brain — **eight live views** over the running project, all backed by real
 data (SigNoz spans / event log, no mocks). A persistent vitals strip (active agents, baton
 holder, spend, turns, tokens) sits above them, **View in SigNoz** jumps to the traces, and
 **Ask Noz** answers questions about the fleet from the same telemetry these views render.
@@ -85,8 +86,10 @@ Each view is named for the question it answers, and says so in a line under the 
 | **Metrics** | the dashboard: totals, then what the spend is *made of* (token and turn donuts per agent/model), then behaviour over time (turn duration, token usage, spend), then each agent's 0–100 **Health** with **⚠ Triage**, then the 24h burn with per-agent USD/day **budgets** | `/metrics` + spans + ClickHouse |
 | **Live fleet** | *right now* — who is running, who is idle, who holds the **baton**, and an edge that marches while an agent is reading and writing the one shared brain (draggable) | live state |
 | **Handoffs** | *what already happened* — the baton's actual route between agents, each edge labelled with how many times it was taken, thickest where it was walked most (draggable) | event log |
+| **Self-heal** | what SigNoz told Notch, and what Notch *did about it* — every alert episode as a row: which agent was taken out of rotation, when, who the baton moved to, and whether it was handed back. This is the half SigNoz cannot show you: SigNoz knows the alert fired, only Notch knows the fleet reacted. A **Lift** button releases a paused agent by hand | alert webhook + event log |
 | **Timeline** | the chronological trace — turns, handoffs, routes, memory folds, errors, 💡 **decisions**, budget pauses, MCP attach, and the **self-heal** intervention/recovery lines | event log |
 | **Decisions** | a filterable **Decision Explorer** — every agent choice as a card, with reason, alternatives, files, and how each decision was extracted (a measured confidence and a pattern match are not shown as the same claim) | decisions store |
+| **Logs** | the fleet's structured logs read back **out of SigNoz** — every message, tool call, file edit and error at the severity it was recorded, filterable by severity and text. A line belonging to a turn carries its **trace**, so you can jump from a log line to the span that produced it. The one view with no local fallback: if ClickHouse isn't answering it says so, rather than showing an empty list that looks like a quiet run | SigNoz / ClickHouse |
 | **Replay** | scrub the whole run: at any moment, who held the baton, every agent's state, decisions so far, the thread — *and* the turn that was running then, with its model, duration, tokens, cost and trace. Play / step controls | folded event log + spans |
 
 **Decision capture.** After each turn, Notch mines the agent's prose into structured decisions
@@ -204,7 +207,7 @@ noticing. To bring the local stack up and check:
 ./scripts/signoz-up.sh                              # zookeeper → clickhouse → collector → UI
 NOTCH_SIGNOZ_URL=http://localhost:8085 loom up      # so deep links reach that UI
 
-curl -s localhost:7421/api/projects/<id>/insights/spans | jq .from   # must say "signoz"
+curl -s localhost:7420/api/projects/<id>/insights/spans | jq .from   # must say "signoz"
 ```
 
 Start order matters and the script enforces it: ClickHouse needs its keeper first, and a
@@ -288,7 +291,7 @@ curl -fsSL https://raw.githubusercontent.com/nickthelegend/notch/main/scripts/in
 npm install -g github:nickthelegend/notch
 
 # hackable checkout
-git clone https://github.com/nickthelegend/notch.git && cd loom
+git clone https://github.com/nickthelegend/notch.git && cd notch
 npm install && npm run build && npm link
 ```
 
@@ -412,9 +415,29 @@ form — the same bet the agent adapters make by shelling out to the CLIs you al
 
 ```bash
 cd your-project
-loom init          # detects installed agents (claude, opencode), assigns roles
+loom init          # detects the agents installed here and writes .loom/config.json
 loom               # opens the TUI — a tabbed workspace (Thread · Board · Brain · Diff)
 ```
+
+`loom init` names each agent after itself — `codex` is `codex` — and does **not**
+hand out `planner` / `executor` / `reviewer`. A role is a job you define; Notch
+doesn't know which of your agents should plan, and guessing from detection order
+would look like a recommendation it hadn't earned. Rename them to the jobs you
+actually have (the rail's agent picker, or `loom route`), and see
+[Routes](#routes) before expecting `loom route ship` to exist.
+
+**For the Observatory to show you anything, SigNoz has to be running.** Notch
+works without it — the daemon, the baton, the shared brain and the thread are all
+local and need nothing — but Metrics, Logs, Self-heal and the trace links all read
+back out of SigNoz, and without it they say so rather than showing you zeros:
+
+```bash
+./scripts/signoz-up.sh          # brings the stack up in dependency order
+# UI on http://localhost:8085 · OTLP on :4318
+```
+
+Notch ships to `http://localhost:4318` by default, so once the stack is up the
+next turn you run is already traced. `NOTCH_TELEMETRY_DISABLED=1` turns it off.
 
 ```
   ██      ▄████▄  ▄████▄  ▄█▄▄█▄
@@ -504,8 +527,15 @@ step can carry its own focus:
 ```
 
 Per-step instructions are appended to the role guidance for exactly that step — the
-next hop never sees them. `loom init` seeds a `ship` route automatically when it
-detects at least two roles.
+next hop never sees them.
+
+**`ship` is not seeded for you.** `loom init` names every agent after its own kind,
+so there are no `planner` / `executor` / `reviewer` roles for a default route to be
+built from, and `buildDefaultRoutes` returns nothing — deliberately, and
+`test/ades.test.ts` pins it. Name a route in `.loom/config.json` before
+`loom route ship` will resolve. You don't have to: `loom route` also takes the
+hops inline, so `loom route codex,claude-code "fix the flaky test"` runs the same
+chain without naming anything.
 
 ## Commands
 
@@ -523,11 +553,11 @@ detects at least two roles.
 | `loom memory [import]` | The unified brain — one memory across every connected ADE |
 | `loom log [-f]` | Show (or follow) the project event log |
 | `loom costs` | Project spend: total + per-agent turns, $ and agent time |
-| `loom agents` / `loom models <agentId>` / `loom projects` / `loom status` | Agent roster, real agent models, project board, daemon health |
+| `loom agents` / `loom projects` / `loom status` | Agent roster, project board, daemon health |
 | `loom up [--tailnet] [--restart]` / `loom down` / `loom daemon` | Daemon lifecycle (`--tailnet` binds to your Tailscale IP) |
 | `loom pair` | QR deep link that pairs a phone (single-use token) |
 | `loom clients [--revoke <id>] [--ping]` | Paired devices: list, revoke, or send a test push |
-| `loom doctor [--json]` | Diagnose env, daemon, binding, and project config — with fixes or machine-readable JSON |
+| `loom doctor` | Diagnose env, daemon, binding, and project config, each finding with the fix |
 
 ## Supported agents
 
@@ -538,9 +568,19 @@ detects at least two roles.
 | OpenCode | adapter (full-duplex) | `opencode serve` HTTP + SSE (`/prompt`, `/interrupt`, `/event`) | ✅ verified against 1.17.20 |
 | Grok Code | adapter (full-duplex) | `grok -p --output-format json`, `-r <session>` | 🔶 verified against 0.2.54 — **answers only, no tool or edit events** (see below) |
 | Antigravity CLI | adapter (full-duplex) | `agy --print`, `--conversation <id>` resume; runs on Gemini / hosted Claude / GPT | 🔶 verified against agy 1.1.6 — **final message + file edits, no token counts** (see below) |
-| Echo | adapter (demo/tests) | in-process | ✅ |
-| Antigravity IDE | **bridge** (driveable) | Chromium debug port — types into the real chat panel and reads the panel back | 🔶 mechanism verified; its selectors are not (see below) |
-| Kiro | **bridge** (driveable) | same, via the same driver | 🔶 mechanism verified; its selectors are not |
+| Kiro | **bridge** (driveable) | Chromium debug port — types into the real chat panel and reads the panel back | 🔶 mechanism verified; its selectors are not (see below) |
+
+Five adapters and one bridge. `echo` is registered too, but it is a test double
+that replies with your own message and reports a made-up $0.001, so it is never
+offered to anyone who didn't ask for it by name in `.loom/config.json` — see the
+comment on `defaultAgentConfigs` in `src/core/ades.ts`. Counting it as a
+supported agent would be padding the roster.
+
+The **Antigravity IDE bridge** used to be a row here. It drove the IDE's chat
+panel over the debugging port and could only ever watch. `antigravity-cli`
+replaced it with a real adapter that holds the baton, so the bridge came out of
+the catalog and `POST /api/projects/:id/agents` now refuses `kind:"antigravity"`.
+The registration survives only so projects that already name it still open.
 
 Four of those need their asterisks spelled out, because the table row is
 shorter than the truth:
@@ -568,18 +608,20 @@ a turn in the thread is its answer plus the files it touched (recovered from the
 reports **no dollar cost**, because the CLI hands none and a made-up number is
 worse than silence. Continuity is real: the conversation id `agy` keys by
 workspace is captured after the first turn and replayed with `--conversation`,
-so follow-ups remember. This is the headless sibling of the Antigravity **IDE**
-bridge below — same product, one holds the baton, the other you watch.
+so follow-ups remember. It replaced the Antigravity **IDE** bridge outright —
+same product, but this one holds the baton instead of being watched.
 
-**Antigravity and Kiro are driven, not routed.** Both are Electron apps with no
-API; Notch connects to the debugging port, finds the chat box, types through the
+**Kiro is driven, not routed.** It is an Electron app with no API; Notch
+connects to the debugging port, finds the chat box, types through the
 input pipeline and reads back what the panel gained — the approach
 [antigravity_phone_chat](https://github.com/krishnakanthb13/antigravity_phone_chat)
 takes, and for the same reason: never touch the provider APIs, drive the app
-that's already signed in. Launch them with
-`--remote-debugging-port=9222` first.
+that's already signed in. Launch it with
+`--remote-debugging-port=9334` first (`src/adapters/bridges/profiles.ts` pins the
+port per app; 9222 is already taken by Antigravity's own Browser Control and
+gives you `EADDRINUSE`).
 
-The driver refuses more than it accepts, on purpose. Both apps are VS Code
+The driver refuses more than it accepts, on purpose. Kiro is VS Code
 family and Monaco — the editor holding your source file — is a
 `contenteditable`. Anything under `.monaco-editor` is never a candidate, a
 candidate must be labelled like a chat box, and zero-or-several matches is a
@@ -587,8 +629,8 @@ refusal that names the fix (`options.selectors.composer`). Typing a prompt into
 your code and pressing Enter is not a mistake an error message repairs.
 
 What's verified is the mechanism, against a real Chromium. What is **not**
-verified is either app's actual chat DOM: Antigravity shows a sign-in screen and
-Kiro shows no chat panel until you open one, so there was no composer to read
+verified is Kiro's actual chat DOM: it shows no chat panel until you open one,
+so there was no composer to read
 the selectors from. Reachable and driveable are separate questions, and Notch
 answers both — a signed-out Antigravity replies to CDP cheerfully and reports
 `driveable: false — no chat box on screen`.
@@ -619,7 +661,7 @@ Getting it into the model's context is a different problem, and it depends on th
 
 So: the **summary always lands**; the **full brain is an invitation**. An agent that
 ignores the pointer works from the summary alone. If you need something remembered for
-certain, put it in a decision (`loom decide`) — decisions ride in the briefing itself.
+certain, put it in a decision (`loom decision`) — decisions ride in the briefing itself.
 There's an opt-in eval (`LOOM_TEST_REAL=1`) that checks a real model actually *uses* an
 injected brief, and declines rather than invents when the brief is silent.
 
@@ -811,15 +853,17 @@ with its why: [ARCHITECTURE.md](ARCHITECTURE.md).
     { "id": "claude-code", "kind": "claude-code", "role": "planner" },
     { "id": "opencode",    "kind": "opencode",    "role": "executor",
       "options": {} },
-    { "id": "antigravity", "kind": "antigravity", "role": "general",
-      "options": { "debugPort": 9222 } }
+    { "id": "antigravity", "kind": "antigravity-cli", "role": "general" },
+    { "id": "kiro", "kind": "kiro", "role": "general",
+      "options": { "debugPort": 9334 } }
   ],
   "defaultAgent": "claude-code",
   "routes": { "ship": ["planner", "executor", "planner"] }
 }
 ```
 
-Roles: `planner` · `executor` · `reviewer` · `general`. Claude Code options:
+Roles are free text — `planner` and `reviewer` above are just the names this
+example chose, and the routes refer to them by those names. Claude Code options:
 `permissionMode` (default `acceptEdits`), `model`. OpenCode options:
 `model` (`"providerID/modelID"`, e.g. `"opencode/minimax-m2.5"` — **set this**: headless
 sessions don't inherit your TUI default), `agent`, `baseUrl` to reuse a running server.
@@ -827,7 +871,7 @@ sessions don't inherit your TUI default), `agent`, `baseUrl` to reuse a running 
 ## Development
 
 ```bash
-npm test          # 179 tests: unit + full HTTP/WS end-to-end
+npm test          # 729 tests across 56 files: unit + full HTTP/WS end-to-end
 npm run build     # tsc → dist/
 npm run dev       # run the CLI from source (tsx)
 ```
@@ -866,7 +910,7 @@ your shell profile can tell it's running in Notch's pane. (`LOOM_EXPO_PUSH_URL` 
 
 ## Roadmap
 
-- Tasks beyond GitHub — GitLab and Linear sit disabled in the provider row today.
+- Tasks beyond GitHub and Linear — GitLab sits disabled in the provider row today.
 - More adapters/bridges via the SDK — contributions welcome.
 
 ## Design

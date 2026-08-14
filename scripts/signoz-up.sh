@@ -68,4 +68,4 @@ say "Start the daemon so its deep links point at that UI:"
 say "  NOTCH_SIGNOZ_URL=http://localhost:$UI_PORT loom up"
 echo
 say "Confirm Notch is reading SigNoz and not the local log — this must say 'signoz':"
-say "  curl -s localhost:7421/api/projects/<id>/insights/spans | jq .from"
+say "  curl -s localhost:7420/api/projects/<id>/insights/spans | jq .from"
