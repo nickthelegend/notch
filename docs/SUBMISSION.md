@@ -22,7 +22,7 @@ human stares at.
 | ✅ | Custom SigNoz skill, PR'd upstream | PR #76 (review comments addressed) |
 | ✅ | Real multi-agent route, confirmed in ClickHouse | `ship`: claude-code → codex → opencode (define it first — see below) |
 | ✅ | 5 real ADE adapters + 1 bridge, real model + tokens on spans | `src/adapters/*`, `src/core/ades.ts` |
-| ✅ | Tests green | **729 passed / 0 skipped**, 56 files; `npm test` |
+| ✅ | Tests green | **732 passed / 0 skipped**, 57 files; `npm test` |
 | ✅ | Typecheck + build clean | `tsc --noEmit`, `npm run build` |
 | ✅ | README with architecture diagram + env table | `README.md` |
 | ✅ | 2-minute demo script | `docs/DEMO.md` |
