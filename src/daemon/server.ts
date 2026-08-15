@@ -59,8 +59,10 @@ import {
   findProject,
   listProjects,
   readDaemonConfig,
+  projectLoomDir,
   readProjectConfig,
   registerProject,
+  unregisterProject,
   writeDaemonConfig,
   writeProjectConfig,
 } from "../core/registry.js";
@@ -822,6 +824,38 @@ export class LoomDaemon {
         }
         const info = registerProject(resolved, config.name);
         res.json({ project: info, config });
+      })();
+    });
+
+    /**
+     * Stop tracking a project. The opposite of POST /api/projects, which did
+     * not exist until now: you could point Notch at a directory and had no
+     * supported way to un-point it short of hand-editing ~/.loom/registry.json
+     * and restarting the daemon. `unregisterProject` was already sitting in
+     * core/registry.ts with no caller.
+     *
+     * Registry-only, deliberately. The project's `.loom/` — its config, its
+     * event log, its memory — stays exactly where it is, so re-adding the same
+     * directory later restores the whole history rather than starting a blank
+     * one. Deleting a run's record because someone tidied a list is not a
+     * trade this should make on the user's behalf; `rm -rf .loom` is theirs.
+     *
+     * The live runtime is closed first. Left open it keeps polling, holds its
+     * agents, and would happily write more events into a project the API has
+     * just said it no longer tracks.
+     */
+    app.delete("/api/projects/:id", (req, res) => {
+      void (async () => {
+        const id = String(req.params.id);
+        const info = listProjects().find((p) => p.id === id);
+        if (!info) return void res.status(404).json({ error: "no such project" });
+        const rt = this.runtimes.get(id);
+        if (rt) {
+          await rt.close();
+          this.runtimes.delete(id);
+        }
+        unregisterProject(id);
+        res.json({ removed: true, project: info, keptOnDisk: projectLoomDir(info.dir) });
       })();
     });
 

@@ -577,6 +577,7 @@ chain without naming anything.
 | `loom log [-f]` | Show (or follow) the project event log |
 | `loom costs` | Project spend: total + per-agent turns, $ and agent time |
 | `loom agents` / `loom projects` / `loom status` | Agent roster, project board, daemon health |
+| `loom projects --forget <id\|name>` | Stop tracking a project. Registry only — its `.loom/` (config, event log, memory) stays on disk, so adding the directory again restores the history |
 | `loom up [--tailnet] [--restart]` / `loom down` / `loom daemon` | Daemon lifecycle (`--tailnet` binds to your Tailscale IP) |
 | `loom pair` | QR deep link that pairs a phone (single-use token) |
 | `loom clients [--revoke <id>] [--ping]` | Paired devices: list, revoke, or send a test push |
