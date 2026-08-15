@@ -2,7 +2,7 @@
   "expo": {
     "name": "Notch",
     "slug": "notch",
-    "version": "0.2.0",
+    "version": "0.2.1",
     "scheme": "notch",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
