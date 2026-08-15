@@ -1217,6 +1217,24 @@ export class LoomDaemon {
         if (secret && req.query.token !== secret && req.headers["x-notch-secret"] !== secret) {
           return void res.status(401).json({ error: "unauthorized" });
         }
+        // No secret set is fine on loopback and nowhere else.
+        //
+        // This route sits in front of the bearer wall on purpose — Alertmanager
+        // posts here and has no Notch token — and its own secret was optional,
+        // which together meant a daemon started with --host or --tailnet served
+        // an unauthenticated endpoint that can quarantine an agent, move the
+        // baton, and append status events the shared brain then reads. On
+        // 127.0.0.1 that is a local-user-only capability and an acceptable
+        // default; reachable from a network it is a stranger steering the fleet.
+        // The comment on the auth bypass already said "set that secret whenever
+        // the daemon binds past localhost" — this makes it true rather than
+        // advisory, and says which variable to set instead of just refusing.
+        if (!secret && !isLoopbackHost(this.host)) {
+          return void res.status(401).json({
+            error:
+              "this daemon is not bound to localhost, so the webhook needs NOTCH_WEBHOOK_SECRET set",
+          });
+        }
         const body = (req.body ?? {}) as Record<string, unknown>;
         const rawAlerts = Array.isArray(body.alerts) ? (body.alerts as Record<string, unknown>[]) : [body];
         const q = req.query as Record<string, string>;

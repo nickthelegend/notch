@@ -89,15 +89,26 @@ Each view is named for the question it answers, and says so in a line under the 
 | **Self-heal** | what SigNoz told Notch, and what Notch *did about it* — every alert episode as a row: which agent was taken out of rotation, when, who the baton moved to, and whether it was handed back. This is the half SigNoz cannot show you: SigNoz knows the alert fired, only Notch knows the fleet reacted. A **Lift** button releases a paused agent by hand | alert webhook + event log |
 | **Timeline** | the chronological trace — turns, handoffs, routes, memory folds, errors, 💡 **decisions**, budget pauses, MCP attach, and the **self-heal** intervention/recovery lines | event log |
 | **Decisions** | a filterable **Decision Explorer** — every agent choice as a card, with reason, alternatives, files, and how each decision was extracted (a measured confidence and a pattern match are not shown as the same claim) | decisions store |
-| **Logs** | the fleet's structured logs read back **out of SigNoz** — every message, tool call, file edit and error at the severity it was recorded, filterable by severity and text. A line belonging to a turn carries its **trace**, so you can jump from a log line to the span that produced it. The one view with no local fallback: if ClickHouse isn't answering it says so, rather than showing an empty list that looks like a quiet run | SigNoz / ClickHouse |
+| **Logs** | the fleet's structured logs read back **out of SigNoz** — every message, tool call, file edit and error at the severity it was recorded, filterable by severity and text. A line belonging to a turn carries its **trace**, so you can jump from a log line to the span that produced it. One of the views with **no local fallback** (the Metric Explorer and the burn series have none either): if ClickHouse isn't answering it says so, rather than showing an empty list that looks like a quiet run | SigNoz / ClickHouse |
 | **Replay** | scrub the whole run: at any moment, who held the baton, every agent's state, decisions so far, the thread — *and* the turn that was running then, with its model, duration, tokens, cost and trace. Play / step controls | folded event log + spans |
 
 **Decision capture.** After each turn, Notch mines the agent's prose into structured decisions
-(category, reasoning, confidence, alternatives, files) — via the Anthropic API when
-`ANTHROPIC_API_KEY` is set, a deterministic regex fallback otherwise. They power the Decisions
-Explorer, the Timeline's 💡 lines, and the Time-Travel snapshots.
+(category, reasoning, confidence, alternatives, files), through whichever extractor the machine
+actually has — **three** tiers, in descending order of how far the confidence number can be
+trusted:
 
-Three features read the spans **back out of SigNoz** — this is the agent-native part:
+1. the **Anthropic API**, when `ANTHROPIC_API_KEY` is set;
+2. failing that, a **local agent CLI** driven headlessly — `agy --print` if Antigravity is
+   installed, else `claude -p`. Worth knowing about: this tier is the default, so a machine
+   with no API key still shells out to a model and **spends real tokens** on every turn.
+   `NOTCH_DECISIONS_NO_CLI=1` turns it off;
+3. failing that, a deterministic **regex**, which carries no confidence at all rather than
+   stamping an invented percentage.
+
+They power the Decisions Explorer, the Timeline's 💡 lines, and the Time-Travel snapshots.
+
+Reading the spans **back out of SigNoz** is the agent-native part — Metrics, Logs, burn, the
+Metric Explorer and Replay all do it. Three go further than rendering what they read:
 
 - **Agent Health Score (0–100).** A per-agent badge from a pure, unit-tested formula over the
   agent's own spans: four penalty buckets (error rate ≤40, latency ≤25, token bloat ≤20, recent
@@ -207,8 +218,12 @@ Every span carries `service.name = notch`, plus `notch.project` and `notch.chat`
 ### LLM cost tracer
 
 Notch tracks **cost and tokens per agent** — turns, spend, input/output tokens — read straight
-from what each CLI reports (Claude Code's `result` usage, Codex's `turn.completed`, OpenCode's
-message tokens; cost-only adapters stay honestly at zero). It's exposed at
+from what each CLI reports, and reports nothing where a CLI reports nothing. **Claude Code**
+(`result` usage) and **OpenCode** (message tokens) hand over both cost *and* tokens.
+**Codex** (`turn.completed`) and **Grok** hand over **tokens only**, so their spend stays at
+zero rather than being back-derived from a price table we'd have to keep current. The
+**Antigravity CLI** hands over neither, so its turns carry a model and a duration and no
+numbers. It's exposed at
 `GET /api/projects/:id/metrics` and shipped to SigNoz as the `gen_ai.usage.*` span attributes.
 
 ### Point it at your SigNoz, or turn it off
@@ -247,9 +262,14 @@ npm test -- observability-export   # end-to-end: daemon turns → collector span
 
 ## Codex & GPT‑5.6
 
-Notch is built around orchestrating **OpenAI Codex** as a first‑class agent — and in this
-build every Codex turn runs **GPT‑5.6**: Codex's model, pinned in Notch's per‑project agent
-config (`.loom/config.json` → `codex → model: "gpt-5.6"`) at high reasoning effort.
+Notch is built around orchestrating **OpenAI Codex** as a first‑class agent, and Codex's own
+current models are the GPT‑5.6 family. Notch does not pin one for you: the adapter takes an
+optional `model` in the agent's `options`, and `.loom/config.json` is per‑machine and
+gitignored, so what a turn runs is whatever your Codex is set to unless you say otherwise.
+The in‑app model picker asks the CLI rather than shipping a stale list — on the machine this
+was built on, `codex debug models` answered `gpt-5.6-terra, gpt-5.6-luna, gpt-5.5,
+gpt-5.4-mini`. There is no reasoning‑effort setting on the Codex adapter (`--effort` exists
+on `antigravity-cli`, not here).
 
 - **Codex holds the baton like any other agent.** The adapter
   ([`src/adapters/codex.ts`](src/adapters/codex.ts)) drives `codex exec --json` headless:
@@ -260,18 +280,27 @@ config (`.loom/config.json` → `codex → model: "gpt-5.6"`) at high reasoning 
   unified memory (imported ADE memory + decisions + the thread) into its briefing; its
   replies and memory writes land back in the one shared store. So a handoff
   *Claude Code → Codex* carries the full context, and the next agent inherits what Codex
-  learned. *(Verified end‑to‑end: Codex recalled a value another agent set one turn
-  earlier, and its turns emit `run_complete` + `memory_add`.)*
-- **Voice, on real hardware.** On the physical **LoomPad** (an ESP32‑S3 macropad),
-  pressing the **Codex** key hands Codex the baton; hold the mic and speak → your words are
-  transcribed → sent to Codex (GPT‑5.6) → the reply is spoken back through the pad.
+  learned. *(What the test suite pins is the plumbing, not a live model:
+  [`test/codex.test.ts`](test/codex.test.ts) drives the adapter against a fake `codex` on
+  disk to hold the event parsing and thread resume in place, and
+  [`test/brain-shared.test.ts`](test/brain-shared.test.ts) proves the cross‑agent brief with
+  a stub extractor. Whether a real Codex recalls a real value across a handoff is something
+  to check on your own machine.)*
+- **Voice, on real hardware — designed, not shipped.** The **LoomPad** is a physical
+  ESP32‑S3 macropad whose intended loop is: press the **Codex** key to hand Codex the baton,
+  hold the mic and speak, hear the reply spoken back through the pad. What exists in this
+  repo is the enclosure — [`hardware/orchestrator-pad/`](hardware/orchestrator-pad/README.md)
+  ships printable CAD, STLs and a sketch of the JSON protocol, and its own README still
+  lists firmware, the hand‑wire guide and the daemon‑side pairing flow as to-do. The daemon
+  has the proxy endpoints (`/api/loompad/health`, `/api/loompad/connect`), but the voice
+  backend they point at is not in this repo. You cannot reproduce this loop today.
 - **Codex as a dev agent, too.** Because Codex is a full agent, you can hand it real work
   inside Notch — `loom route ship "…"` routes *plan → Codex executes → review*, the brain
   flowing hop to hop.
 
-In short: **GPT‑5.6, via Codex, is one of the interchangeable minds Notch keeps in sync** —
-start a thread in Claude Code, hand it to Codex mid‑task, and it picks up with the whole
-shared context intact.
+In short: **Codex — and whichever GPT‑5.6 model it is running — is one of the interchangeable
+minds Notch keeps in sync.** Start a thread in Claude Code, hand it to Codex mid‑task, and it
+picks up with the whole shared context intact.
 
 ## Why
 
@@ -298,7 +327,10 @@ agents' **memory together** so work *continues* across them instead of forking.
 
 ## Install
 
-Requires **Node ≥ 22.5** (Notch's event log uses the built-in `node:sqlite`).
+Requires **Node ≥ 22.5** — `package.json` pins it because the event log's default store is
+the built-in `node:sqlite`. That's the supported floor, not an absolute wall: on a runtime
+without that module the log falls back to a portable JSONL store on its own (Electron's
+bundled Node is exactly that case, which is why `LOOM_NODE` exists).
 
 ```bash
 npm install -g notch          # → `notch` on your PATH
@@ -328,11 +360,14 @@ Surfaces, all talking to the same daemon:
 - **TUI / CLI** — `loom` (default), `loom chat`, `loom send`, …
 - **Desktop app (Notch Desktop)** — prebuilt for
   [**macOS**, **Linux**, and **Windows**](https://github.com/nickthelegend/notch/releases/latest)
-  (`.dmg` for Apple Silicon and Intel · `.AppImage` · `.deb` · `.exe`; the macOS dmg is ad-hoc signed, so right-click → **Open**
-  the first time), or build from [`desktop/`](desktop/README.md): `cd desktop && npm
+  (`.dmg` for Apple Silicon and Intel · `.AppImage` · `.deb` · `.exe`; the macOS dmg is
+  **unsigned** — there is no Developer ID identity on the release build — so right-click →
+  **Open** the first time, and the release ships `SHA256SUMS.txt` if you want to check what
+  you downloaded), or build from [`desktop/`](desktop/README.md): `cd desktop && npm
   install && npm start`. Either way it opens a native window that starts the daemon and
   pairs itself.
-- **Phone app (LoomPad)** — install the prebuilt
+- **Phone app (Notch for Android)** — not to be confused with the LoomPad, which is the
+  physical macropad above; the phone app is just **Notch**. Install the prebuilt
   [`notch-<version>-android.apk`](https://github.com/nickthelegend/notch/releases/latest) (allow unknown
   sources), open **Notch**, and **Scan QR code** from the desktop's *Connect a phone*.
   Voice input, per-prompt diffs, push. Or build from source
@@ -677,14 +712,17 @@ Getting it into the model's context is a different problem, and it depends on th
 
 | Agent | How the brain arrives | Strength |
 |---|---|---|
-| Claude Code | briefing via `--append-system-prompt` — the model *always* sees a summary (recent decisions + messages) plus a pointer to `.loom/memory/claude-code.md`, which it can Read | **strong** — the summary is guaranteed; the full file is one tool-call away |
+| Claude Code | briefing via `--append-system-prompt` — on the **first turn after a handoff** the model sees a summary (recent decisions + messages) plus a pointer to `.loom/memory/claude-code.md`, which it can Read | **strong** — that turn's summary is guaranteed; the full file is one tool-call away |
 | Grok Code | the briefing rides in `--rules`, Grok's real system-prompt channel, so `-p` stays your clean prompt | **strong** — `--rules` is a genuine system channel, not text in the turn |
 | Codex | no `--append-system-prompt` on `codex exec`, so the briefing rides in front of your prompt — **framed** as an unmissable `LOOM SESSION MEMORY — authoritative, read first` block | **reliable** — one prompt either way, but framed so it can't be mistaken for chatter |
 | OpenCode | no per-prompt system field on `/prompt`, so the same **framed** block is prepended to your prompt | **reliable** — delivered as an authoritative block, not loose text |
 | Antigravity, Kiro | nothing tells them the file exists — Notch types into their chat box, which is not a system prompt | **none** — a human has to open it |
 
-So: the **summary always lands**; the **full brain is an invitation**. An agent that
-ignores the pointer works from the summary alone. If you need something remembered for
+So: the **summary lands once per handoff** — the briefing is one-shot, armed when the baton
+moves and consumed by the very next turn — and the **full brain is an invitation**. An agent
+that ignores the pointer works from that one summary alone, and every turn after it has only
+what the agent itself carried forward. (The persistent `.loom/memory/<agent>.md` file is
+rewritten on every handoff and stays readable throughout.) If you need something remembered for
 certain, put it in a decision (`loom decision`) — decisions ride in the briefing itself.
 There's an opt-in eval (`LOOM_TEST_REAL=1`) that checks a real model actually *uses* an
 injected brief, and declines rather than invents when the brief is silent.
@@ -814,8 +852,15 @@ buzzes once, not five times). Verify with `loom clients --ping`.
   allow-listed to this machine's own addresses), and only when you ask. The tailnet is the
   trust boundary: device auth and E2E encryption come from Tailscale.
 - Every request needs a bearer token (`~/.loom/daemon.json`, mode 0600). Tokens are
-  256-bit random and compared in constant time; nothing state-changing is served before
-  the auth wall.
+  256-bit random and compared in constant time. **One route sits deliberately in front of
+  that wall**: `POST /api/webhooks/signoz`, because Alertmanager posts to it and has no
+  Notch token to carry. It has its own door instead — `NOTCH_WEBHOOK_SECRET`, sent as
+  `?token=` or `x-notch-secret`. Be clear about what that means: with no secret set and the
+  daemon on loopback the webhook is **open to any local user**, who could quarantine an
+  agent, move the baton, and append status events the shared brain then reads. That is the
+  same trust boundary as the local admin console below, and it is the default. Bound past
+  localhost (`--host`, `--tailnet`) with no secret set, the webhook refuses with a 401 that
+  names the variable, rather than serving a stranger the fleet's steering wheel.
 - **The local admin console.** A same-machine window bootstraps the admin token via
   `GET /api/bootstrap` — gated by *both* a loopback TCP peer *and* a loopback `Host` header
   (the second is the anti-DNS-rebinding check: a malicious page carries its own hostname,
@@ -826,15 +871,22 @@ buzzes once, not five times). Verify with `loom clients --ping`.
 - Pairing: `loom pair` (or the in-app button) mints a **short-lived (10 min), single-use**
   token as a QR. The device exchanges it for a long-lived client token. The pairing token
   rides in a URL *fragment* (`…/app#pair=…`), which browsers never put on the wire; the
-  client/admin token rides in the `Authorization` header (HTTP) and the WebSocket
-  **subprotocol** (never a URL query — so it stays out of history and proxy logs).
+  client/admin token rides in the `Authorization` header (HTTP) and, preferred, the
+  WebSocket **subprotocol**, so it stays out of history and proxy logs. The WebSocket
+  handshake does still accept `?token=` as a fallback, for the CLI and native clients that
+  can't set a subprotocol — those connections do put the token in a URL, where a proxy's
+  request-line log can catch it.
 - **What a paired client can do:** everything in the project, *including a real shell*
   (the terminal). Pairing a device therefore grants **arbitrary code execution as the
   daemon's user** — the shell is not confined to the project directory. That is the
   deliberate trade for a dev tool (bearer + tailnet is the boundary); pair only devices
-  you control. Paired clients are **not** admins, though: they can't mint pairing tokens
-  or open new network exposure — those need the admin token, which only the local console
-  or the CLI holds.
+  you control. Paired clients are **not** admins for most of this: minting a pairing token
+  and adding the phone-access listener both need the admin token, which only the local
+  console or the CLI holds. One gap is honest to name — `POST /api/loompad/funnel` carries
+  no admin check and runs `tailscale funnel`, so any paired client can put the LoomPad voice
+  backend's port on a public Funnel URL. Given the bullet above (a paired device already has
+  a shell as the daemon's user), it isn't the weakest link, but "paired clients can't open
+  new network exposure" would be the wrong thing to believe.
 - The daemon survives a bad turn: unhandled rejections and exceptions are caught and
   logged (Console + `~/.loom/daemon.log`) rather than taking every project down, and
   `SIGINT`/`SIGTERM` shut it down cleanly.
@@ -887,8 +939,8 @@ with its why: [ARCHITECTURE.md](ARCHITECTURE.md).
 }
 ```
 
-Roles are free text — `planner` and `reviewer` above are just the names this
-example chose, and the routes refer to them by those names. Claude Code options:
+Roles are free text — `planner` and `executor` above are just the names this
+example chose, and its `ship` route refers to them by those names. Claude Code options:
 `permissionMode` (default `acceptEdits`), `model`. OpenCode options:
 `model` (`"providerID/modelID"`, e.g. `"opencode/minimax-m2.5"` — **set this**: headless
 sessions don't inherit your TUI default), `agent`, `baseUrl` to reuse a running server.
@@ -920,11 +972,15 @@ npm run dev       # run the CLI from source (tsx)
 | `NOTCH_OTEL_ENDPOINT` / `OTEL_EXPORTER_OTLP_ENDPOINT` / `SIGNOZ_ENDPOINT` | OTLP collector base URL. Default `http://localhost:4318`. |
 | `SIGNOZ_INGESTION_KEY` / `SIGNOZ_ACCESS_TOKEN` | Sent as `signoz-access-token` for SigNoz Cloud. |
 | `NOTCH_CLICKHOUSE_URL` | ClickHouse HTTP for the read-back (triage/health/burn/replay). Default `http://localhost:8123`. |
-| `NOTCH_SIGNOZ_URL` | SigNoz **UI** base for the "View in SigNoz" / trace deep links. Default `http://localhost:8080`. |
+| `NOTCH_SIGNOZ_URL` | SigNoz **UI** base for the "View in SigNoz" / trace deep links. Default `http://localhost:8080` — **which is not where `scripts/signoz-up.sh` puts the UI.** That script publishes it on `8085`, so if you followed the quickstart, the default points at nothing and every deep link is dead. Set `NOTCH_SIGNOZ_URL=http://localhost:8085` (or `SIGNOZ_UI_PORT` when starting the stack, to match). |
 | `DO_NOT_TRACK=1` · `NOTCH_TELEMETRY_DISABLED=1` · `NOTCH_OTEL=0` | Any one opts out of all export. |
+| `NOTCH_OTEL_METRICS=0` / `NOTCH_OTEL_LOGS=0` | Drop just that signal while traces keep exporting. Both are on whenever export is on; only the literal value `0` turns one off. |
+| `NOTCH_SERVICE_NAME` | The `service.name` on every exported span, metric and log. Default `notch`. Change it and SigNoz files the fleet under a different service. |
 | `ANTHROPIC_API_KEY` | Enables LLM triage prose headlessly (else the signed-in `claude` CLI, else heuristic). |
 | `NOTCH_TRIAGE_MODEL` | Override the triage model. Default `claude-haiku-4-5-20251001`. |
-| `NOTCH_WEBHOOK_SECRET` | Shared secret required on `POST /api/webhooks/signoz` (via `?token=` or `x-notch-secret`). |
+| `NOTCH_TRIAGE_NO_LLM=1` | Skip both LLM paths in Self-Triage and answer from the deterministic heuristic. For tests, or an operator who wants no model in the loop. |
+| `NOTCH_DECISIONS_NO_CLI=1` | Skip the local-CLI tier of decision capture (`agy --print` / `claude -p`), leaving API-then-regex. Set it if you don't want the daemon shelling out to a model after every turn. |
+| `NOTCH_WEBHOOK_SECRET` | Shared secret for `POST /api/webhooks/signoz` (via `?token=` or `x-notch-secret`). **Optional while the daemon is on loopback, required once it binds past localhost** — without it, a non-loopback daemon answers that webhook with a 401. |
 | `NOTCH_HEAL_RECHECK_MS` | Self-heal recheck interval. Default `60000`. |
 | `NOTCH_HEAL_MAX_RETRIES` | Self-heal recheck attempts before giving up. Default `3`. |
 | `NOTCH_HEAL_DISABLED=1` | Turn off the background recheck loop (the resolved-alert fast lane still works). |
@@ -935,7 +991,8 @@ your shell profile can tell it's running in Notch's pane. (`LOOM_EXPO_PUSH_URL` 
 
 ## Roadmap
 
-- Tasks beyond GitHub and Linear — GitLab sits disabled in the provider row today.
+- Tasks beyond GitHub and Linear — the board's source row is GitHub / Projects / Linear
+  today. GitLab is not in it at all; only its brand mark is in the icon set.
 - More adapters/bridges via the SDK — contributions welcome.
 
 ## Design

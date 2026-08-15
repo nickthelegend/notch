@@ -1039,11 +1039,25 @@ function TimelineView(props: { events: Res<{ events: LoomEvent[] }> }) {
                   }}
                 />
                 <Text
+                  // minWidth 0 and a line cap, because one unbreakable string
+                  // was moving the whole tab. A real event body carries an OAuth
+                  // URL with no break opportunity; its min-content width is
+                  // 397px, and a flex child defaults to min-width:auto, so it
+                  // refuses to shrink below that inside a 375px column. The list
+                  // then shifted to left:-28px — status dots clipped off the
+                  // left, elapsed-time column pushed to x:434 and unreachable,
+                  // since the container hides overflow rather than scrolling it.
+                  // Every row on the tab degraded, not just the long one.
+                  // (overflow-wrap:break-word does not help: it doesn't reduce
+                  // min-content width.) LogRow already caps the same URL this
+                  // way; Timeline was the one place that didn't.
+                  numberOfLines={4}
                   style={{
                     color: r.color,
                     fontSize: 12,
                     lineHeight: 18,
                     flex: 1,
+                    minWidth: 0,
                     fontFamily: T.mono,
                     fontWeight: r.bold ? "700" : "400",
                   }}
