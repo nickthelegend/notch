@@ -8570,6 +8570,10 @@ ${BRAND_SPRITE}
     clearShell();
     var m = location.hash.match(/^#p\\/(.+)$/);
     var cur = m ? m[1] : null;
+    // The project the URL asked for, kept separately from the one on screen so
+    // a deep link that loses the race with the first /api/projects can still be
+    // honoured when it arrives. select() clears it - see refresh().
+    var wanted = cur;
     root.innerHTML =
       '<div class="dshell">' +
       '<aside class="sidebar">' +
@@ -8965,6 +8969,8 @@ ${BRAND_SPRITE}
     }
     function select(pid){
       cur = pid;
+      wanted = null; // whatever the URL wanted, this is a real choice now
+
       history.replaceState(null, "", "#p/" + pid);
       renderProject(pid, dmain, true);
       drawList();
@@ -8990,6 +8996,20 @@ ${BRAND_SPRITE}
         if (!state.projects.length) { drawList(); drawEmpty(); drawStatusbar(); return; }
         var exists = state.projects.some(function(p){ return p.id === cur; });
         if (!document.getElementById("feed")) select(cur && exists ? cur : state.projects[0].id);
+        // The deep link, honoured late.
+        //
+        // A link to a project this client has never listed — one just created,
+        // or a URL from another device — loses a race: the first /api/projects
+        // reply doesn't contain it, the exists check is false, and it quietly
+        // opens projects[0] instead. The project then turns up in the sidebar a
+        // poll later while the address bar still reads #p/<the other one>, and
+        // you are looking at a project you did not ask for with no sign that
+        // anything went wrong. Caught it pointing a fresh link at a
+        // seconds-old project and getting somebody else's fleet.
+        //
+        // wanted is cleared by select(), so this fires at most once and never
+        // yanks the view back after you have clicked somewhere yourself.
+        else if (wanted && wanted !== cur && state.projects.some(function(p){ return p.id === wanted; })) select(wanted);
         else drawList();
         drawStatusbar();
       }).catch(function(err){ toast(err.message); });
