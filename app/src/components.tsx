@@ -257,7 +257,12 @@ export function Segmented<K extends string>(props: {
       style={{
         flexDirection: "row",
         flexWrap: "wrap",
-        gap: 6,
+        // 5px/12px rather than 6px/13px, and the two pixels are load-bearing. Measured at
+        // a 375px viewport: the log severity filter (All / ERROR / WARN / INFO / DEBUG)
+        // laid out to 351.3px inside the 349px a Panel leaves it, so DEBUG wrapped to a
+        // second row for the sake of 2.3px. At these values the same row is 337px, with
+        // ~12px of headroom for a device whose font metrics differ slightly.
+        gap: 5,
         paddingHorizontal: spacing.md,
         paddingVertical: 8,
       }}
@@ -274,7 +279,7 @@ export function Segmented<K extends string>(props: {
             style={{
               minHeight: 34,
               justifyContent: "center",
-              paddingHorizontal: 13,
+              paddingHorizontal: 12,
               borderRadius: radii.pill,
               backgroundColor: on ? T.raised : "transparent",
               borderWidth: 1,

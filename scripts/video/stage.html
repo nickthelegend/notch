@@ -1,0 +1,235 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>notch — phone stage</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 1920px; height: 1080px; overflow: hidden;
+    background: #0b0b0b;
+    font-family: -apple-system, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+  }
+  /* A soft vignette so the phone reads as lit rather than pasted on. */
+  #bg {
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(900px 700px at 62% 44%, #1c1c1e 0%, #121213 45%, #0b0b0b 100%);
+  }
+  #wrap { position: absolute; inset: 0; display: flex; align-items: center; }
+
+  /* ---- left column: what the viewer should be looking at ---- */
+  #copy {
+    position: absolute; left: 132px; top: 50%; transform: translateY(-50%);
+    width: 660px;
+  }
+  #eyebrow {
+    font-size: 19px; letter-spacing: .16em; text-transform: uppercase;
+    color: #7c7c85; font-weight: 600; margin-bottom: 22px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  #headline {
+    font-size: 61px; line-height: 1.08; font-weight: 700; color: #f4f4f5;
+    letter-spacing: -0.02em;
+  }
+  #headline .hl { color: #a78bfa; }
+  #sub {
+    margin-top: 26px; font-size: 25px; line-height: 1.45; color: #9b9ba4;
+    font-weight: 400; max-width: 600px;
+  }
+  #metric {
+    margin-top: 40px; display: none; align-items: baseline; gap: 16px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  #metric.on { display: flex; }
+  #metric .was { font-size: 40px; color: #6b6b73; text-decoration: line-through; }
+  #metric .arrow { font-size: 30px; color: #6b6b73; }
+  #metric .now { font-size: 52px; color: #34d399; font-weight: 700; }
+  #metric .unit { font-size: 21px; color: #7c7c85; }
+
+  /* ---- right: the phone ---- */
+  #phone {
+    position: absolute; right: 208px; top: 50%; transform: translateY(-50%);
+    width: 399px; height: 836px;
+    background: #000; border-radius: 54px;
+    border: 12px solid #232326;
+    box-shadow:
+      0 60px 120px rgba(0,0,0,.62),
+      0 0 0 1px rgba(255,255,255,.05),
+      inset 0 0 0 1px rgba(255,255,255,.04);
+    overflow: hidden;
+  }
+  #screen { position: absolute; inset: 0; border-radius: 42px; overflow: hidden; background: #111; }
+  iframe { width: 375px; height: 812px; border: 0; display: block; }
+  /* The notch, because the product is called notch. */
+  #notch {
+    position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+    width: 132px; height: 27px; background: #000;
+    border-bottom-left-radius: 15px; border-bottom-right-radius: 15px;
+    z-index: 5;
+  }
+
+  /* ---- a ring that pulses where a tap lands ---- */
+  #tap {
+    position: absolute; width: 62px; height: 62px; margin: -31px 0 0 -31px;
+    border-radius: 50%; border: 3px solid rgba(167,139,250,.95);
+    background: rgba(167,139,250,.16);
+    opacity: 0; pointer-events: none; z-index: 40;
+  }
+  #tap.fire { animation: ping .5s ease-out forwards; }
+  @keyframes ping {
+    0%   { opacity: 1; transform: scale(.35); }
+    70%  { opacity: .8; transform: scale(1.05); }
+    100% { opacity: 0; transform: scale(1.35); }
+  }
+
+  /* ---- the pointer ---- */
+  #cursor {
+    position: absolute; width: 30px; height: 30px; z-index: 50;
+    pointer-events: none; margin: -3px 0 0 -3px;
+    filter: drop-shadow(0 3px 7px rgba(0,0,0,.75));
+    transition: left .42s cubic-bezier(.33,.9,.3,1), top .42s cubic-bezier(.33,.9,.3,1);
+    left: 1500px; top: 980px;
+  }
+
+  /* ---- a box drawn around the thing being talked about ---- */
+  #spot {
+    position: absolute; z-index: 35; pointer-events: none;
+    border: 2.5px solid #34d399; border-radius: 13px;
+    box-shadow: 0 0 0 6px rgba(52,211,153,.16), 0 0 26px rgba(52,211,153,.32);
+    opacity: 0; transition: opacity .22s ease;
+  }
+  #spot.on { opacity: 1; }
+
+  /* ---- caption strip ---- */
+  #cap {
+    position: absolute; left: 0; right: 0; bottom: 54px;
+    text-align: center; z-index: 60; opacity: 0; transition: opacity .2s ease;
+  }
+  #cap.on { opacity: 1; }
+  #cap span {
+    display: inline-block; padding: 15px 32px; border-radius: 13px;
+    background: rgba(10,10,11,.9); border: 1px solid #2c2c31;
+    color: #ededf0; font-size: 27px; font-weight: 500; letter-spacing: -0.01em;
+  }
+</style>
+
+<div id="bg"></div>
+<div id="wrap">
+  <div id="copy">
+    <div id="eyebrow">notch · phone</div>
+    <div id="headline"></div>
+    <div id="sub"></div>
+    <div id="metric">
+      <span class="was" id="mWas"></span>
+      <span class="arrow">→</span>
+      <span class="now" id="mNow"></span>
+      <span class="unit" id="mUnit"></span>
+    </div>
+  </div>
+
+  <div id="phone">
+    <div id="screen"><iframe id="app" src="/"></iframe></div>
+  </div>
+</div>
+
+<div id="spot"></div>
+<div id="tap"></div>
+<div id="cap"></div>
+<svg id="cursor" viewBox="0 0 24 24" fill="none">
+  <path d="M5.5 2.5 L5.5 19.2 L9.6 15.2 L12.3 21.4 L15.1 20.1 L12.5 14.1 L18.2 14.1 Z"
+        fill="#fff" stroke="#111" stroke-width="1.3" stroke-linejoin="round"/>
+</svg>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const phone = $('phone'), cursor = $('cursor'), spot = $('spot'), cap = $('cap');
+
+  // Where the iframe's own coordinate space sits on the 1920x1080 stage.
+  function stageOrigin() {
+    const r = $('screen').getBoundingClientRect();
+    return { x: r.left, y: r.top };
+  }
+
+  const api = {
+    doc: () => $('app').contentDocument,
+
+    say(headline, sub) {
+      $('headline').innerHTML = headline;
+      $('sub').textContent = sub || '';
+    },
+
+    metric(was, now, unit) {
+      if (was === null) { $('metric').classList.remove('on'); return; }
+      $('mWas').textContent = was; $('mNow').textContent = now; $('mUnit').textContent = unit || '';
+      $('metric').classList.add('on');
+    },
+
+    caption(text) {
+      if (!text) { cap.classList.remove('on'); return; }
+      cap.innerHTML = '<span>' + text + '</span>';
+      cap.classList.add('on');
+    },
+
+    /** Find an element inside the app by exact trimmed text. */
+    find(text, tags) {
+      const d = api.doc();
+      if (!d) return null;
+      const sel = tags || 'div,span,button';
+      const hits = [...d.querySelectorAll(sel)].filter(
+        (e) => (e.innerText || '').trim() === text,
+      );
+      return hits[hits.length - 1] || null;
+    },
+
+    /** Move the visible pointer over an element in the app. */
+    point(el) {
+      if (!el) return false;
+      const r = el.getBoundingClientRect(), o = stageOrigin();
+      cursor.style.left = (o.x + r.left + r.width / 2) + 'px';
+      cursor.style.top = (o.y + r.top + r.height / 2) + 'px';
+      return true;
+    },
+
+    /** React Native Web listens to the responder system, not synthetic clicks. */
+    tap(el) {
+      if (!el) return false;
+      const r = el.getBoundingClientRect(), o = stageOrigin();
+      const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+
+      const t = $('tap');
+      t.style.left = (o.x + cx) + 'px';
+      t.style.top = (o.y + cy) + 'px';
+      t.classList.remove('fire'); void t.offsetWidth; t.classList.add('fire');
+
+      const w = $('app').contentWindow;
+      const opt = { bubbles: true, cancelable: true, clientX: cx, clientY: cy,
+                    pointerId: 1, pointerType: 'touch', isPrimary: true, button: 0, buttons: 1 };
+      const touch = () => new w.Touch({ identifier: 1, target: el, clientX: cx, clientY: cy });
+      el.dispatchEvent(new w.PointerEvent('pointerdown', opt));
+      el.dispatchEvent(new w.TouchEvent('touchstart', { bubbles: true, cancelable: true,
+        touches: [touch()], targetTouches: [touch()], changedTouches: [touch()] }));
+      el.dispatchEvent(new w.PointerEvent('pointerup', { ...opt, buttons: 0 }));
+      el.dispatchEvent(new w.TouchEvent('touchend', { bubbles: true, cancelable: true,
+        touches: [], targetTouches: [], changedTouches: [touch()] }));
+      el.dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
+      return true;
+    },
+
+    /** Draw the highlight box around an element in the app (or clear it). */
+    highlight(el, pad) {
+      if (!el) { spot.classList.remove('on'); return false; }
+      const r = el.getBoundingClientRect(), o = stageOrigin(), p = pad == null ? 6 : pad;
+      spot.style.left = (o.x + r.left - p) + 'px';
+      spot.style.top = (o.y + r.top - p) + 'px';
+      spot.style.width = (r.width + p * 2) + 'px';
+      spot.style.height = (r.height + p * 2) + 'px';
+      spot.classList.add('on');
+      return true;
+    },
+
+    parkCursor() { cursor.style.left = '1500px'; cursor.style.top = '980px'; },
+  };
+
+  window.stage = api;
+  window.__ready = true;
+</script>
