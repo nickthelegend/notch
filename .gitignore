@@ -23,3 +23,6 @@ references/
 
 # installed agent skills (add via: npx skills add SigNoz/agent-skills)
 .agents/
+
+# Foundry generates these from casting.yaml; the lock and pours/ are committed
+# so a judge can diff what they forge against what we forged.
