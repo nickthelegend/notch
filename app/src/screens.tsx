@@ -630,9 +630,17 @@ export function BoardScreen(props: {
 type Tab = "thread" | "observatory" | "noz" | "tasks" | "changes" | "tools";
 
 /**
- * Six tabs no longer fit across a phone, so the strip scrolls. The labels stay
- * short for the same reason — "Observatory" is already the longest thing that
- * can sit here without pushing everything else off the edge.
+ * Six tabs, and they have to fit across a phone without a swipe.
+ *
+ * Measured in the browser at a 375px viewport: at a 16px gap the strip laid out
+ * to 404px, so "Tools" was clipped to "Too" and the sixth destination was only
+ * reachable by swiping a bar that gave no sign it moved. An 8px gap brings it to
+ * 364px — inside 375, and still inside the 360px Androids — so every tab is a
+ * tap. The strip stays scrollable as the fallback for a narrower device or
+ * scaled-up system text, but it is no longer the normal case.
+ *
+ * The labels stay short for the same reason: "Observatory" is already the
+ * longest thing that can sit here without pushing everything else off the edge.
  */
 const TABS: ReadonlyArray<{ key: Tab; label: string; accent?: string }> = [
   { key: "thread", label: "Thread" },
@@ -887,7 +895,7 @@ export function ProjectScreen(props: { creds: Creds; project: Project; onBack: (
           horizontal
           showsHorizontalScrollIndicator={false}
           style={{ flexGrow: 0 }}
-          contentContainerStyle={{ paddingHorizontal: spacing.md, gap: spacing.lg, alignItems: "stretch" }}
+          contentContainerStyle={{ paddingHorizontal: spacing.md, gap: spacing.sm, alignItems: "stretch" }}
         >
           {TABS.map((t) => (
             <TouchableOpacity

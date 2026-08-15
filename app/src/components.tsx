@@ -218,7 +218,34 @@ export function Empty(props: { text: string }) {
   );
 }
 
-/** A horizontally scrolling pill row — the sub-view switcher for every new tab. */
+/**
+ * The sub-view switcher: every tab visible at once, nothing behind a swipe.
+ *
+ * This used to be a horizontally scrolling pill row, and on the Observatory that
+ * quietly hid half the product. Measured in the browser at a 375px viewport: the
+ * eight Observatory pills lay out to 686px, so 311px — Timeline, Decisions, Logs
+ * and Replay — began past the right edge. With showsHorizontalScrollIndicator
+ * set to false there was nothing on screen suggesting they existed, so you saw
+ * four tabs and reasonably concluded that was the whole set. Two finished
+ * features, reachable only by guess-swiping a strip that gave no sign it moved.
+ *
+ * An earlier attempt kept the scroller and added an edge fade plus scroll-into-
+ * view on select. Both worked, and it was still the wrong shape: a 25px gradient
+ * is a very quiet way to announce 311px of hidden content, and the tabs stayed a
+ * swipe away rather than a tap away.
+ *
+ * So the row wraps instead. Pills flow onto as many lines as they need, every
+ * option is on screen, and selecting one is always a single tap. On the
+ * Observatory that costs one extra line of chrome — the strip goes from ~50px to
+ * ~92px on an 812px screen — to make four hidden views discoverable, which is a
+ * trade worth making every time. Call sites with two or five options (the sheet
+ * mode picker, the log severity filter) already fit on one line and are visually
+ * unchanged; this only expands where the alternative was concealment.
+ *
+ * Nothing here scrolls, so there is no scroll position to keep in sync, no
+ * scroll-into-view effect and no edge affordance to maintain. The component got
+ * smaller as it got better, which is usually the sign the shape was wrong before.
+ */
 export function Segmented<K extends string>(props: {
   options: ReadonlyArray<{ key: K; label: string }>;
   value: K;
@@ -226,11 +253,14 @@ export function Segmented<K extends string>(props: {
   accent?: string;
 }) {
   return (
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      style={{ flexGrow: 0 }}
-      contentContainerStyle={{ gap: 6, paddingHorizontal: spacing.md, paddingVertical: 8 }}
+    <View
+      style={{
+        flexDirection: "row",
+        flexWrap: "wrap",
+        gap: 6,
+        paddingHorizontal: spacing.md,
+        paddingVertical: 8,
+      }}
     >
       {props.options.map((o) => {
         const on = o.key === props.value;
@@ -257,7 +287,7 @@ export function Segmented<K extends string>(props: {
           </TouchableOpacity>
         );
       })}
-    </ScrollView>
+    </View>
   );
 }
 
