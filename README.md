@@ -122,6 +122,13 @@ between the brain and whoever holds it:
 
 ![Observatory Live fleet — six agents connected to the one shared brain, baton on claude-code](docs/screenshots/observatory-livefleet.png)
 
+**Self-heal** — what SigNoz told Notch and what Notch *did about it*. The top row is one
+complete episode: a `AgentErrorRateHigh` alert fired against the agent holding the baton, the
+baton moved to `claude-code`, the alert resolved 17 seconds later, and the baton was handed
+back — SigNoz knew the alert fired, only Notch knows the fleet reacted:
+
+![Observatory Self-heal — alert episodes with the agent quarantined, the failover, and the recovery](docs/screenshots/observatory-selfheal.png)
+
 **Logs** — the fleet's structured logs read back out of SigNoz, each line carrying the trace
 of the turn that produced it:
 
