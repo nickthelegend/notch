@@ -52,7 +52,14 @@ import { ToolsView } from "./tools";
 import { useStt } from "./stt";
 import { T, radii, spacing, usd } from "./theme";
 
-/** Brand lockup: the wordmark over a short thread-cyan hairline. */
+/**
+ * Brand lockup: the wordmark over a short hairline.
+ *
+ * Said "loom" until now, which is the CLI binary's name, not the product's. The
+ * desktop has rendered it as no|tch with the second half accented since the
+ * rename; the phone was the last surface still shipping the old mark, and it
+ * was visible in the header of every screen.
+ */
 function Wordmark(props: { size?: number }) {
   const size = props.size ?? 17;
   return (
@@ -65,7 +72,7 @@ function Wordmark(props: { size?: number }) {
           letterSpacing: -0.3,
         }}
       >
-        loom
+        no<Text style={{ color: T.primary }}>tch</Text>
       </Text>
       <View
         style={{
@@ -161,7 +168,7 @@ export function PairScreen(props: { onPaired: (c: Creds) => void }) {
           letterSpacing: -0.3,
         }}
       >
-        loom
+        no<Text style={{ color: T.primary }}>tch</Text>
       </Text>
       <View
         style={{
