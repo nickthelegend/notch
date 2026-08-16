@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { projectChecks } from "../src/cli/doctor.js";
+import { diskVerdict, projectChecks } from "../src/cli/doctor.js";
 import { writeProjectConfig, writeProjectState } from "../src/core/registry.js";
 import type { ProjectConfig } from "../src/types.js";
 import { makeProjectDir, tmpDir } from "./helpers.js";
@@ -76,5 +76,39 @@ describe("loom doctor — project checks", () => {
     expect(
       checks.some((c) => c.name === "agents" && c.status === "fail" && c.detail.includes("no full-duplex")),
     ).toBe(true);
+  });
+});
+
+/**
+ * The disk check exists because a full disk does not announce itself.
+ *
+ * On this machine it took out process spawning, the container runtime and the
+ * test suite one after another, and every symptom pointed elsewhere — spawn
+ * failures, a graph node that exited "cleanly", dozens of test failures whose
+ * files all passed in isolation. `loom doctor` said nothing, because it never
+ * looked. These assert the wording of both unhappy branches, which are the two
+ * nobody sees until the day they matter.
+ */
+describe("disk pressure", () => {
+  it("passes with room to spare", () => {
+    const c = diskVerdict(50 * 1024 * 1024, "/System/Volumes/Data");
+    expect(c.status).toBe("ok");
+    expect(c.detail).toContain("50.0 GB free");
+  });
+
+  it("warns in the band where a test run will exhaust it", () => {
+    const c = diskVerdict(1.4 * 1024 * 1024, "/System/Volumes/Data");
+    expect(c.status).toBe("warn");
+    expect(c.detail).toContain("1.4 GB free");
+    // Naming the macOS trap is the point: pruning inside Docker looks like it
+    // worked and returns nothing to the host.
+    expect(c.detail).toMatch(/Docker/);
+  });
+
+  it("fails below the point where spawning a process breaks", () => {
+    const c = diskVerdict(300 * 1024, "/System/Volumes/Data");
+    expect(c.status).toBe("fail");
+    expect(c.detail).toContain("300 MB free");
+    expect(c.detail).toMatch(/spawning a process/);
   });
 });

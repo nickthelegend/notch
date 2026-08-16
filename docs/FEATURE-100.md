@@ -125,12 +125,12 @@ a feature).
 | 91 | Entity prefix resolver refuses a 1-character prefix instead of returning noise | ✅ |
 | 92 | Editing an action keeps its run count instead of minting a second row | ✅ |
 | 93 | Reduced-motion audit across every animation | ◻︎ |
-| 94 | Offline banner when the daemon goes away mid-session | ◻︎ |
+| 94 | Offline banner when the daemon goes away mid-session | ✅ |
 | 95 | Action run while no project is open — explain, don't no-op | ◻︎ |
 | 96 | Long action names truncate rather than break the popover grid | ✅ |
-| 97 | Council with one agent — say so instead of claiming consensus | ◻︎ |
+| 97 | Council with one agent — say so instead of claiming consensus | ✅ |
 | 98 | Explorer right-click on a directory (currently files only) | ◻︎ |
-| 99 | Disk-pressure diagnosis in `loom doctor` | ◻︎ |
+| 99 | Disk-pressure diagnosis in `loom doctor` | ✅ |
 | 100 | Action import/export as JSON, so a fleet's templates are portable | ◻︎ |
 
 ---

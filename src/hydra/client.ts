@@ -253,6 +253,12 @@ function isRetryable(err: unknown): boolean {
 }
 
 export class HydraClient {
+  /** Set by every query so `observedHealth()` never needs a round trip. */
+  private lastOkAt = 0;
+  private lastErrorAt = 0;
+  private lastAttemptAt = 0;
+  private lastErrorDetail = "";
+
   readonly cfg: HydraConfig;
   /** Last write's bookmark; sent with causal reads so they see our own writes. */
   private lastBookmark: string | null = null;
@@ -364,6 +370,28 @@ export class HydraClient {
    * So the probe writes. The heartbeat row is upserted rather than appended, so
    * this costs one row forever rather than one per check.
    */
+  /**
+   * What the last real query did, without running another one.
+   *
+   * The daemon can be perfectly healthy while the graph underneath it is gone —
+   * that happened here: the node process exited, the WebSocket stayed open, the
+   * status bar kept saying "live", and the first anyone knew was a CLI command
+   * failing minutes later. A pill needs an answer on every poll, and a poll that
+   * costs a round trip to the thing that might be down is the wrong shape. So
+   * this reports what the traffic already flowing through the client observed.
+   *
+   * `null` means nothing has been attempted yet — which is not the same as
+   * healthy, and is rendered differently.
+   */
+  observedHealth(): { reachable: boolean | null; since: number; detail: string } {
+    if (!this.lastAttemptAt) return { reachable: null, since: 0, detail: "no query yet" };
+    return {
+      reachable: this.lastErrorAt <= this.lastOkAt,
+      since: Math.max(this.lastOkAt, this.lastErrorAt),
+      detail: this.lastErrorAt > this.lastOkAt ? this.lastErrorDetail : "answering",
+    };
+  }
+
   async ping(): Promise<{ ok: boolean; detail: string; writable: boolean }> {
     let seq = 0;
     try {
@@ -493,17 +521,28 @@ export class HydraClient {
   private async withRetry<T>(fn: () => Promise<T>, opts: QueryOpts, cypher: string): Promise<T> {
     const attempts = Math.max(1, opts.retries ?? 4);
     let lastErr: unknown;
+    // Every query in the process funnels through here, so this is the one place
+    // that sees whether the node is answering — see `observedHealth()`.
+    this.lastAttemptAt = Date.now();
     for (let attempt = 0; attempt < attempts; attempt++) {
       try {
-        return await fn();
+        const out = await fn();
+        this.lastOkAt = Date.now();
+        return out;
       } catch (err) {
         lastErr = err;
-        if (!isRetryable(err) || attempt === attempts - 1) throw err;
+        if (!isRetryable(err) || attempt === attempts - 1) {
+          this.lastErrorAt = Date.now();
+          this.lastErrorDetail = err instanceof Error ? err.message.slice(0, 200) : String(err);
+          throw err;
+        }
         const backoff = Math.min(2_000, 40 * 2 ** attempt) * (0.5 + Math.random());
         this.retried++;
         await new Promise((r) => setTimeout(r, backoff));
       }
     }
+    this.lastErrorAt = Date.now();
+    this.lastErrorDetail = lastErr instanceof Error ? lastErr.message.slice(0, 200) : String(lastErr);
     throw lastErr;
   }
 

@@ -412,12 +412,17 @@ export class LoomDaemon {
       }
     });
     app.get("/api/health", (_req, res) => {
+      // The graph's observed state rides along, because a healthy daemon over a
+      // dead graph is the failure this endpoint used to hide: the node exited,
+      // the WebSocket stayed open, and the status bar kept saying "live". It is
+      // read from traffic that already happened, so polling this stays free.
       res.json({
         ok: true,
         name: "loom",
         version: "0.1.0",
         rev: BUILD_REV,
         terminal: this.terminals.mode,
+        graph: hydra().observedHealth(),
       });
     });
 

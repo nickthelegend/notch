@@ -6,6 +6,7 @@
 
 import { execFile } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { createAgent, knownAgentKinds } from "../adapters/index.js";
 import { setupReport } from "../core/setup.js";
@@ -19,6 +20,64 @@ export interface Check {
   name: string;
   status: "ok" | "warn" | "fail";
   detail: string;
+}
+
+/**
+ * How much room is left where Loom actually writes.
+ *
+ * Three places matter and they are usually the same volume: the home directory
+ * (`~/.loom`, the registry, paired-device config), the system temp directory
+ * (every adapter's scratch space), and — on macOS — the Docker VM image behind
+ * the HydraDB node. `df` on the home directory covers all three in the common
+ * case, and naming the actual mount means a machine with them split still gets
+ * a truthful answer.
+ *
+ * The thresholds are set from what actually broke rather than a round number:
+ * below ~2 GB the graph node starts failing writes under a test run, and below
+ * ~500 MB process spawning itself fails.
+ */
+async function diskCheck(): Promise<Check> {
+  const home = os.homedir();
+  const out = await new Promise<string>((resolve) => {
+    execFile("df", ["-Pk", home], { timeout: 4000 }, (err, stdout) =>
+      resolve(err ? "" : String(stdout)),
+    );
+  });
+  const row = out.trim().split("\n")[1];
+  if (!row) return warn("disk", "could not read free space for " + home);
+  const cols = row.split(/\s+/);
+  // POSIX `df -Pk`: filesystem, 1K-blocks, used, available, capacity, mount
+  const availKb = Number(cols[3] ?? 0);
+  const mount = cols[5] ?? home;
+  if (!Number.isFinite(availKb) || availKb <= 0) {
+    return warn("disk", `could not parse free space for ${mount}`);
+  }
+  return diskVerdict(availKb, mount);
+}
+
+/**
+ * The verdict itself, separated from reading `df` so both unhappy branches can
+ * be tested. A threshold nobody has seen fire is a threshold nobody knows the
+ * wording of.
+ */
+export function diskVerdict(availKb: number, mount: string): Check {
+  const gb = availKb / 1024 / 1024;
+  const human = gb >= 1 ? `${gb.toFixed(1)} GB` : `${Math.round(availKb / 1024)} MB`;
+  if (gb < 0.5) {
+    return fail(
+      "disk",
+      `${human} free on ${mount} — this is below the point where spawning a process starts to fail. ` +
+        `Adapters, the terminal and the graph node will all fail in ways that do not mention the disk.`,
+    );
+  }
+  if (gb < 2) {
+    return warn(
+      "disk",
+      `${human} free on ${mount} — a test run or a busy graph node will exhaust this. ` +
+        `On macOS, Docker's VM image never shrinks, so pruning inside it will not give the space back.`,
+    );
+  }
+  return ok("disk", `${human} free on ${mount}`);
 }
 
 function ok(name: string, detail: string): Check {
@@ -196,6 +255,17 @@ export async function envChecks(): Promise<Check[]> {
         : warn(b.kind, b.reachable ? `${b.label} is up but not driveable — ${b.reason}` : `${b.reason}`),
     );
   }
+
+  // Free space, because running out of it does not look like running out of it.
+  //
+  // A full disk on this machine took out the shell, the container runtime and
+  // the test suite one after another, and every symptom pointed somewhere else:
+  // spawn failures, a graph node that exited "cleanly", 82 test failures whose
+  // files all passed in isolation. None of it said "disk". Docker on macOS makes
+  // it worse — its VM image only ever grows, so freeing space *inside* a
+  // container returns nothing to the host and the usual `docker system prune`
+  // reports success while the host stays full.
+  checks.push(await diskCheck());
 
   const tv = await version("tailscale");
   checks.push(tv !== null ? ok("tailscale", tv) : warn("tailscale", "not found — install Tailscale for phone access"));

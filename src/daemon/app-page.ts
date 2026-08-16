@@ -914,6 +914,8 @@ try{if(localStorage.getItem("loomTheme")==="light")document.documentElement.clas
   .cnexport{margin-left:10px;padding:2px 9px;border-radius:99px;border:1px solid var(--border);
     background:none;color:var(--muted-foreground);font:inherit;font-size:10.5px;cursor:pointer}
   .cnexport:hover{color:var(--foreground);border-color:var(--primary)}
+  .graphdown{border:0;background:none;font:inherit;cursor:default;color:var(--danger,#f87171)}
+  .graphdown .sdot{background:var(--danger,#f87171)}
   .ctxmenu{position:fixed;z-index:90;min-width:200px;padding:4px;border-radius:var(--radius-sm);
     border:1px solid var(--glass-border);background:var(--popover,var(--background));
     box-shadow:0 12px 28px rgb(0 0 0 / .28);animation:cnrise .12s ease both}
@@ -973,6 +975,7 @@ try{if(localStorage.getItem("loomTheme")==="light")document.documentElement.clas
   .cnmeta{padding:2px 16px 12px;font-family:var(--font-mono);font-size:11px;color:var(--muted-foreground)}
   .cnrun{color:var(--live)}
   .cnagree{color:var(--ok)}
+  .cnsolo{color:var(--muted-foreground)}
   .cnsplit{color:var(--warn)}
   .cnsec{padding:18px 16px 6px;font-family:var(--font-mono);font-size:10px;letter-spacing:.08em;
     color:var(--muted-foreground)}
@@ -3270,6 +3273,13 @@ ${BRAND_SPRITE}
       });
       var camps = Object.keys(groups).map(function(k){ return groups[k]; })
         .sort(function(x, y){ return y.length - x.length; });
+      // One voice is not a consensus. A council of one answered the question,
+      // which is useful — but "all 1 agreed" claims corroboration that nothing
+      // produced, and that is exactly the claim this panel exists to make
+      // trustworthy. Say what actually happened instead.
+      if (ok.length === 1) {
+        return ' \u00b7 <span class="cnsolo">one answer \u00b7 nothing to corroborate it</span>';
+      }
       if (camps.length === 1) return ' \u00b7 <span class="cnagree">all ' + ok.length + " agreed</span>";
       return ' \u00b7 <span class="cnsplit">' + camps.length + " camps: " +
         camps.map(function(c){ return esc(c.join("+")); }).join(" vs ") + "</span>";
@@ -8697,6 +8707,27 @@ ${BRAND_SPRITE}
       toast("\\u26a0 " + (p.name || p.id) + " at " + Math.round(pct * 100) + "% of its $" + b.toFixed(2) + " budget"); }
     else if (pct < 0.8){ _budgetWarned[p.id] = 0; }
   }
+  /**
+   * The graph's own pill, next to the daemon's.
+   *
+   * These are two different questions and the status bar only ever answered
+   * one of them. The node can exit while the daemon stays up and the WebSocket
+   * stays open — which is exactly what happened here: "live" stayed green for
+   * fifteen minutes over a graph that was gone, and the first symptom was an
+   * unrelated CLI command failing. Silent when healthy, because a bar of green
+   * pills teaches you to stop reading it.
+   */
+  function graphSeg(){
+    var g = state.graphHealth;
+    if (!g || g.reachable !== false) return "";
+    var since = g.since ? " \u00b7 since " + rel(g.since) : "";
+    return '<button class="sit graphdown" id="graphpill" title="' +
+      esc("HydraDB is not answering" + since + ". " + (g.detail || "") +
+          " The log, the baton and the brain all live there — nothing falls back to a local store.") +
+      '"><span class="sdot off"></span>graph down</button>';
+  }
+
+
   function drawStatusbar(){
     var el = document.getElementById("statusbar"); if (!el) return;
     var p = state.project;
@@ -8736,6 +8767,7 @@ ${BRAND_SPRITE}
           })()
         : "") +
       '<span class="spacer"></span>' +
+      graphSeg() +
       lpSeg +
       ghSeg +
       (busy ? '<span class="sit" style="color:var(--live)">' + busy + " working</span>" : "") +
@@ -8773,6 +8805,12 @@ ${BRAND_SPRITE}
     api("/api/loompad/health")
       .then(function(s){ state.loompad = s; scheduleLoomPad(!!(s && s.up)); drawStatusbar(); })
       .catch(function(){ state.loompad = { up:false }; scheduleLoomPad(false); drawStatusbar(); });
+    // The graph's state rides the same beat. /api/health reports what the
+    // daemon's own traffic already observed, so this costs no query against a
+    // node that may be the thing that is down.
+    api("/api/health")
+      .then(function(h){ state.graphHealth = h && h.graph; drawStatusbar(); })
+      .catch(function(){ /* the daemon itself is unreachable; the live pill covers that */ });
   }
   // Up: keep the 5s beat. Down: 5s, 15s, 45s, then every 2 minutes — enough to
   // notice a backend that starts later without hammering one that never will.
