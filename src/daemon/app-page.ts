@@ -10732,7 +10732,19 @@ ${BRAND_SPRITE}
         // wanted is cleared by select(), so this fires at most once and never
         // yanks the view back after you have clicked somewhere yourself.
         else if (wanted && wanted !== cur && state.projects.some(function(p){ return p.id === wanted; })) select(wanted);
-        else drawList();
+        // Draw the sidebar on every reply, not only the one that took the
+        // else-branch.
+        //
+        // The list used to hang off that branch alone, so the *first* reply —
+        // the one that arrives with no project open and therefore goes down the
+        // select() path — never drew it. The projects were in hand at ~1s and
+        // the sidebar stayed a skeleton until the 5s poll came round and found
+        // the feed present. Five seconds of staring at a loading state with the
+        // data already in memory, on the first screen anyone sees.
+        //
+        // Idempotent: select() repaints the list too, so drawing again here
+        // costs one render and removes the dependency on which branch ran.
+        drawList();
         drawStatusbar();
       }).catch(function(err){ toast(err.message); });
     }
