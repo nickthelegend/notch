@@ -10480,7 +10480,19 @@ ${BRAND_SPRITE}
     }
 
     function drawList(){
-      var el = document.getElementById("slist"); if (!el) return;
+      var el = document.getElementById("slist");
+      // The shell can be rebuilt between a request and its reply, which detaches
+      // the element this was going to paint into. Returning silently left the
+      // skeleton up until the next poll; retrying once on the next frame catches
+      // the rebuild that is already in flight. Guarded so a genuinely absent
+      // sidebar (the phone shell) does not spin.
+      if (!el) {
+        if (!drawList.retry) {
+          drawList.retry = true;
+          requestAnimationFrame(function(){ drawList.retry = false; drawList(); });
+        }
+        return;
+      }
       if (!state.projects.length) {
         el.innerHTML = '<div class="sys" style="padding:24px 8px;line-height:1.7">no projects yet<br><span style="opacity:.75">run <b class="mono" style="font-weight:500">notch init</b></span></div>';
         return;
@@ -10750,6 +10762,16 @@ ${BRAND_SPRITE}
     }
     if (!cur) drawEmpty();
     drawStatusbar();
+    // Paint from what we already know before asking the network again.
+    //
+    // refresh() is a round trip, and the shell can be rebuilt many times in a
+    // session (theme, route change, reconnect). Every one of those rebuilds
+    // used to put the skeleton back and leave it there until a reply landed —
+    // and if the shell was rebuilt again in that window, the reply painted into
+    // a detached element and the skeleton stayed until the 5s poll. Drawing
+    // from state first makes the list appear immediately on every rebuild after
+    // the first, and removes the round trip from the critical path entirely.
+    if ((state.projects || []).length) drawList();
     refresh();
     loadGithub(); // fills the status-bar GitHub badge
     loadLoomPad(); // fills the status-bar LoomPad connectivity pill
