@@ -53,7 +53,7 @@ running suite, not by reading the diff.
 
 ### Changed
 
-- Every README screenshot retaken from the running app against live SigNoz. The
+- Every README screenshot retaken from the running app against a live node. The
   hero image had been showing the old **loom** wordmark, the pre-redesign
   graphite theme, no Observatory tab at all, and two errors from the withdrawn
   Antigravity CDP bridge.
@@ -63,7 +63,7 @@ running suite, not by reading the diff.
   real error before recording so the Logs ERROR filter has something in it.
 - **The Observatory is eight views.** 0.2.0's entry below says six, and that was
   true when it was written. Two have landed since: **Self-heal**, which shows the
-  quarantine/failover/retry loop that SigNoz cannot render, and **Logs**, so Notch
+  quarantine/failover/retry loop, and **Logs**, so Notch
   reads back the third signal it emits. The strip is now Metrics · Live fleet ·
   Handoffs · Self-heal · Timeline · Decisions · Logs · Replay, in that order, on
   the desktop (`VIEWS` in `src/daemon/app-page.ts`) and on the phone
@@ -90,7 +90,7 @@ running suite, not by reading the diff.
   answer to a question `/agents/:agentId/models` already answers, and no client
   ever read it.
 - **Triage's local-log fallback reports the turn's real cost** instead of a
-  literal `cost: 0` in the column where the SigNoz path puts a measured number.
+  literal `cost: 0` in the column where a reporting adapter puts a measured number.
 - **The withdrawn Antigravity CDP bridge can't be created by guessing its name.**
   It left ADES when the CLI adapter replaced it, but `addAgent` validated against
   the adapter registry, so the API still accepted `kind:"antigravity"`. It stays

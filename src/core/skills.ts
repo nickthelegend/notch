@@ -13,7 +13,7 @@
  * daemon's bundled one. Which meant that on a machine with dozens of skills
  * already installed — `~/.claude/skills`, plus everything a marketplace plugin
  * dropped into `~/.claude/plugins/cache/…` — Notch reported that you had one.
- * The skills were right there on disk and the picker said "signoz-agent-triage"
+ * The skills were right there on disk and the picker said "agent-triage"
  * and nothing else. That is not a small omission: skills are the one place a
  * user writes down how their agents should behave, and Notch was ignoring all
  * of them because it only knew one directory layout.
@@ -243,7 +243,7 @@ export function buildSkillsBlock(skills: SkillManifest[]): string {
 /** Keyword → skill-id rules, most specific first. */
 const SUGGEST_RULES: Array<{ id: RegExp; when: RegExp }> = [
   { id: /triage/i, when: /\btriage\b|why did|failing|failed|debug (the )?agent|root[- ]?cause|stall/i },
-  { id: /clickhouse|generating-queries|query/i, when: /\bquery\b|clickhouse|\btraces?\b|\bspans?\b/i },
+  { id: /cypher|generating-queries|query/i, when: /\bquery\b|cypher|\btraces?\b|\bspans?\b/i },
   { id: /creating-alerts|alert/i, when: /\balert\b|threshold|\bfire[sd]?\b|notify me|page me/i },
   { id: /creating-dashboards|dashboard/i, when: /dashboard/i },
 ];

@@ -34,6 +34,21 @@ export async function porcelainStatus(dir: string): Promise<string> {
   return (await git(["status", "--porcelain", "-uall"], dir)).trimEnd();
 }
 
+/**
+ * Paths that differ from HEAD, or `[]` outside a repo.
+ *
+ * Exists so callers don't reach for `execSync` — its default stdio *inherits*
+ * stderr, so a project directory that isn't a git repo made the daemon print
+ * git's entire usage block to the console on every turn. Every child process in
+ * this file captures what git says instead of leaking it.
+ */
+export async function changedFilesVsHead(dir: string): Promise<string[]> {
+  return (await git(["diff", "--name-only", "HEAD"], dir))
+    .trim()
+    .split("\n")
+    .filter(Boolean);
+}
+
 export interface TurnDiff {
   files: ChangedFile[];
   added: number;

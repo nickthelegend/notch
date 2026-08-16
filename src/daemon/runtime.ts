@@ -4,7 +4,6 @@
  * the single source of truth.
  */
 
-import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type {
@@ -25,10 +24,16 @@ import { isAdapter, MAIN_CHAT } from "../types.js";
 import { createAgent, isWithdrawnKind, knownAgentKinds, tierForKind } from "../adapters/index.js";
 import { ADES } from "../core/ades.js";
 import { BatonManager, NotHolderError } from "../core/baton.js";
-import { Brain, CONFIDENCE_FLOOR } from "../core/brain.js";
-import { compileBrief, retrieve } from "../core/brain-index.js";
+import { Brain, CONFIDENCE_FLOOR, type Memory } from "../core/brain.js";
+import { compileBrief, queryEntities, retrieve } from "../core/brain-index.js";
+import { BrainGraph } from "../hydra/brain-graph.js";
+import { DecisionStore, decisionsFromLog } from "../hydra/decisions-store.js";
+import { telemetryFor, type TelemetryStore } from "../hydra/telemetry.js";
+import { councilFor, type CouncilAnswer, type CouncilRun, type CouncilStore } from "../hydra/council.js";
+import { projectGraph, type ProjectGraph } from "../hydra/graph.js";
 import { extractFromTurn, type ExtractEngine } from "../core/brain-extract.js";
 import { claudeText } from "../core/claude-cli.js";
+import { logbook } from "../core/logbook.js";
 import { EventLog } from "../core/eventlog.js";
 import { renderProjection } from "../core/distill.js";
 import {
@@ -78,6 +83,7 @@ import type { McpServerConfig } from "../types.js";
 import {
   diffSinceSnapshot,
   porcelainStatus,
+  changedFilesVsHead,
   workingTree,
   type WorkingTree,
 } from "../core/worktree.js";
@@ -86,7 +92,7 @@ const PROJECTION_WINDOW = 400; // recent events distilled on handoff
 
 /**
  * How a budget pause is labelled in the shared quarantine map, so this guard
- * can tell its own pauses from the ones a SigNoz alert put there.
+ * can tell its own pauses from the ones the self-heal watcher put there.
  */
 const BUDGET_PAUSE_REASON = "budget ";
 
@@ -118,11 +124,11 @@ export class BudgetExceededError extends Error {
 }
 
 /**
- * Thrown when a dispatch targets an agent a firing SigNoz alert has paused.
+ * Thrown when a dispatch targets an agent the self-heal watcher has paused.
  *
  * Separate from BudgetExceededError because the recovery is different and the
  * UI should say so: a budget pause lifts itself when the day rolls over or you
- * raise the cap, while this one lifts when SigNoz reports the alert resolved.
+ * raise the cap, while this one lifts when the agent stops failing.
  */
 export class QuarantinedError extends Error {
   constructor(
@@ -131,7 +137,7 @@ export class QuarantinedError extends Error {
     public readonly since: number,
   ) {
     super(
-      `agent "${agentId}" is paused by SigNoz — ${reason}. It resumes when that alert resolves, or hand the baton to another agent.`,
+      `agent "${agentId}" is paused by self-heal — ${reason}. It resumes once it stops failing, or hand the baton to another agent.`,
     );
     this.name = "QuarantinedError";
   }
@@ -145,6 +151,29 @@ export class ProjectRuntime {
   readonly routes: RouteEngine;
   /** Memory as units — see core/brain.ts. Reads and writes through `log`. */
   readonly brain: Brain;
+  /** The graph half of memory: what each unit is connected to. */
+  readonly brainGraph: BrainGraph;
+  /** This project's handle on HydraDB — shared by the log, baton and brain. */
+  readonly graph: ProjectGraph;
+  private decisionStore: DecisionStore;
+  /** Spans and log lines for this project, in the graph. */
+  readonly telemetry: TelemetryStore;
+  /** Parallel fleet runs, in the graph. */
+  readonly council: CouncilStore;
+  /** The council currently running, if any — one at a time, per project. */
+  private liveCouncil: CouncilRun | null = null;
+  /** Mined decisions, cached from the graph so reads stay synchronous. */
+  private minedDecisions: AgentDecision[] = [];
+  private brainSyncTimer: NodeJS.Timeout | null = null;
+  private brainSyncing = false;
+  /** Agents whose current turn we are deliberately stopping. See interrupt(). */
+  private interrupting = new Set<string>();
+  /**
+   * What the last handoff brief actually contained, split by channel.
+   * Recorded so `PROJECTED_AT` edges name real memories and the Observatory
+   * can show which half of recall found each one.
+   */
+  private lastRetrieval: { lexical: string[]; connected: string[] } | null = null;
   private agents = new Map<string, AnyAgent>();
   private startedAgents = new Set<string>();
   private configMtime = 0;
@@ -155,12 +184,34 @@ export class ProjectRuntime {
    */
   private turnChat = new Map<string, string>();
 
-  private constructor(info: ProjectInfo, config: ProjectConfig, log: EventLog) {
+  private constructor(
+    info: ProjectInfo,
+    config: ProjectConfig,
+    log: EventLog,
+    baton: BatonManager,
+  ) {
     this.info = info;
     this.config = config;
     this.log = log;
-    this.baton = new BatonManager(info.dir, log);
+    // The baton is opened before the runtime, because taking it is an election
+    // against HydraDB rather than a field assignment — see core/baton.ts.
+    this.baton = baton;
     this.brain = new Brain(log);
+    this.graph = projectGraph(path.resolve(projectLoomDir(info.dir)));
+    this.brainGraph = new BrainGraph(this.graph);
+    this.decisionStore = new DecisionStore(this.graph);
+    this.telemetry = telemetryFor(this.graph);
+    this.council = councilFor(this.graph);
+
+    // Project memories into the graph from the log itself rather than from
+    // each call site. Extraction, the CLI, the API and ADE imports all write
+    // the same three event kinds, so subscribing here is the one place that
+    // cannot be forgotten when a fourth writer appears.
+    this.log.onEvent((e) => {
+      if (e.kind === "memory_add" || e.kind === "memory_update" || e.kind === "memory_forget") {
+        this.scheduleBrainSync();
+      }
+    });
 
     // Same path as addAgent: an agent added at runtime must behave exactly like
     // one that was here at open, and two copies of this loop would drift.
@@ -189,9 +240,13 @@ export class ProjectRuntime {
     const config = readProjectConfig(info.dir);
     if (!config) throw new Error(`project at ${info.dir} has no .loom/config.json — run loom init`);
     const log = await EventLog.open(projectLoomDir(info.dir));
-    const rt = new ProjectRuntime(info, config, log);
+    const baton = await BatonManager.open(info.dir, log);
+    const rt = new ProjectRuntime(info, config, log, baton);
     rt.configMtime = configMtimeOf(info.dir);
     rt.rehydrateCosts();
+    // Decisions live in the graph now, so a reopened project has to read them
+    // back like everything else rather than finding them in a local file.
+    await rt.refreshDecisions();
     // Pull each connected ADE's native memory into the shared brain on open.
     try {
       rt.importMemories();
@@ -321,25 +376,25 @@ export class ProjectRuntime {
    * message you send, a baton hop, a route step — passes through here first.
    *
    * At or over the cap the agent is quarantined and the turn throws, taking the
-   * same route through the UI as the SigNoz self-heal pause (same state map,
+   * same route through the UI as the self-heal pause (same state map,
    * same shape) so a paused agent looks paused however it got there. The pause
    * lifts itself: the spend is measured against the current day, so when the
    * day rolls over — or you raise the cap — the next attempt clears it and logs
    * the recovery. A budget of 0/unset means no budget, and nothing is enforced.
    */
   /**
-   * Refuse to dispatch to an agent a firing SigNoz alert has paused.
+   * Refuse to dispatch to an agent the self-heal watcher has paused.
    *
    * The self-heal loop wrote quarantines into state and *nothing read them
    * back*: the webhook paused an agent, and the very next handoff or message
-   * went straight to it. So the headline feature — SigNoz says an agent is
+   * went straight to it. So the headline feature — the fleet notices an agent is
    * unhealthy, Notch takes it out of rotation — paused nothing at all. It sat
    * beside `enforceBudget`, which had exactly the same bug and was fixed; this
    * is the other half.
    *
    * Budget pauses are skipped here because `enforceBudget` owns them and can
    * lift them on its own (a new day, a raised cap). An alert pause only lifts
-   * when SigNoz says resolved, so there is nothing to re-check.
+   * when the watcher sees it recover, so there is nothing to re-check.
    */
   private enforceQuarantine(agentId: string): void {
     const q = this.quarantined()[agentId];
@@ -373,7 +428,7 @@ export class ProjectRuntime {
 
   /**
    * Lift a pause this guard put there, and only that one — a quarantine from a
-   * firing SigNoz alert is somebody else's to lift, and clearing it here would
+   * self-heal pause is the watcher's to lift, and clearing it here would
    * un-pause an agent that is still broken.
    */
   private liftBudgetPause(agentId: string, now = Date.now()): void {
@@ -499,7 +554,6 @@ export class ProjectRuntime {
   private static DEFAULT_MCPS: McpServerConfig[] = [
     { name: "GitHub", url: "", description: "issues, PRs, code search", icon: "github" },
     { name: "Supabase", url: "", description: "query, schema, migrations", icon: "database" },
-    { name: "SigNoz", url: "", description: "traces, metrics, alerts", icon: "chart" },
     { name: "Linear", url: "", description: "issues, projects, cycles", icon: "linear" },
     { name: "Slack", url: "", description: "messages, channels, users", icon: "slack" },
     { name: "Filesystem", url: "", description: "read/write local files", icon: "folder" },
@@ -566,7 +620,7 @@ export class ProjectRuntime {
     return { removed: true, mcps: this.getMcps() };
   }
 
-  /** Agents currently paused by a firing SigNoz alert (self-heal quarantine). */
+  /** Agents currently paused by the self-heal watcher. */
   quarantined(): Record<string, { reason: string; since: number; displaced: boolean }> {
     return readProjectState(this.info.dir).quarantine ?? {};
   }
@@ -617,12 +671,12 @@ export class ProjectRuntime {
    * can't hold the baton, and vanishes from the fleet — its history stays. You
    * can't switch off the baton holder or a mid-turn agent; hand it off first.
    */
-  setAgentEnabled(agentId: string, enabled: boolean): { id: string; enabled: boolean } {
+  async setAgentEnabled(agentId: string, enabled: boolean): Promise<{ id: string; enabled: boolean }> {
     const cfg = this.config.agents.find((a) => a.id === agentId);
     if (!cfg) throw new Error(`unknown agent "${agentId}"`);
     const on = enabled !== false;
     if (!on) {
-      if (this.validHolder() === agentId) throw new Error(`"${agentId}" holds the baton — hand it off before switching it off`);
+      if (await this.validHolder() === agentId) throw new Error(`"${agentId}" holds the baton — hand it off before switching it off`);
       const live = this.agents.get(agentId);
       if (live && isAdapter(live) && live.busy()) throw new Error(`"${agentId}" is mid-turn — interrupt it first`);
     }
@@ -784,8 +838,19 @@ export class ProjectRuntime {
           ...(cost !== undefined ? { costUsd: cost } : {}),
         };
       }
+      // An error that arrives while we are interrupting this agent is the
+      // interruption, not a fault. Recorded as a status so the Timeline reads
+      // truthfully and the health score is not charged for a deliberate stop.
+      let kind = e.kind;
+      if (kind === "error" && this.interrupting.has(agent.id)) {
+        kind = "status";
+        payload = {
+          state: "interrupted_detail",
+          detail: String((payload as Record<string, unknown>).message ?? ""),
+        };
+      }
       const event = this.log.append({
-        kind: e.kind,
+        kind,
         agentId: agent.id,
         ...(chat ? { chat } : {}),
         payload,
@@ -802,10 +867,10 @@ export class ProjectRuntime {
    * strand the lock on an agent that no longer exists, and the thread would
    * show a turn that nothing is running.
    */
-  removeAgent(agentId: string): { removed: string } {
+  async removeAgent(agentId: string): Promise<{ removed: string }> {
     const cfg = this.config.agents.find((a) => a.id === agentId);
     if (!cfg) throw new Error(`unknown agent "${agentId}"`);
-    const holder = this.validHolder();
+    const holder = await this.validHolder();
     if (holder === agentId) {
       throw new Error(`"${agentId}" holds the baton — hand it to someone else first`);
     }
@@ -1026,6 +1091,60 @@ export class ProjectRuntime {
   }
 
   /**
+   * Project new memories into the graph, and infer what they connect to.
+   *
+   * Debounced, because an extraction pass writes a burst of `memory_add`
+   * events and one traversal-index update per burst is enough. Never awaited
+   * by a turn: the graph projection is an index, so a turn that finishes
+   * before it lands is correct, just briefly less well connected.
+   */
+  private scheduleBrainSync(): void {
+    if (this.brainSyncTimer) return;
+    this.brainSyncTimer = setTimeout(() => {
+      this.brainSyncTimer = null;
+      void this.syncBrainGraph();
+    }, 150);
+    this.brainSyncTimer.unref?.();
+  }
+
+  private async syncBrainGraph(): Promise<void> {
+    if (this.brainSyncing) return;
+    this.brainSyncing = true;
+    try {
+      const all = this.brain.all();
+      const fresh = await this.brainGraph.sync(all);
+      if (!fresh) return;
+      // Only the newly-projected units need links inferred; everything older
+      // already has whatever edges it earned.
+      const known = new Set(all.map((m) => m.id));
+      for (const m of all.slice(0, fresh)) {
+        if (!known.has(m.id)) continue;
+        const links = await this.brainGraph.inferLinks(m, all);
+        for (const l of links) {
+          this.log.append({
+            kind: "status",
+            payload: {
+              state: "brain_link",
+              from: m.id,
+              rel: l.rel,
+              to: l.to,
+              basis: l.basis,
+            },
+          });
+        }
+      }
+    } catch (err) {
+      logbook.warn(
+        "hydra",
+        "the brain's graph index is behind — recall falls back to its lexical channels",
+        err instanceof Error ? err.message : String(err),
+      );
+    } finally {
+      this.brainSyncing = false;
+    }
+  }
+
+  /**
    * Phase 2: read a finished turn for durable memory.
    *
    * Fire-and-forget on purpose. A slow or missing extractor must never delay
@@ -1146,7 +1265,79 @@ export class ProjectRuntime {
       minConfidence: CONFIDENCE_FLOOR,
       limit: 14,
     });
-    return compileBrief(hits.map((h) => h.memory));
+    const picked = hits.map((h) => h.memory);
+    this.lastRetrieval = { lexical: picked.map((m) => m.id), connected: [] };
+    return compileBrief(picked);
+  }
+
+  /**
+   * The same brief, plus the memories that are *connected* to this work.
+   *
+   * The lexical channels answer "which memories say what I said". The graph
+   * channel answers "which memories are about what I am touching", which is a
+   * different and usually better question — a failure caused by a decision
+   * about the file you just edited matters even though it shares no words with
+   * your prompt. Connected hits are appended after the lexical ones and capped,
+   * so a large graph cannot crowd out an exact match.
+   *
+   * Falls back to the lexical brief if HydraDB is slow or the traversal fails:
+   * a handoff with a smaller brief is a worse handoff, but a handoff that never
+   * happens is a broken product.
+   */
+  private async retrieveBriefConnected(events: LoomEvent[], agentId: string): Promise<string> {
+    const lexical = this.retrieveBrief(events, agentId);
+    const seen = new Set(this.lastRetrieval?.lexical ?? []);
+    try {
+      const query = events
+        .filter((e) => e.kind === "message")
+        .slice(-8)
+        .map((e) => String(e.payload.text ?? ""))
+        .join(" ");
+      const files = [
+        ...new Set(
+          events
+            .filter((e) => e.kind === "turn_diff")
+            .flatMap((e) => {
+              const raw = (e.payload.files as Array<string | { path?: string }> | undefined) ?? [];
+              return raw.map((f) => (typeof f === "string" ? f : (f?.path ?? ""))).filter(Boolean);
+            }),
+        ),
+      ].slice(-20);
+      const entities = queryEntities(query, files);
+      if (!entities.length) return lexical;
+
+      const { hits } = await this.brainGraph.connected(entities, { maxHops: 3, limit: 24 });
+      const extra: Memory[] = [];
+      for (const h of hits) {
+        if (seen.has(h.memoryId)) continue;
+        const m = this.brain.get(h.memoryId);
+        if (!m || m.confidence < CONFIDENCE_FLOOR) continue;
+        extra.push(m);
+        if (extra.length >= 8) break;
+      }
+      this.lastRetrieval = {
+        lexical: [...seen],
+        connected: extra.map((m) => m.id),
+      };
+      if (!extra.length) return lexical;
+      const connectedBlock = [
+        "",
+        "### Connected to what you are touching (found by graph, not by keyword)",
+        ...extra.map((m) => {
+          const hit = hits.find((h) => h.memoryId === m.id);
+          const why = hit ? ` _(${hit.hops} hop${hit.hops === 1 ? "" : "s"} from \`${hit.via}\`)_` : "";
+          return `- [${m.kind}] ${m.text}${why}`;
+        }),
+      ].join("\n");
+      return lexical ? `${lexical}\n${connectedBlock}` : connectedBlock.trimStart();
+    } catch (err) {
+      logbook.warn(
+        "hydra",
+        "connected recall was unavailable for this handoff — the lexical brief still went out",
+        err instanceof Error ? err.message : String(err),
+      );
+      return lexical;
+    }
   }
 
   /**
@@ -1227,10 +1418,6 @@ export class ProjectRuntime {
 
   // ── KAIRO-style agent decisions (Observatory Decision Explorer + Replay) ──
 
-  private decisionsFile(): string {
-    return path.join(projectLoomDir(this.info.dir), "decisions.json");
-  }
-
   /** An agent's declared role from config (planner/builder/reviewer/…), else its kind. */
   agentRole(agentId: string): string {
     const cfg = this.config.agents.find((a) => a.id === agentId);
@@ -1247,14 +1434,34 @@ export class ProjectRuntime {
    * see normalizeStoredDecision for what that does to records written before
    * a decision had to say where its confidence came from.
    */
+  /**
+   * Every decision this project has, from both places one can be made.
+   *
+   * Mined decisions live in HydraDB; typed ones (`loom decision "…"`) are
+   * `decision` events in the log. The Explorer used to read a JSON file and so
+   * showed only the first kind — the most deliberate decisions in a project
+   * were the ones it could not display. Read synchronously off a cache the
+   * graph refreshes, because the API handler and the Timeline both want this
+   * without awaiting.
+   */
   getDecisions(): AgentDecision[] {
+    const typed = decisionsFromLog(this.log.list({ kinds: ["decision"] }), this.info.id);
+    const seen = new Set(this.minedDecisions.map((d) => d.id));
+    return [...this.minedDecisions, ...typed.filter((d) => !seen.has(d.id))].sort(
+      (a, b) => b.timestamp - a.timestamp,
+    );
+  }
+
+  /** Pull the mined decisions out of the graph into the read cache. */
+  async refreshDecisions(): Promise<void> {
     try {
-      const raw = fs.readFileSync(this.decisionsFile(), "utf8");
-      const arr = JSON.parse(raw) as AgentDecision[];
-      if (!Array.isArray(arr)) return [];
-      return arr.map(normalizeStoredDecision).sort((a, b) => b.timestamp - a.timestamp);
-    } catch {
-      return [];
+      this.minedDecisions = await this.decisionStore.list();
+    } catch (err) {
+      logbook.warn(
+        "hydra",
+        "could not read mined decisions — the Explorer still shows the ones recorded by hand",
+        err instanceof Error ? err.message : String(err),
+      );
     }
   }
 
@@ -1262,17 +1469,17 @@ export class ProjectRuntime {
     return decisionStats(this.getDecisions());
   }
 
-  /** Append decisions to the persisted store (kept oldest→newest on disk). */
+  /** Persist mined decisions to the graph, and keep the read cache current. */
   storeDecisions(decisions: AgentDecision[]): void {
     if (!decisions.length) return;
-    const existing = this.getDecisions().sort((a, b) => a.timestamp - b.timestamp);
-    const all = [...existing, ...decisions].slice(-1000); // bound the file
-    try {
-      fs.mkdirSync(projectLoomDir(this.info.dir), { recursive: true });
-      fs.writeFileSync(this.decisionsFile(), JSON.stringify(all, null, 2));
-    } catch {
-      /* best-effort: decisions are an enrichment, never break the loop */
-    }
+    this.minedDecisions = [...decisions, ...this.minedDecisions].slice(0, 1000);
+    void this.decisionStore.store(decisions).catch((err: unknown) => {
+      logbook.warn(
+        "hydra",
+        `could not persist ${decisions.length} decision(s) — they are visible now but will not survive a restart`,
+        err instanceof Error ? err.message : String(err),
+      );
+    });
   }
 
   /** Mine decisions from a completed turn, persist them, surface on the Timeline. */
@@ -1282,12 +1489,10 @@ export class ProjectRuntime {
     if (turnText.trim().length < 100) return;
     const lastTurn = this.log.list({ kinds: ["run_complete"] }).filter((e) => e.agentId === agentId).slice(-1)[0];
     const p = (lastTurn?.payload ?? {}) as Record<string, unknown>;
-    let filesChanged: string[] = [];
-    try {
-      filesChanged = execSync("git diff --name-only HEAD", { cwd: this.info.dir, encoding: "utf8" })
-        .trim().split("\n").filter(Boolean);
-    } catch { /* not a git repo, or nothing changed */ }
-    // The SigNoz trace this turn's spans went out under, when telemetry is on.
+    // Degrades to [] outside a repo, without leaking git's stderr to the
+    // console — see core/worktree.ts#changedFilesVsHead.
+    const filesChanged = await changedFilesVsHead(this.info.dir);
+    // The trace this turn's spans were recorded under, when telemetry is on.
     // Undefined otherwise — see observability/index.ts#turnTraceId; a decision
     // that can't link to a trace must carry no trace id rather than "".
     const traceId = turnTraceId(agentId);
@@ -1335,10 +1540,10 @@ export class ProjectRuntime {
    * The persisted holder, unless it refers to an agent that has since been
    * removed from the config — ghost holders are cleared, not fatal.
    */
-  private validHolder(): string | null {
+  private async validHolder(): Promise<string | null> {
     const holder = this.baton.holder();
     if (holder && !this.agents.has(holder)) {
-      this.baton.forceClear(`agent "${holder}" no longer in config`);
+      await this.baton.forceClear(`agent "${holder}" no longer in config`);
       return null;
     }
     return holder;
@@ -1406,7 +1611,7 @@ export class ProjectRuntime {
   ): Promise<{ agentId: string }> {
     const source = opts.source ?? "user";
     const chat = opts.chat ?? MAIN_CHAT;
-    let target = agentId ?? this.validHolder() ?? this.defaultAdapterId();
+    let target = agentId ?? await this.validHolder() ?? this.defaultAdapterId();
     const agent = this.agent(target);
     if (!isAdapter(agent)) {
       throw new Error(`agent "${target}" is a bridge (read-only) — it cannot take turns`);
@@ -1417,9 +1622,9 @@ export class ProjectRuntime {
     this.enforceQuarantine(target);
     this.enforceBudget(target);
 
-    const holder = this.validHolder();
+    const holder = await this.validHolder();
     if (holder === null) {
-      this.baton.acquire(target);
+      await this.baton.acquire(target);
     } else if (holder !== target) {
       throw new NotHolderError(target, holder);
     }
@@ -1477,6 +1682,185 @@ export class ProjectRuntime {
     return { agentId: target };
   }
 
+  // -------------------------------------------------------------------------
+  // Council — one question, the whole fleet, at the same time
+  // -------------------------------------------------------------------------
+
+  /**
+   * Put one question to several agents concurrently.
+   *
+   * The baton is untouched, and that is the design rather than a limitation.
+   * Exactly one agent may modify the working tree; five CLIs editing the same
+   * files at once is the race the baton exists to prevent. So a council asks
+   * for *answers*, not edits: every member gets the same question and the same
+   * brain, nobody takes the baton, and the comparison is the product. Five
+   * agents disagreeing about an approach is more information than one agent
+   * asserting it.
+   *
+   * Every member is briefed from HydraDB — the same projected memory a handoff
+   * would inject — so "the graph is the brain of every agent" is literal here:
+   * the answers differ because the models differ, not because they were told
+   * different things.
+   */
+  async startCouncil(question: string, agentIds?: string[]): Promise<CouncilRun> {
+    const q = question.trim();
+    if (!q) throw new Error("a council needs a question");
+    if (this.liveCouncil && this.liveCouncil.status === "running") {
+      throw new Error("a council is already running — wait for it, or read the last one");
+    }
+    const roster = (await this.status()).agents.filter((a) => a.tier === "adapter");
+    const wanted = agentIds?.length
+      ? roster.filter((a) => agentIds.includes(a.id))
+      : roster;
+    const eligible = wanted.filter((a) => {
+      // A paused or over-budget agent is refused a turn everywhere else; a
+      // council is not the exception that quietly spends past a cap.
+      try {
+        this.enforceQuarantine(a.id);
+        this.enforceBudget(a.id);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    if (!eligible.length) throw new Error("no agent in this project can take a turn right now");
+
+    const run: CouncilRun = {
+      id: newId(),
+      question: q,
+      at: Date.now(),
+      agents: eligible.map((a) => a.id),
+      status: "running",
+      answers: [],
+    };
+    this.liveCouncil = run;
+    await this.council.start({ id: run.id, question: run.question, at: run.at, agents: run.agents });
+    this.log.append({
+      kind: "council_started",
+      payload: { council: run.id, question: run.question, agents: run.agents },
+    });
+
+    // One brief for the whole council, built once. Every member is answering
+    // the same question from the same state; briefing them separately would
+    // make the answers incomparable for a reason that has nothing to do with
+    // the models.
+    const events = this.log.list({ limit: 400 });
+    const brainBrief = await this.retrieveBriefConnected(events, run.agents[0]!).catch(() => "");
+    const skills = this.activeSkillsBlock();
+    const briefing = [skills, brainBrief].filter(Boolean).join("\n\n").trim() || undefined;
+
+    void Promise.all(
+      run.agents.map((id) => this.councilTurn(run, id, q, briefing)),
+    ).then(async () => {
+      run.status = "done";
+      await this.council.finish(run.id);
+      this.log.append({
+        kind: "council_completed",
+        payload: {
+          council: run.id,
+          answers: run.answers.length,
+          agents: run.answers.map((a) => a.agent),
+        },
+      });
+    });
+
+    return run;
+  }
+
+  /**
+   * One member's turn.
+   *
+   * Deliberately not routed through `sendMessage`: that path takes the baton,
+   * writes the prompt into the shared thread and attributes working-tree
+   * changes to the turn. None of that is right for an advisory answer, and the
+   * baton part is actively wrong — it would serialise the council back into a
+   * queue.
+   */
+  private async councilTurn(
+    run: CouncilRun,
+    agentId: string,
+    question: string,
+    briefing: string | undefined,
+  ): Promise<void> {
+    const started = Date.now();
+    const agent = this.agent(agentId);
+    const answer: CouncilAnswer = { agent: agentId, text: "", ms: 0, cost: 0, ok: false, chosen: false };
+    try {
+      if (!isAdapter(agent)) throw new Error("bridges cannot take a council turn");
+      await this.ensureStarted(agentId);
+      const said: string[] = [];
+      const off = this.log.onEvent((e) => {
+        if (e.agentId !== agentId) return;
+        if (e.kind === "message") said.push(String(e.payload.text ?? ""));
+        if (e.kind === "run_complete") {
+          const c = Number(e.payload.costUsd);
+          if (Number.isFinite(c) && c > 0) answer.cost += c;
+        }
+      });
+      try {
+        await agent.send({
+          text: question,
+          ...(briefing ? { briefing } : {}),
+        });
+      } finally {
+        off();
+      }
+      answer.text = said.join("\n\n").trim();
+      answer.ok = true;
+    } catch (err) {
+      answer.text = err instanceof Error ? err.message : String(err);
+      answer.ok = false;
+    }
+    answer.ms = Date.now() - started;
+    run.answers.push(answer);
+    await this.council.answer(run.id, answer);
+    this.log.append({
+      kind: "council_answer",
+      agentId,
+      payload: {
+        council: run.id,
+        ok: answer.ok,
+        ms: answer.ms,
+        costUsd: answer.cost,
+        chars: answer.text.length,
+      },
+    });
+  }
+
+  /** The council in flight, or the last one this daemon ran. */
+  councilLive(): CouncilRun | null {
+    return this.liveCouncil;
+  }
+
+  /**
+   * Act on one member's answer: record the pick, and fold it into the brain.
+   *
+   * The pick is the whole point of asking several agents — and it is a
+   * decision, so it belongs in the shared memory every later turn is briefed
+   * from, not just in a panel.
+   */
+  async chooseCouncilAnswer(runId: string, agentId: string): Promise<{ chosen: string }> {
+    const run = this.liveCouncil && this.liveCouncil.id === runId
+      ? this.liveCouncil
+      : (await this.council.list(10)).find((r) => r.id === runId);
+    if (!run) throw new Error("no such council");
+    const answer = run.answers.find((a) => a.agent === agentId);
+    if (!answer) throw new Error(`${agentId} did not answer this council`);
+    answer.chosen = true;
+    await this.council.choose(runId, agentId);
+    this.brain.add({
+      kind: "decision",
+      text: `On "${run.question}": went with ${agentId}'s answer — ${answer.text.slice(0, 600)}`,
+      provenance: { agentId, eventId: this.log.lastId(), ts: Date.now() },
+    });
+    this.log.append({
+      kind: "council_answer",
+      agentId,
+      payload: { council: runId, chosen: true },
+    });
+    return { chosen: agentId };
+  }
+
   private defaultAdapterId(): string {
     const cfg =
       (this.config.defaultAgent &&
@@ -1523,7 +1907,7 @@ export class ProjectRuntime {
     // Audit trail: snapshot the outgoing holder's working-tree state into the
     // handoff event, so "who left what uncommitted" is always answerable.
     let handoffMeta: Record<string, unknown> = { projected: true };
-    const holder = this.validHolder();
+    const holder = await this.validHolder();
     if (holder && holder !== to) {
       const current = this.agent(holder);
       if (isAdapter(current)) {
@@ -1553,7 +1937,7 @@ export class ProjectRuntime {
     // is the recent conversation plus the files recent turns touched; scoped to
     // this chat and to the incoming agent; low-confidence memories are held back
     // from injection (they're still visible in the Brain tab).
-    const brainBrief = this.retrieveBrief(events, to);
+    const brainBrief = await this.retrieveBriefConnected(events, to);
     // Append the unified cross-ADE memory so the incoming agent sees the
     // whole brain, not just this project's log.
     const unified = this.unifiedMemory();
@@ -1587,7 +1971,33 @@ export class ProjectRuntime {
       await bystander.injectMemory(bridgeView).catch(() => {});
     }
 
-    const { from } = this.baton.handoff(to, handoffMeta);
+    const { from } = await this.baton.handoff(to, handoffMeta);
+
+    // Write down what was actually injected. Notch always projected the brain
+    // one-shot at handoff and then had no record of it; "what did this agent
+    // know when it took over" is the first question you ask when an agent does
+    // something inexplicable, and until now nothing could answer it.
+    const injected = [
+      ...(this.lastRetrieval?.lexical ?? []),
+      ...(this.lastRetrieval?.connected ?? []),
+    ];
+    const handoffKey = `${this.baton.epoch()}:${from ?? ""}->${to}`;
+    try {
+      await this.brainGraph.recordProjection(handoffKey, injected, {
+        from,
+        to,
+        epoch: this.baton.epoch(),
+        at: Date.now(),
+      });
+    } catch (err) {
+      logbook.warn(
+        "hydra",
+        "the handoff happened but its memory provenance was not recorded",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+    await this.log.flush();
+
     await this.ensureStarted(to);
     return { from };
   }
@@ -1596,11 +2006,32 @@ export class ProjectRuntime {
     opts: { source?: "user" | "route" } = {},
   ): Promise<{ interrupted: string | null }> {
     if ((opts.source ?? "user") === "user") this.routes.onManualInterrupt();
-    const holder = this.validHolder();
+    const holder = await this.validHolder();
     if (!holder) return { interrupted: null };
     const agent = this.agent(holder);
     if (isAdapter(agent) && agent.busy()) {
-      await agent.interrupt();
+      // Mark it before asking, because the adapter's failure arrives on the
+      // event stream and looks exactly like a crash from there. Without this
+      // flag a turn you stopped on purpose was logged as
+      // `error: error_during_execution` — a red line in the Timeline, and a
+      // hit to that agent's health score in Metrics and Triage, for doing what
+      // you told it to.
+      this.interrupting.add(holder);
+      this.log.append({
+        kind: "status",
+        agentId: holder,
+        ...(this.turnChat.get(holder) ? { chat: this.turnChat.get(holder)! } : {}),
+        payload: { state: "interrupted", source: opts.source ?? "user" },
+      });
+      try {
+        await agent.interrupt();
+      } finally {
+        // Cleared on a timer, not immediately: the adapter's error lands a
+        // beat after the kill, and the window has to still be open when it
+        // does. Long enough for a process to die, short enough that a real
+        // failure moments later is still reported as one.
+        setTimeout(() => this.interrupting.delete(holder), 5_000).unref?.();
+      }
       return { interrupted: holder };
     }
     return { interrupted: null };
@@ -1670,7 +2101,7 @@ export class ProjectRuntime {
   // -------------------------------------------------------------------------
 
   async status(): Promise<ProjectStatus> {
-    const holder = this.validHolder();
+    const holder = await this.validHolder();
     const agents = await Promise.all(
       this.config.agents.map(async (cfg) => {
         const model = (cfg.options?.model as string | undefined) ?? "";
@@ -1733,7 +2164,7 @@ export class ProjectRuntime {
       routeNames: ["auto", ...Object.keys(this.config.routes ?? {})],
       costUsd: this.costs.totalUsd,
       // Paused agents belong in the status payload, not only in state on disk.
-      // Without this the UI cannot show that SigNoz has taken an agent out of
+      // Without this the UI cannot show that self-heal has taken an agent out of
       // rotation — the pause was real and completely invisible, which reads as
       // "the self-heal did nothing".
       quarantine: this.quarantined(),
@@ -1745,6 +2176,22 @@ export class ProjectRuntime {
       await this.agent(id).stop().catch(() => {});
     }
     this.startedAgents.clear();
+    // Drain the log to HydraDB *before* dropping anything. A runtime is closed
+    // on shutdown and on config hot-reload, and the next open rebuilds
+    // everything — costs, the thread, the brain — by reading the graph back.
+    // An event still sitting in the write queue at this moment is an event the
+    // reopened runtime will never have heard of, which shows up as a turn's
+    // spend quietly going missing.
+    try {
+      await this.log.flush();
+      await this.telemetry.flush();
+    } catch (err) {
+      logbook.warn(
+        "hydra",
+        "the log could not be drained before closing — recent events may be missing after reopen",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
     this.brain.close(); // unsubscribes before the log drops its listeners
     this.log.close();
   }

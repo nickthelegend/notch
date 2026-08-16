@@ -1,132 +1,124 @@
 /**
  * Observability integration test: the full path from a real agent turn to a
- * SigNoz-shaped OTLP span. A stand-in OTLP collector (a local HTTP server)
- * receives the daemon's exports; we assert that driving echo agents through the
- * daemon produces gen_ai.agent.turn and notch.baton.handoff spans with the right
- * attributes, and that the /metrics endpoint reports the same numbers.
+ * span in HydraDB.
+ *
+ * This used to stand up a fake OTLP collector and assert on the payload the
+ * daemon POSTed to it. There is no collector any more — the daemon writes the
+ * spans into the graph — so the assertion moved to where the data now is: drive
+ * real echo turns through a real daemon, then read the spans back out of
+ * HydraDB and check they carry the model, tokens, cost and trace correlation
+ * the Observatory renders.
  */
 
-import http from "node:http";
-import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { DaemonConfig } from "../src/core/registry.js";
 import { readDaemonConfig } from "../src/core/registry.js";
 import { DaemonClient } from "../src/daemon/client.js";
 import { LoomDaemon } from "../src/daemon/server.js";
 import { makeProjectDir, tmpDir, waitUntil } from "./helpers.js";
-
-type OtlpSpan = { name: string; traceId: string; spanId: string; attributes: Array<{ key: string; value: Record<string, unknown> }>; status?: { code: number } };
+import { hydraUp, HYDRA_SKIP_MESSAGE } from "./hydra-helpers.js";
+import type { StoredSpan } from "../src/hydra/telemetry.js";
 
 let daemon: LoomDaemon;
 let client: DaemonClient;
-let cfg: DaemonConfig;
-let baseUrl: string;
 let projectId: string;
-let collector: http.Server;
-const received: OtlpSpan[] = [];
-const services = new Set<string>();
-
-function attrVal(v: Record<string, unknown>): unknown {
-  return v.stringValue ?? (v.intValue != null ? Number(v.intValue) : undefined) ?? v.doubleValue ?? v.boolValue;
-}
-function spanAttrs(s: OtlpSpan): Record<string, unknown> {
-  const o: Record<string, unknown> = {};
-  for (const a of s.attributes || []) o[a.key] = attrVal(a.value);
-  return o;
-}
+let up = false;
 
 beforeAll(async () => {
-  delete process.env.DO_NOT_TRACK;
+  up = await hydraUp();
+  if (!up) {
+    console.warn(`skipping telemetry export test — ${HYDRA_SKIP_MESSAGE}`);
+    return;
+  }
+  // Telemetry is off suite-wide so ordinary tests do not pay for it. This one
+  // is about telemetry, so it turns it on for the daemon it starts.
   delete process.env.NOTCH_TELEMETRY_DISABLED;
-  delete process.env.NOTCH_OTEL;
-
-  collector = http.createServer((req, res) => {
-    let body = "";
-    req.on("data", (c) => (body += c));
-    req.on("end", () => {
-      try {
-        const j = JSON.parse(body);
-        for (const rs of j.resourceSpans || []) {
-          const svc = (rs.resource?.attributes || []).find((a: { key: string }) => a.key === "service.name");
-          if (svc) services.add(String(svc.value.stringValue));
-          for (const ss of rs.scopeSpans || []) received.push(...(ss.spans || []));
-        }
-      } catch {
-        /* ignore malformed */
-      }
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end("{}");
-    });
-  });
-  await new Promise<void>((r) => collector.listen(0, "127.0.0.1", () => r()));
-  process.env.NOTCH_OTEL_ENDPOINT = `http://127.0.0.1:${(collector.address() as AddressInfo).port}`;
-
   process.env.LOOM_HOME = tmpDir("home");
   process.env.LOOM_NO_NOTIFY = "1";
+
   daemon = new LoomDaemon({ host: "127.0.0.1", port: 0 });
-  const { host, port } = await daemon.listen();
-  baseUrl = `http://${host}:${port}`;
-  cfg = readDaemonConfig()!;
-  client = new DaemonClient(cfg);
-  projectId = (await client.addProject(makeProjectDir({ name: "obs" }))).project.id;
+  await daemon.listen();
+  client = new DaemonClient(readDaemonConfig()!);
+  projectId = (await client.addProject(makeProjectDir({ name: "telemetry" }))).project.id;
 });
 
 afterAll(async () => {
+  if (!up) return;
   await daemon.close();
-  await new Promise<void>((r) => collector.close(() => r()));
+  process.env.NOTCH_TELEMETRY_DISABLED = "1";
 });
 
-describe("Notch -> SigNoz OTLP export (end to end)", () => {
-  it("exports a gen_ai.agent.turn span to the collector on a real turn", async () => {
-    await client.send(projectId, "hello");
-    await waitUntil(async () => received.some((s) => s.name === "gen_ai.agent.turn"), { timeoutMs: 12_000 });
-    const turn = received.find((s) => s.name === "gen_ai.agent.turn")!;
-    expect(turn.traceId).toMatch(/^[0-9a-f]{32}$/);
-    const a = spanAttrs(turn);
-    expect(a["gen_ai.operation.name"]).toBe("chat");
-    expect(a["gen_ai.agent.id"]).toBeTruthy();
-    expect(a["notch.project"]).toBe("obs");
-    // the export identifies itself to SigNoz as the `notch` service
-    expect(services.has("notch")).toBe(true);
-    // the turn span carries the full GenAI shape, not just tokens: the runtime
-    // stamps the adapter kind (→ gen_ai.system) and correlates the turn's model
-    // and cost onto run_complete so they ride the span.
-    expect(a["gen_ai.system"]).toBe("echo"); // the adapter kind, not the fallback "notch"
-    expect(a["gen_ai.request.model"]).toBe("echo-1");
-    expect(Number(a["gen_ai.usage.cost_usd"])).toBeGreaterThan(0);
-    expect(Number(a["gen_ai.usage.input_tokens"])).toBeGreaterThan(0);
-    expect(Number(a["gen_ai.usage.output_tokens"])).toBeGreaterThan(0);
-  });
+/** The project's spans, straight out of the graph the daemon wrote them to. */
+async function spans(): Promise<StoredSpan[]> {
+  const rt = await (daemon as unknown as {
+    runtime(id: string): Promise<{ telemetry: { flush(): Promise<void>; spans(o?: unknown): Promise<StoredSpan[]> } }>;
+  }).runtime(projectId);
+  await rt.telemetry.flush();
+  return rt.telemetry.spans({ limit: 200 });
+}
 
-  it("gives each turn its own trace id (per-turn correlation)", async () => {
-    // one turn already ran in the first test; drive a second and compare.
-    await client.send(projectId, "again");
-    await waitUntil(async () => received.filter((s) => s.name === "gen_ai.agent.turn").length >= 2, { timeoutMs: 12_000 });
-    const traces = received.filter((s) => s.name === "gen_ai.agent.turn").map((s) => s.traceId);
-    expect(new Set(traces).size).toBeGreaterThanOrEqual(2); // distinct turns → distinct traces
-    for (const t of traces) expect(t).toMatch(/^[0-9a-f]{32}$/);
-  });
-
-  it("exports a notch.baton.handoff span after the baton moves", async () => {
-    await client.handoff(projectId, "execbot");
-    const toExec = () =>
-      received.filter((s) => s.name === "notch.baton.handoff").map(spanAttrs).find((a) => a["notch.handoff.to"] === "execbot");
-    await waitUntil(async () => !!toExec(), { timeoutMs: 12_000 });
-    expect(toExec()!["notch.handoff.from"]).toBe("plannerbot");
-  });
-
-  it("serves per-agent metrics (cost + tokens) at /api/projects/:id/metrics", async () => {
-    await waitUntil(async () => (await client.costs(projectId)).costs.turns >= 1, { timeoutMs: 8000 });
-    const r = await fetch(`${baseUrl}/api/projects/${projectId}/metrics`, {
-      headers: { authorization: `Bearer ${cfg.adminToken}` },
+describe("a real turn becomes a span in HydraDB", () => {
+  it("records gen_ai.agent.turn with the adapter, duration, tokens and cost", async () => {
+    if (!up) return;
+    await client.send(projectId, "hello from the export test");
+    await waitUntil(async () => (await spans()).some((s) => s.name === "gen_ai.agent.turn"), {
+      timeoutMs: 20_000,
     });
-    expect(r.status).toBe(200);
-    const { metrics } = (await r.json()) as { metrics: { totalUsd: number; tokensIn: number; tokensOut: number; byAgent: Array<Record<string, number>> } };
-    expect(metrics.totalUsd).toBeGreaterThan(0);
-    expect(metrics.tokensIn).toBeGreaterThan(0); // echo now reports deterministic tokens too
-    expect(metrics.tokensOut).toBeGreaterThan(0);
-    expect(Array.isArray(metrics.byAgent)).toBe(true);
-    expect(metrics.byAgent[0]).toHaveProperty("tokensIn");
-    expect(metrics.byAgent[0]).toHaveProperty("usd");
-  });
+
+    const turn = (await spans()).find((s) => s.name === "gen_ai.agent.turn")!;
+    expect(turn.agent).toBeTruthy();
+    expect(turn.ade).toBe("echo");
+    expect(turn.ms).toBeGreaterThan(0);
+    expect(turn.traceId).toMatch(/^[0-9a-f]{32}$/);
+    expect(turn.spanId).toMatch(/^[0-9a-f]{16}$/);
+    // The echo adapter reports a deterministic cost and token count, so these
+    // are real reported numbers rather than anything this test invented.
+    expect(turn.cost).toBeGreaterThan(0);
+    expect(turn.tin + turn.tout).toBeGreaterThan(0);
+  }, 30_000);
+
+  it("gives each turn its own trace id, so a turn is one span tree", async () => {
+    if (!up) return;
+    const before = (await spans()).filter((s) => s.name === "gen_ai.agent.turn").length;
+    await client.send(projectId, "a second turn");
+    await waitUntil(
+      async () => (await spans()).filter((s) => s.name === "gen_ai.agent.turn").length > before,
+      { timeoutMs: 20_000 },
+    );
+    const turns = (await spans()).filter((s) => s.name === "gen_ai.agent.turn");
+    const traces = new Set(turns.map((s) => s.traceId));
+    expect(traces.size).toBe(turns.length);
+  }, 30_000);
+
+  it("records notch.baton.handoff with from and to after the baton moves", async () => {
+    if (!up) return;
+    const { project } = await client.project(projectId);
+    const target = project.agents.find((a) => a.id !== project.holder)!.id;
+    await client.handoff(projectId, target);
+    await waitUntil(async () => (await spans()).some((s) => s.name === "notch.baton.handoff"), {
+      timeoutMs: 20_000,
+    });
+    const h = (await spans()).find((s) => s.name === "notch.baton.handoff")!;
+    expect(h.handoffTo).toBe(target);
+  }, 30_000);
+
+  it("serves per-agent metrics that agree with the spans", async () => {
+    if (!up) return;
+    const res = await fetch(
+      `http://${readDaemonConfig()!.host}:${readDaemonConfig()!.port}/api/projects/${projectId}/metrics`,
+      { headers: { authorization: `Bearer ${readDaemonConfig()!.adminToken}` } },
+    );
+    const body = (await res.json()) as {
+      metrics: { turns: number; totalUsd: number; byAgent: Array<{ agentId: string; turns: number; usd: number }> };
+    };
+    const turns = (await spans()).filter((s) => s.name === "gen_ai.agent.turn");
+    // The spans and the cost summary are folded from the same events, so they
+    // must agree exactly. A mismatch here means the telemetry fold and the
+    // ledger have drifted — which is the failure the two-store design used to
+    // make invisible.
+    expect(body.metrics.turns).toBe(turns.length);
+    expect(body.metrics.totalUsd).toBeCloseTo(
+      turns.reduce((a, s) => a + s.cost, 0),
+      6,
+    );
+  }, 30_000);
 });

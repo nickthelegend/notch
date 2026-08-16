@@ -11,17 +11,17 @@
  *   metrics   the dashboard: hero tiles, composition, turn durations, health
  *   fleet     who is running right now and who holds the baton
  *   handoffs  the baton's routes, and how often each was walked
- *   selfheal  who a firing alert has paused, and every past pause as an episode
+ *   selfheal  who the watcher has paused, and every past pause as an episode
  *   timeline  the chronological trace
  *   decisions what each agent decided and why
- *   logs      what the fleet actually said, read back out of SigNoz
+ *   logs      what the fleet actually said, read back out of HydraDB
  *   replay    a scrubber that rewinds the run
  *
  * Provenance is shown, not assumed: /insights/* answer with `from`, which is
- * "signoz" when ClickHouse served the spans and "local-log" when it was empty
- * or down. Those two are different claims about the same panel. Logs are the one
- * signal with no second answer — see LogsView for why "unavailable" is printed
- * there rather than quietly rendered as an empty list.
+ * "hydradb" when the graph served the spans and "local-log" when it had none
+ * for the window. Those two are different claims about the same panel. Logs are
+ * the one signal with no second answer — see LogsView for why "unavailable" is
+ * printed there rather than quietly rendered as an empty list.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -242,8 +242,8 @@ export function ObservatoryView(props: { creds: Creds; project: Project }) {
     enabled: view === "replay",
   });
   /**
-   * Self-heal reads the quarantine map, and a quarantine arrives over a SigNoz
-   * webhook at a moment nothing on this screen predicts. The `project` prop was
+   * Self-heal reads the quarantine map, and a quarantine is written by the
+   * daemon's watcher at a moment nothing on this screen predicts. The `project` prop was
    * fetched by whoever mounted the Observatory and is therefore precisely the
    * thing that will be stale on the one view whose entire job is "right now" —
    * so that tab fetches its own copy the moment it opens (`enabled` flips, the
@@ -382,7 +382,7 @@ function MetricsView(props: {
                 emptyText="No completed turns to plot yet. Each finished turn adds a point."
               />
               <Text style={{ color: T.faint, fontSize: 10, fontFamily: T.mono }}>
-                {d.from === "signoz" ? "from SigNoz spans" : "from the local event log — SigNoz had nothing"}
+                {d.from === "hydradb" ? "from HydraDB spans" : "from the local event log — the graph had nothing yet"}
               </Text>
             </>
           )}
@@ -446,7 +446,7 @@ function MetricsView(props: {
                   })
                 )}
                 <Text style={{ color: T.faint, fontSize: 10, fontFamily: T.mono }}>
-                  {h.from === "signoz" ? "scored from SigNoz spans" : "scored from the local event log"}
+                  {h.from === "hydradb" ? "scored from HydraDB spans" : "scored from the local event log"}
                 </Text>
               </View>
             );
@@ -576,7 +576,7 @@ function HandoffsView(props: { events: Res<{ events: LoomEvent[] }> }) {
         }
         const counts = new Map<string, { from: string; to: string; n: number; last: number }>();
         for (const p of pairs) {
-          const k = `${p.from}${p.to}`;
+          const k = `${p.from}\u0001${p.to}`;
           const cur = counts.get(k);
           if (cur) {
             cur.n += 1;
@@ -686,7 +686,7 @@ interface Episode {
  */
 function healEpisodes(events: LoomEvent[]): Episode[] {
   const heal = events
-    .filter((e) => e.kind === "status" && String((e.payload as Record<string, unknown>).state ?? "").indexOf("signoz_") === 0)
+    .filter((e) => e.kind === "status" && String((e.payload as Record<string, unknown>).state ?? "").indexOf("heal_") === 0)
     .slice()
     .sort((a, b) => a.ts - b.ts);
 
@@ -695,7 +695,7 @@ function healEpisodes(events: LoomEvent[]): Episode[] {
   for (const e of heal) {
     const p = e.payload as Record<string, unknown>;
     const agent = e.agentId ?? "?";
-    if (p.state === "signoz_intervention") {
+    if (p.state === "heal_intervention") {
       const ep: Episode = {
         agent,
         alert: String(p.alert ?? "alert"),
@@ -707,7 +707,7 @@ function healEpisodes(events: LoomEvent[]): Episode[] {
       };
       open.set(agent, ep);
       episodes.push(ep);
-    } else if (p.state === "signoz_recovery") {
+    } else if (p.state === "heal_recovery") {
       const ep = open.get(agent);
       if (ep) {
         ep.to = e.ts;
@@ -731,13 +731,13 @@ function healEpisodes(events: LoomEvent[]): Episode[] {
 }
 
 /**
- * Self-heal — what SigNoz said, and what Notch did about it.
+ * Self-heal — what the watcher saw, and what Notch did about it.
  *
- * Built from Notch's OWN record rather than SigNoz's API: the webhook already
- * tells the daemon every fire and resolve, so this needs no credentials, no
- * second service to poll, and it keeps working when SigNoz is down — which is
- * exactly the moment you want to know which agents are still paused. SigNoz can
- * tell you an alert fired; only this can tell you the fleet reacted.
+ * Built from Notch's OWN record: the daemon counts an agent's error spans and
+ * fencing violations in HydraDB and writes a heal_intervention / heal_recovery
+ * event for every pause and lift. So this needs no credentials and no second
+ * service to poll — a count in the graph can tell you an agent is failing; only
+ * this can tell you the fleet reacted.
  */
 function SelfHealView(props: {
   creds: Creds;
@@ -770,7 +770,7 @@ function SelfHealView(props: {
       void liftQuarantine(creds, projectId, agentId)
         .then((r) => {
           setLive(r.quarantine ?? {});
-          // The daemon writes a signoz_recovery event for a manual lift, so the
+          // The daemon writes a heal_recovery event for a manual lift, so the
           // episode below can close as soon as the log is re-read. Without this
           // nudge the history spends one poll interval calling a just-ended
           // episode "ended (no recovery recorded)", which is only true until the
@@ -877,15 +877,15 @@ function SelfHealView(props: {
                   <Sys text="reading the event log…" />
                 )
               ) : !episodes.length ? (
-                <Empty text="No alert has fired yet. Wire the rules up from the desktop's Set up SigNoz, and every fire and recovery lands here as an episode." />
+                <Empty text="Nothing has tripped yet. When an agent errors past the threshold — or writes with a stale epoch — the pause and its recovery land here as an episode." />
               ) : (
                 episodes.slice(0, 25).map((ep, i) => <EpisodeRow key={`${ep.agent}-${ep.from ?? ep.to}-${i}`} ep={ep} q={q} />)
               )}
             </Panel>
 
             <Text style={{ color: T.faint, fontSize: 10.5, fontFamily: T.mono, lineHeight: 17 }}>
-              Rules live in SigNoz. A firing alert refuses that agent the baton; a resolved one gives
-              it back.
+              The thresholds live in the daemon. A tripped agent is refused the baton; it gets it
+              back the moment it stops failing.
             </Text>
           </>
         );
@@ -949,15 +949,15 @@ function timelineRow(e: LoomEvent): { text: string; color: string; bold?: boolea
   const state = String(p.state ?? "");
 
   if (e.kind === "status") {
-    if (state === "signoz_intervention")
+    if (state === "heal_intervention")
       return {
-        text: `⚡ SigNoz alert · ${String(p.alert ?? "alert")} → baton forced off ${e.agentId ?? "agent"}${p.fallback ? ` to ${String(p.fallback)}` : ""}`,
+        text: `⚡ self-heal · ${String(p.reason ?? p.alert ?? "unhealthy")} → baton forced off ${e.agentId ?? "agent"}${p.fallback ? ` to ${String(p.fallback)}` : ""}`,
         color: T.primary,
         bold: true,
       };
-    if (state === "signoz_recovery")
+    if (state === "heal_recovery")
       return {
-        text: `✓ SigNoz recovery · ${String(p.alert ?? "alert")} resolved → ${p.retried ? `baton retried on ${e.agentId ?? "agent"}` : `quarantine lifted on ${e.agentId ?? "agent"}`}`,
+        text: `✓ self-heal recovery · ${String(p.reason ?? p.alert ?? "recovered")} → ${p.retried ? `baton retried on ${e.agentId ?? "agent"}` : `quarantine lifted on ${e.agentId ?? "agent"}`}`,
         color: T.ok,
       };
     if (state === "agent_decision")
@@ -1285,21 +1285,17 @@ function sevTint(sev: string): string {
 }
 
 /**
- * The fleet's own log lines, read back out of SigNoz.
- *
- * Notch has emitted all three OTel signals for a long time but could only ever
- * read traces back, which is a strange thing to ship in an observability tool.
- * This is the other half.
+ * The fleet's own log lines, read back out of HydraDB.
  *
  * There is deliberately NO local fallback, and that is the one thing this panel
  * has to be honest about. A span has a fallback because a span is a summary of
  * an event that is already on the daemon's disk, so /insights/spans can answer
  * "local-log" and still be telling the truth. A log line is not: its severity,
- * its body and its trace correlation only exist once the record was built and
- * shipped. Rebuilding something log-shaped from the event log would be inventing
- * data. So when ClickHouse is unreachable the daemon answers `from:
- * "unavailable"` and this prints that, rather than rendering an empty list —
- * which a reader would take as "nothing happened", the exact opposite claim.
+ * its body and its trace correlation only exist once the record was built.
+ * Rebuilding something log-shaped from the event log would be inventing data.
+ * So when the graph is unreachable the daemon answers `from: "unavailable"` and
+ * this prints that, rather than rendering an empty list — which a reader would
+ * take as "nothing happened", the exact opposite claim.
  */
 function LogsView(props: { creds: Creds; projectId: string }) {
   const [sev, setSev] = useState<SevKey>("all");
@@ -1307,7 +1303,7 @@ function LogsView(props: { creds: Creds; projectId: string }) {
   const [q, setQ] = useState("");
 
   // The filter is part of the request key, so typing straight into it would fire
-  // one ClickHouse round-trip per keystroke. 350ms is the same beat the MCP
+  // one query per keystroke. 350ms is the same beat the MCP
   // registry search uses elsewhere in the app.
   useEffect(() => {
     const t = setTimeout(() => setQ(text.trim()), 350);
@@ -1348,7 +1344,7 @@ function LogsView(props: { creds: Creds; projectId: string }) {
             <Panel padded={false}>
               <View style={{ paddingHorizontal: 12, paddingTop: 12 }}>
                 <SectionLabel
-                  text={`Logs · ${d.logs.length} line${d.logs.length === 1 ? "" : "s"} · from SigNoz`}
+                  text={`Logs · ${d.logs.length} line${d.logs.length === 1 ? "" : "s"} · from HydraDB`}
                 />
               </View>
               {!d.logs.length ? (
@@ -1376,9 +1372,9 @@ function Unread() {
     <Panel tint={T.warn}>
       <SectionLabel text="Logs" />
       <Text style={{ color: T.text, fontSize: 13.5, lineHeight: 20 }}>
-        Logs live in SigNoz, and ClickHouse isn&apos;t answering — so there is nothing to read.
-        Unlike spans, logs have no local fallback. Bring SigNoz up on the daemon&apos;s machine
-        (<Text style={{ fontFamily: T.mono, fontSize: 12.5 }}>./scripts/signoz-up.sh</Text>) and this
+        Logs live in HydraDB, and the graph isn&apos;t answering — so there is nothing to read.
+        Unlike spans, logs have no local fallback. Bring the node up on the daemon&apos;s machine
+        (<Text style={{ fontFamily: T.mono, fontSize: 12.5 }}>./scripts/hydra-up.sh</Text>) and this
         fills in.
       </Text>
       <Text style={{ color: T.faint, fontSize: 10.5, fontFamily: T.mono, lineHeight: 17 }}>
@@ -1426,8 +1422,8 @@ function LogRow(props: { log: InsightLog; last: boolean }) {
         <View style={{ flex: 1 }} />
         {/* A short trace id, tinted by the trace it belongs to: lines from one
             turn share a colour, which is the correlation you want while
-            scrolling. Not a link — the phone has no SigNoz base URL to build one
-            from, and inventing a host would be worse than not offering the tap. */}
+            scrolling. Not a link — the phone has no dashboard host to build one
+            from, and inventing one would be worse than not offering the tap. */}
         {l.traceId ? (
           <View
             style={{
@@ -1781,7 +1777,7 @@ function TriageSheet(props: {
               tint={triage.source === "llm" ? T.primary : T.dim}
             />
             <Badge
-              text={triage.from === "signoz" ? "from SigNoz" : triage.from === "local-log" ? "from the event log" : "no source"}
+              text={triage.from === "hydradb" ? "from HydraDB" : triage.from === "local-log" ? "from the event log" : "no source"}
             />
             <Badge text={`${triage.spanCount} spans · ${triage.errorCount} err`} tint={triage.errorCount ? T.warn : T.dim} />
           </View>

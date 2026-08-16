@@ -9,20 +9,73 @@ something is a guess, it says so.
 
 ---
 
-## 1. The one hard requirement: Node ≥ 22.5
+## 0. The one hard requirement: a HydraDB node
+
+Notch's event log, baton and brain all live in HydraDB. Nothing falls back to a
+local file, so without a node the daemon will refuse to open a project — which
+is deliberate: a store that silently degrades is how you lose a week of history
+and only notice later.
+
+```sh
+./scripts/hydra-up.sh
+```
+
+That starts a container, waits for readiness, and then **writes and reads a
+vertex** before saying OK. A listening port is not proof; a round-tripped write
+is. If it prints the three ports, you are done.
+
+Check it any time:
+
+```sh
+loom graph          # connection + what this project has in the graph
+loom doctor         # hydradb is the first line
+```
+
+Two failure modes are worth knowing before you hit them:
+
+| Symptom | Cause |
+|---|---|
+| the node answers `/readyz` and then aborts on the first query | `RUST_MIN_STACK` unset. The script sets it to `33554432`; a hand-rolled `docker run` must too |
+| `Bind for 0.0.0.0:7687 failed: port is already allocated` | another HydraDB is already there. The script detects a healthy one and uses it; set `HYDRA_HTTP_PORT` to run a second alongside |
+
+Point Notch elsewhere with `HYDRA_URL`, `HYDRA_TOKEN`, `HYDRA_GRAPH`,
+`HYDRA_NAMESPACE`, `HYDRA_CELL`.
+
+### Starting over
+
+```sh
+./scripts/hydra-up.sh --fresh      # deletes the volume, then starts clean
+```
+
+Two reasons you will want this. HydraDB's `local` object-store backend cannot
+resume an existing store, so a node restarted onto an old volume never comes
+healthy — a fresh volume is the only reset there is. And the graph is shared by
+every project that has ever opened it, so a development node that has run the
+test suite for weeks carries tens of thousands of events from temp projects that
+no longer exist, which is enough to slow the suite down. It asks before wiping.
+
+`LOOM_STORE=sqlite` still selects the pre-HydraDB store. It is a deliberate
+choice, not a fallback — nothing degrades into it — and it costs you the
+Provenance tab, causal chains, cross-run recall, and a baton that can detect
+contention. `loom doctor` says so when it is set.
+
+---
+
+## 1. The other hard requirement: Node ≥ 22.5
 
 ```sh
 node --version
 ```
 
-Notch's event log uses `node:sqlite`, which arrived in Node 22.5. On anything
-older Notch still runs and **silently falls back to a JSONL store with no
-history** — the app looks fine and your past turns aren't there.
+The floor is the runtime itself, and the optional `node:sqlite` store (which
+arrived in 22.5). The **default store is HydraDB**, so the event log does not
+depend on the Node version at all — and it does not silently degrade: an
+unreachable node throws rather than starting an empty log beside a full one.
 
-> **The installed desktop app has this problem too.** Electron 33 bundles Node
+> **The installed desktop app spawns its own Node.** Electron 33 bundles Node
 > 20, so `Notch Desktop.app` looks for a real `node` on your machine (`$LOOM_NODE`, then
-> the usual install paths, then `PATH`). If it can't find one, it runs on
-> Electron's Node and degrades exactly as above. There is no warning yet. See
+> the usual install paths, then `PATH`). If it can't find one it runs on Electron's
+> Node, which is below the floor and cannot use the `sqlite` store. See
 > `desktop/BUILD.md`.
 
 - **macOS**: `brew install node`

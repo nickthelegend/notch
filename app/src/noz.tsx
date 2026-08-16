@@ -11,10 +11,10 @@
  *   happening.
  *
  *   It is not authoritative on its own. Every answer carries which model
- *   actually spoke, whether the evidence came from SigNoz or the local event
+ *   actually spoke, whether the evidence came from HydraDB or the local event
  *   log, and which MCP servers were in the room. That line is not decoration:
- *   "local-log" means SigNoz was empty or down, which is a different claim about
- *   the same sentence.
+ *   "local-log" means the graph had no spans for this window, which is a
+ *   different claim about the same sentence.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -266,12 +266,12 @@ function ExchangeCard(props: { exchange: Exchange; onRetry: () => void }) {
 /** Where the answer came from. Shown under every answer, never folded away. */
 function Provenance(props: { result: AskResult }) {
   const r = props.result;
-  const signoz = r.spanSource === "signoz";
+  const graph = r.spanSource === "hydradb";
   return (
     <View style={{ gap: 6, borderTopWidth: 1, borderTopColor: T.line, paddingTop: 9 }}>
       <View style={{ flexDirection: "row", gap: 6, flexWrap: "wrap" }}>
         <Badge text={r.via || "unknown model"} tint={T.primary} />
-        <Badge text={signoz ? "evidence: SigNoz spans" : "evidence: local event log"} tint={signoz ? T.thread : T.dim} />
+        <Badge text={graph ? "evidence: HydraDB spans" : "evidence: local event log"} tint={graph ? T.thread : T.dim} />
         {r.mcpServers.length ? (
           <Badge text={`MCP: ${r.mcpServers.join(", ")}`} tint={T.thread} />
         ) : (
@@ -281,7 +281,7 @@ function Provenance(props: { result: AskResult }) {
       {r.evidenceSpans != null || r.evidenceAgents != null ? (
         <Text style={{ color: T.faint, fontSize: 10, fontFamily: T.mono }}>
           read {r.evidenceSpans ?? 0} spans across {r.evidenceAgents ?? 0} agents
-          {signoz ? "" : " — SigNoz had nothing, so this came from the local log"}
+          {graph ? "" : " — the graph had no spans yet, so this came from the local log"}
         </Text>
       ) : null}
     </View>

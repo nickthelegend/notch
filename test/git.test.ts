@@ -54,6 +54,26 @@ const write = (dir: string, rel: string, body: string): string => {
   return rel;
 };
 
+describe("status on a repository with no commits", () => {
+  /**
+   * `git status --porcelain -b` says `## No commits yet on main` before the
+   * first commit, not `## main`. Slicing off the marker alone made the whole
+   * sentence the branch name, so the SCM panel showed a branch called "No
+   * commits yet on main" — on exactly the repo you have just initialised from
+   * inside Notch, which is the first thing a new user does.
+   */
+  it("reports the real branch name before the first commit", async () => {
+    const dir = tmpDir("git-fresh");
+    await init(dir);
+    fs.writeFileSync(path.join(dir, "a.txt"), "hi\n");
+    const st = await status(dir);
+    expect(st.branch).toBe("main");
+    expect(st.untracked).toContain("a.txt");
+    expect(st.ahead).toBe(0);
+    expect(st.behind).toBe(0);
+  });
+});
+
 describe("git · staying inside the project", () => {
   /**
    * The reason this module has a path check at all: these paths come from an

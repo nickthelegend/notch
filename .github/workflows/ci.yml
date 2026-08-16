@@ -19,6 +19,23 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      # The event log, the baton and the brain are all on HydraDB, and none of
+      # them fall back to a local file. The suite runs against a real
+      # `graph-node` rather than a double for a specific reason: what the
+      # HydraDB tests assert is *storage-engine behaviour* — that commit
+      # sequences form a total order, that `strong` re-reads object storage,
+      # that a bounded traversal returns the paths it should. A fake would only
+      # ever prove it agrees with itself, and the two constraints that shaped
+      # this port (MATCH..WHERE..SET is not a compare-and-swap; a list
+      # parameter is only accepted as UNWIND input) are exactly the kind it
+      # would have hidden.
+      #
+      # RUST_MIN_STACK is not optional: without it the node answers /readyz and
+      # then aborts on the first query, which reads as a network fault.
+      - name: start HydraDB
+        run: ./scripts/hydra-up.sh
+        env:
+          HYDRA_DATA: ${{ runner.temp }}/hydradb
       # node-pty ships no Linux prebuild, so this runner compiles it — and
       # because it's an optionalDependency, a failed build is silent. Without
       # LOOM_EXPECT_PTY the pty tests would skip themselves and the whole

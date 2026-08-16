@@ -1,4 +1,4 @@
-# I made five coding agents watch themselves — with SigNoz on both ends
+# I put five coding agents in one graph — and the graph is what makes them safe
 
 I run more than one coding agent. Claude Code for planning, Codex for building,
 OpenCode for review, Grok and the Antigravity CLI when I want a second opinion or
@@ -11,8 +11,11 @@ and then find out an hour after that they'd made contradictory choices about the
 same file. I couldn't see what any of them were doing, what they cost, or why one
 of them had quietly started failing.
 
-That's what Notch is for. And it turned out the interesting part wasn't shipping
-telemetry to SigNoz — it was reading it back.
+That's what Notch is for. The version I'm writing about here is a ground-up
+re-architecture of its bottom layer onto **HydraDB** — an object-store-native
+distributed graph database — and the interesting part was not "we swapped the
+database". It's that two questions the product could never answer became one
+traversal each.
 
 ---
 
@@ -30,169 +33,188 @@ is an explicit event, and on every handoff Notch projects the brain into the nex
 agent's context, so Codex starts its turn already knowing what Claude Code
 decided and why.
 
-That gives you a single thread across five processes. It also gives you something
-to instrument: a turn, a handoff, a route, a memory fold. Those are the spans.
+Before this rewrite, the log was a per-project SQLite file and the baton was a
+field in `.loom/state.json`. Both worked. Both also decided what the product
+could never ask.
 
 ---
 
-## The write path: three signals, GenAI semconv
+## The baton is the part I'd defend in a design review
 
-Every turn becomes a `gen_ai.agent.turn` span following the OpenTelemetry
-[GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/),
-with the model, token counts, cost and duration on it. Handoffs get their own
-`notch.baton.handoff` spans, so the trace shows which agent fed which.
+A lock in a JSON file is a read-modify-write with no interlock. Two agents can
+both read "holder: null" and both write themselves in, and nothing anywhere
+notices. That is not a theoretical race — it is the normal outcome under any
+concurrency at all.
 
-Metrics go out as six instruments — `gen_ai.client.token.usage` split by
-`gen_ai.token.type`, `gen_ai.client.operation.duration` as a histogram in seconds,
-`notch.handoffs` labelled from→to, `notch.agents.active` as a gauge.
+So the first thing I tried on HydraDB was the obvious thing:
 
-Logs carry the trace id of the turn that produced them, which is the bit that
-matters later: a log line and its span are one click apart.
-
-All three go over OTLP/HTTP to `localhost:4318`. Nothing clever. The clever part
-is what happens next.
-
----
-
-## The read path: SigNoz as the source, not just the sink
-
-Most tools ship telemetry and stop. The dashboard is the deliverable. But once
-your spans are in ClickHouse, they're a queryable record of what your agents
-actually did — and the agents can read that.
-
-Notch queries its own spans back out for four things.
-
-**Agent Health, 0–100.** A pure function over an agent's own spans: error rate
-(≤40 points), latency (≤25), token bloat (≤20), recency of the last error (≤15).
-It's unit-tested and it's boring, which is the point — a score you can't derive by
-hand is a score nobody trusts.
-
-**Triage — "why did I fail?"** This is the one I'd show first. Click ⚠ Triage on
-an agent and it pulls its own `gen_ai.*` spans from SigNoz, finds the most recent
-failure *and the upstream handoff that led into it*, and root-causes itself. Here
-is real output from my machine, not a mockup:
-
-> **40 spans · 22 error(s)**
->
-> Not healthy — two independent failures, both since recovered. The primary root
-> cause is a model/auth mismatch: the `notch.error` spans at 10:34:57 and 10:44:13
-> return `400 invalid_request_error` — `gpt-5.1-codex` / `gpt-5-codex` "not
-> supported when using Codex with a ChatGPT account" — which crashes the process
-> (`codex exited 1`). Note the upstream `notch.baton.handoff` at 10:34:57 hands
-> off into a fresh turn that immediately dies, so the orchestrator is repeatedly
-> launching codex with a ChatGPT-unsupported model.
-
-It found a real bug in my own configuration, named the model, quoted the API
-error, and pointed at the handoff that kept re-triggering it. I did not write that
-paragraph — Codex did, about itself, from its own traces.
-
-**Trace waterfall + deep link.** Any turn opens as time-positioned span bars with
-a jump straight into SigNoz for the full trace.
-
-**Logs, read from ClickHouse.** Severity chips, text filter, trace id per line.
-This is the one view with no local fallback, and that's deliberate: if ClickHouse
-isn't answering it *says so* rather than showing an empty list that looks like a
-quiet run.
-
----
-
-## The act path: self-healing on a SigNoz alert
-
-Here's where SigNoz stops being a dashboard and becomes a control input.
-
-Notch provisions two alert rules — turn error rate, turn latency — and a webhook
-channel pointing at `POST /api/webhooks/signoz`. When one fires:
-
-1. The named agent is **quarantined** — refused the baton.
-2. If it was holding the baton **mid-turn**, the baton is taken and handed to a
-   healthy agent.
-3. When the alert resolves, the agent comes out of quarantine and the baton is
-   handed back.
-
-One real episode from the demo, end to end:
-
-```
-opencode · AgentErrorRateHigh
-3:38:57 AM → 3:39:13 AM · held 17s · baton moved to claude-code · baton handed back
-RECOVERED
+```cypher
+MATCH (b:Baton {id: $id}) WHERE b.holder = $expected SET b.holder = $me
 ```
 
-Seventeen seconds, no human. The Self-heal tab shows every episode as a row.
+**That is not a compare-and-swap.** It reads and writes without holding
+anything. I ran eight concurrent claimants against a real node and got **two to
+four winners**, run to run. If I had shipped it, the demo would have worked every
+time and the guarantee would have been fiction.
 
-I keep coming back to one line to explain why this matters: **SigNoz knows the
-alert fired. Only Notch knows the fleet reacted.** That half of the loop can't
-live in the observability tool, because the tool doesn't own the orchestration.
-It has to live where the baton lives.
+What HydraDB *does* give you is more useful than a CAS, and it took me a while to
+see it: every canonical mutation for a cell serialises through one writer and
+comes back with the storage sequence it committed at. Those sequences are a total
+order, and your client is handed its position in it (in the `bookmark`).
 
----
+So taking the baton became an **election**:
 
-## Things I got wrong
+1. Every claimant appends its own `(:BatonClaim)` for the next epoch and keeps
+   the sequence its write committed at.
+2. The lowest sequence at that epoch wins.
+3. A ballot that arrives later can never draw a lower sequence — so a winner
+   cannot be overtaken once anyone has seen it.
 
-A build log with no failures in it is a marketing page, so:
+Every client computes the same holder from the same ledger without talking to the
+others. Eight concurrent claimants now elect exactly one, and the losers can see
+*why* they lost, because the ballots are still there. That test runs against a
+real node in CI.
 
-**SigNoz v0.134's API is specific.** Login is
-`POST /api/v2/sessions/email_password` and it *requires* an `orgID`, which you get
-from `/api/v2/sessions/context?email=` — the only open-access org lookup.
-`/api/v1/orgs` needs a session and returns SPA HTML with a 200, which cost me a
-while. Alert rules need `version: "v5"` and `condition.compositeQuery.queries` as
-an array — not `builderQueries`, which is what the older docs show.
+The honest caveat, which is in the README in the same words: **HydraDB exposes no
+client lock API.** Its writer leases are internal. What it exposes is the commit
+order those leases produce, and that is what this is built on.
 
-**Dashboards.** SigNoz normalises a posted dashboard to v5. A `filters` block
-normalises to `filter: null`, which v5 then rejects, and the panel spins forever
-with no error. Use `filter: {expression: ""}`. Also: an *ungrouped* gauge query
-returned zero points for me while the grouped version returned all of them.
-
-**ClickHouse schema.** `signoz_logs.distributed_logs_v2` stores timestamps in
-nanoseconds and trace ids already lowercase-hex — unlike the trace tables, which
-bit me. Metrics need `distributed_samples_v4` joined to
-`distributed_time_series_v4` on `fingerprint`, grouped by fingerprint, with the
-time filter on the samples side only.
-
-**The honest-empty-state rule.** The Metrics tab once showed "Spend — nothing
-recorded yet" directly underneath a `$3.64` total. Both were true — the total sums
-the whole log, the sparkline only the last ten turns — but on one screen it reads
-as the dashboard contradicting itself. If you're building an observability UI:
-two true numbers that disagree are worse than one number.
+The other half is **fencing**. An agent is issued a tenure epoch when it wins.
+If it tries to write on a tenure it has since lost, the write is refused and the
+refusal is recorded as a `(:FencingViolation)`. The Observatory has a button that
+does this on purpose — a real stale-epoch write through the same gate every
+baton-authorized action goes through. A guarantee nobody can watch fail is a
+guarantee nobody has any reason to believe.
 
 ---
 
-## Reproduce it
+## "Why did this actually fail" is a traversal now
 
-The repo ships a `casting.yaml` and `casting.yaml.lock` for
-[SigNoz Foundry](https://github.com/SigNoz/foundry), forged with the real
-`foundryctl` rather than hand-written, so you can stand up the exact stack the
-screenshots were taken against:
+The brain used to be text: memory units, recalled by shared entities plus BM25.
+That finds memories that *say* similar things. It cannot find the memory that
+matters and shares no words with your query.
+
+In the graph, memory units carry edges: `ABOUT` an entity (a file, a symbol, an
+error code), `CAUSED_BY` another unit, `CONSTRAINED_BY` a constraint,
+`SUPERSEDES` the belief it corrected. Which buys two things text search can't do
+at all:
+
+- **A third recall channel.** Alongside entity overlap and BM25, a bounded
+  traversal from what the turn is *touching*. Two memories that never share a
+  word are one hop apart when they're about the same file.
+- **Causal chains.** "Why did this fail" is a shortest-path query from a failure
+  to the decision that caused it and the constraint that decision violated —
+  `algo.SSpaths`, one call.
+
+`ABOUT` edges are deliberately **not** project-scoped, which is what makes
+cross-run recall work: a constraint learned about `src/core/baton.ts` in one run
+is about the same file in the next one.
+
+---
+
+## Then I deleted the second database
+
+Notch used to ship OpenTelemetry to a separate telemetry stack and read it back
+over SQL. It worked. It also cost three things:
+
+- a window where the dashboard and the event log disagreed, because one of them
+  hadn't ingested yet;
+- a Logs view that had to carry "the query store isn't answering" as a
+  first-class state, because that store could be down while the daemon was up;
+- a second stack to provision before a demo.
+
+The fold is unchanged — same GenAI semantic conventions, same
+`gen_ai.agent.turn` spans with model, tokens, cost and duration, same log lines
+carrying the trace id of the turn that produced them. Only the destination moved:
+spans and log lines are now `(:Span)` and `(:LogLine)` hanging off the project,
+one hop from the events they describe. Metrics are *derived from those spans on
+read*, so a chart and the span list behind it cannot disagree.
+
+All three problems disappear at once. And self-heal got better as a side effect:
+it used to arrive as an inbound alert webhook, which had to sit **in front of**
+the bearer auth wall because the alerting system had no token — the one
+unauthenticated way to move the baton in the whole daemon. Now the watcher reads
+the evidence the daemon already wrote: three error spans in ten minutes, or a
+single fenced write, and the agent is paused and the baton fails over. Every
+`/api` route needs a token again.
+
+That last threshold is my favourite rule in the codebase. One fenced write is
+enough on its own, because a stale writer is by definition an agent that has lost
+track of whether it may act.
+
+---
+
+## Things that cost me real hours
+
+A build log with no failures in it is a marketing page, so — all of these were
+measured against a live node, not read off a doc:
+
+**A single property value is capped at 32 KiB.** 31 KiB commits; 32 KiB fails
+with an internal error. Event payloads can be anything, so events are chunked
+across `(:Event)-[:CHUNK]->(:EventChunk)` and reassembled on read. Byte-based
+chunking, not character-based — that distinction is the difference between
+working and working until someone pastes emoji.
+
+**Results are paginated and it is silent.** 3000 rows in, 1024 out, no error, no
+warning. You follow `next_cursor` — and you must carry the `query_id` with it, or
+the cursor is refused. `read_epoch` comes back on a response and is *not* a
+snapshot selector to send on the next one; I tried.
+
+**Supply your own `query_id`.** HydraDB dedupes writes by it. The server's auto
+counter resets when the node restarts, so a fresh node happily deduped writes
+against ids my client had used an hour earlier. That one presented as "some
+events just don't appear."
+
+**Reach rows through edges, never by property.** `MATCH (e:Event) WHERE e.proj =
+$slot` is a full scan of every project's events, because the graph holds every
+project. Measured on 74k events: **2.27s** for the scan, **0.010s** for the same
+answer through `(:Project)-[:HAS_EVENT]->`. Everything Notch owns now hangs off a
+`HAS_*` edge.
+
+**The scan rule catches you twice.** I knew not to scope by property, and I
+still shipped one: the key→id table is a single global label, so hydrating it on
+`open()` was a full scan of every project that had ever touched the node. It was
+invisible until the dev node had 1671 projects on it, at which point the test
+suite went from 87 seconds to 322 with timeouts. The tell was that it got slower
+every week and nothing in the diff explained it.
+
+**Node's `fetch` keep-alive pool wedges permanently** if the container is
+recreated on the same port. Not slow — wedged, forever, until the process
+restarts. The client owns its own `http.Agent` and retires it on a connection
+failure.
+
+**The `local` object-store backend cannot resume an existing store**, because it
+has no conditional writes. A node restarted onto its old volume never comes
+healthy. The symptom looks exactly like data loss, so `loom doctor` says it in
+words.
+
+**The honest-empty-state rule**, which predates all of this and still earns its
+keep. The Metrics tab once showed "Spend — nothing recorded yet" directly
+underneath a `$3.64` total. Both were true — the total sums the whole log, the
+sparkline only the last ten turns — but on one screen it reads as the dashboard
+contradicting itself. Two true numbers that disagree are worse than one number.
+
+---
+
+## Try it
 
 ```bash
-foundryctl forge -f casting.yaml
-docker compose -f pours/deployment/compose.yaml up -d
-```
-
-One thing that matters and isn't the default: Foundry doesn't publish
-ClickHouse's HTTP port, and Notch reads its spans back *directly* from ClickHouse.
-Without `8123` exposed the stack ingests happily and every read-back view reports
-"unavailable" — the honest failure, but not a working demo. There's a patch in the
-casting file that does it.
-
-Then:
-
-```bash
+./scripts/hydra-up.sh            # one node; it round-trips a real write before claiming success
 npm install -g notch
 cd your-project && loom init && loom
 ```
 
----
+Everything lives in that one node: the log, the baton, the brain, the spans, the
+log lines. There is no second service to bring up for observability, and
+`.loom/` holds no log at all — delete it and the thread survives.
 
-## What's next
+The tests run against a **real** node. There is no in-memory double, and
+deliberately so: the two most valuable findings in this port — that
+`MATCH … WHERE … SET` is not a compare-and-swap, and that a list parameter is
+only accepted as `UNWIND` input — are exactly the kind a fake would have hidden.
 
-The triage logic is now a
-[PR to SigNoz's own agent-skills repo (#76)](https://github.com/SigNoz/agent-skills/pull/76),
-so you can point any MCP-capable agent at your SigNoz and ask it why it failed —
-without running Notch at all.
-
-Notch is MIT, 733 tests, and has installers for macOS, Windows, Linux and Android.
+Notch is MIT, **716 passing tests across 59 files**, and has installers for
+macOS, Windows, Linux and Android.
 
 - **Code:** https://github.com/nickthelegend/notch
 - **Download:** https://notch-observatory.vercel.app
-
-Built for the [SigNoz × WeMakeDevs hackathon](https://www.wemakedevs.org/hackathons/signoz).

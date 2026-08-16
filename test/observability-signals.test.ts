@@ -1,80 +1,28 @@
 /**
- * Metrics and logs unit tests: the OTLP payload shapes a collector will reject
- * if we get them wrong (sum/histogram/gauge bodies, temporality, asInt vs
- * asDouble, log record fields), the LoomEvent -> datapoint and
- * LoomEvent -> log record mappers, honest severity mapping, and the rule this
- * codebase cares about most — never invent a number an adapter didn't report.
+ * The pure LoomEvent → metric and → log-record mappers, plus the end-to-end
+ * path from one event to a span and a log line in HydraDB.
+ *
+ * The OTLP exporter blocks that used to sit between them are gone with the
+ * exporters. What is left is the part that still makes decisions — which event
+ * becomes which datapoint, at which severity — and one test that the whole
+ * fold really lands in the graph, run against a real node like the rest of the
+ * suite.
  */
 
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { LoomEvent } from "../src/types.js";
-import { NotchMetrics } from "../src/observability/metrics.js";
-import { NotchLogs, SEVERITY, eventToLogRecord, truncate } from "../src/observability/logs.js";
-import { eventToMetrics, flushTelemetry, recordAgentEvent } from "../src/observability/index.js";
-import { resolveTelemetryConfig, type NotchTelemetryConfig } from "../src/observability/signoz.js";
+import { eventToMetrics, recordAgentEvent } from "../src/observability/index.js";
+import { eventToLogRecord, SEVERITY, truncate } from "../src/observability/logs.js";
+import { TelemetryStore } from "../src/hydra/telemetry.js";
+import { projectGraph } from "../src/hydra/graph.js";
+import { hydraUp, HYDRA_SKIP_MESSAGE, isolatedProject } from "./hydra-helpers.js";
+import path from "node:path";
 
 const ev = (
   kind: string,
   payload: Record<string, unknown> = {},
   extra: Partial<LoomEvent> = {},
 ): LoomEvent => ({ id: 1, ts: 1_000, kind: kind as LoomEvent["kind"], payload, ...extra });
-
-const cfg = (over: Partial<NotchTelemetryConfig> = {}): NotchTelemetryConfig => ({
-  endpoint: "http://collector:4318",
-  serviceName: "notch",
-  headers: { "content-type": "application/json" },
-  enabled: true,
-  metricsEnabled: true,
-  logsEnabled: true,
-  ...over,
-});
-
-function stubFetch() {
-  const calls: Array<{ url: string; opts: { headers: Record<string, string>; body: string } }> = [];
-  const fn = vi.fn(async (url: string, opts: { headers: Record<string, string>; body: string }) => {
-    calls.push({ url, opts });
-    return { ok: true } as Response;
-  });
-  vi.stubGlobal("fetch", fn);
-  return { fn, calls };
-}
-
-const settle = () => new Promise((r) => setTimeout(r, 10));
-
-// ---------------------------------------------------------------------------
-// Per-signal switches
-// ---------------------------------------------------------------------------
-
-describe("resolveTelemetryConfig — per-signal switches", () => {
-  it("keeps metrics and logs on by default", () => {
-    const c = resolveTelemetryConfig({});
-    expect(c.metricsEnabled).toBe(true);
-    expect(c.logsEnabled).toBe(true);
-  });
-
-  it("drops one signal without touching the others", () => {
-    const noMetrics = resolveTelemetryConfig({ NOTCH_OTEL_METRICS: "0" });
-    expect(noMetrics.enabled).toBe(true);
-    expect(noMetrics.metricsEnabled).toBe(false);
-    expect(noMetrics.logsEnabled).toBe(true);
-
-    const noLogs = resolveTelemetryConfig({ NOTCH_OTEL_LOGS: "0" });
-    expect(noLogs.enabled).toBe(true);
-    expect(noLogs.metricsEnabled).toBe(true);
-    expect(noLogs.logsEnabled).toBe(false);
-  });
-
-  it("lets a consent opt-out kill every signal, not just traces", () => {
-    for (const env of [{ DO_NOT_TRACK: "1" }, { NOTCH_TELEMETRY_DISABLED: "1" }, { NOTCH_OTEL: "0" }]) {
-      const c = resolveTelemetryConfig(env);
-      expect([c.enabled, c.metricsEnabled, c.logsEnabled]).toEqual([false, false, false]);
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// eventToMetrics — the mapping, and the no-fake-numbers rule
-// ---------------------------------------------------------------------------
 
 describe("eventToMetrics (LoomEvent -> datapoints)", () => {
   const find = (ops: ReturnType<typeof eventToMetrics>, name: string) => ops.filter((o) => o.name === name);
@@ -150,138 +98,6 @@ describe("eventToMetrics (LoomEvent -> datapoints)", () => {
 
 // ---------------------------------------------------------------------------
 // NotchMetrics — the OTLP wire shapes
-// ---------------------------------------------------------------------------
-
-describe("NotchMetrics (OTLP/HTTP JSON export)", () => {
-  afterEach(() => vi.unstubAllGlobals());
-
-  const metricNamed = (body: string, name: string) =>
-    JSON.parse(body).resourceMetrics[0].scopeMetrics[0].metrics.find((m: { name: string }) => m.name === name);
-
-  it("posts a sum body with delta temporality, isMonotonic and asInt datapoints", async () => {
-    const { calls } = stubFetch();
-    const m = new NotchMetrics(cfg());
-    m.addCount("gen_ai.client.token.usage", 100, { "gen_ai.token.type": "input", "gen_ai.agent.id": "codex" });
-    m.addCount("gen_ai.client.token.usage", 40, { "gen_ai.token.type": "input", "gen_ai.agent.id": "codex" });
-    m.flush();
-    await settle();
-
-    expect(calls[0]!.url).toBe("http://collector:4318/v1/metrics");
-    const body = JSON.parse(calls[0]!.opts.body);
-    const rm = body.resourceMetrics[0];
-    expect(rm.resource.attributes.find((a: { key: string }) => a.key === "service.name").value.stringValue).toBe("notch");
-    const metric = rm.scopeMetrics[0].metrics[0];
-    expect(metric.name).toBe("gen_ai.client.token.usage");
-    expect(metric.unit).toBe("{token}");
-    expect(metric.sum.aggregationTemporality).toBe(2); // DELTA
-    expect(metric.sum.isMonotonic).toBe(true);
-    const dp = metric.sum.dataPoints[0];
-    expect(dp.asInt).toBe("140"); // same attribute set coalesced, int64 as string
-    expect(typeof dp.startTimeUnixNano).toBe("string");
-    expect(typeof dp.timeUnixNano).toBe("string");
-    expect(dp.attributes.find((a: { key: string }) => a.key === "gen_ai.token.type").value.stringValue).toBe("input");
-  });
-
-  it("keeps distinct attribute sets as distinct datapoints", async () => {
-    const { calls } = stubFetch();
-    const m = new NotchMetrics(cfg());
-    m.addCount("gen_ai.client.token.usage", 10, { "gen_ai.token.type": "input" });
-    m.addCount("gen_ai.client.token.usage", 3, { "gen_ai.token.type": "output" });
-    m.flush();
-    await settle();
-    expect(metricNamed(calls[0]!.opts.body, "gen_ai.client.token.usage").sum.dataPoints).toHaveLength(2);
-  });
-
-  it("uses asDouble for money so a three-cent turn is not rounded to nothing", async () => {
-    const { calls } = stubFetch();
-    const m = new NotchMetrics(cfg());
-    m.addCount("notch.cost.usd", 0.031, { "gen_ai.agent.id": "cc" }, false);
-    m.flush();
-    await settle();
-    const metric = metricNamed(calls[0]!.opts.body, "notch.cost.usd");
-    expect(metric.unit).toBe("USD");
-    expect(metric.sum.dataPoints[0].asDouble).toBeCloseTo(0.031);
-    expect(metric.sum.dataPoints[0].asInt).toBeUndefined();
-  });
-
-  it("posts a histogram body with buckets that line up with the boundaries", async () => {
-    const { calls } = stubFetch();
-    const m = new NotchMetrics(cfg());
-    m.record("gen_ai.client.operation.duration", 0.5, { "gen_ai.agent.id": "a" });
-    m.record("gen_ai.client.operation.duration", 15, { "gen_ai.agent.id": "a" });
-    m.flush();
-    await settle();
-
-    const h = metricNamed(calls[0]!.opts.body, "gen_ai.client.operation.duration").histogram;
-    expect(h.aggregationTemporality).toBe(2);
-    const dp = h.dataPoints[0];
-    expect(dp.count).toBe("2"); // int64 as string
-    expect(dp.sum).toBeCloseTo(15.5);
-    expect(dp.min).toBe(0.5);
-    expect(dp.max).toBe(15);
-    // OTLP requires exactly one more bucket than boundaries (the +Inf bucket).
-    expect(dp.bucketCounts).toHaveLength(dp.explicitBounds.length + 1);
-    expect(dp.bucketCounts.every((c: string) => typeof c === "string")).toBe(true);
-    expect(dp.bucketCounts.reduce((n: number, c: string) => n + Number(c), 0)).toBe(2);
-  });
-
-  it("posts a gauge body with no temporality and no start time — it is a reading", async () => {
-    const { calls } = stubFetch();
-    const m = new NotchMetrics(cfg());
-    m.setGauge("notch.agents.active", 2, { "notch.project": "acme" });
-    m.setGauge("notch.agents.active", 1, { "notch.project": "acme" }); // last observation wins
-    m.flush();
-    await settle();
-
-    const metric = metricNamed(calls[0]!.opts.body, "notch.agents.active");
-    expect(metric.unit).toBe("{agent}");
-    expect(metric.gauge.aggregationTemporality).toBeUndefined();
-    const dp = metric.gauge.dataPoints[0];
-    expect(dp.asInt).toBe("1");
-    expect(dp.startTimeUnixNano).toBeUndefined();
-    expect(typeof dp.timeUnixNano).toBe("string");
-  });
-
-  it("gives consecutive delta windows non-overlapping start/end times", async () => {
-    const { calls } = stubFetch();
-    const m = new NotchMetrics(cfg());
-    m.addCount("notch.turns", 1, { status: "ok" });
-    m.flush();
-    await settle();
-    m.addCount("notch.turns", 1, { status: "ok" });
-    m.flush();
-    await settle();
-
-    const first = metricNamed(calls[0]!.opts.body, "notch.turns").sum.dataPoints[0];
-    const second = metricNamed(calls[1]!.opts.body, "notch.turns").sum.dataPoints[0];
-    expect(second.startTimeUnixNano).toBe(first.timeUnixNano); // window advanced, no overlap
-    // and the counter reset: delta means "since last export", not a running total
-    expect(second.asInt).toBe("1");
-  });
-
-  it("does not post when metrics are switched off", async () => {
-    const { fn } = stubFetch();
-    const m = new NotchMetrics(cfg({ metricsEnabled: false }));
-    expect(m.enabled).toBe(false);
-    m.addCount("notch.turns", 1, {});
-    m.record("gen_ai.client.operation.duration", 1, {});
-    m.setGauge("notch.agents.active", 3, {});
-    m.flush();
-    await settle();
-    expect(fn).not.toHaveBeenCalled();
-  });
-
-  it("posts nothing at all when no event produced a datapoint", async () => {
-    const { fn } = stubFetch();
-    const m = new NotchMetrics(cfg());
-    m.flush();
-    await settle();
-    expect(fn).not.toHaveBeenCalled(); // no synthetic zero-valued heartbeat
-  });
-});
-
-// ---------------------------------------------------------------------------
-// eventToLogRecord — bodies, attributes, severity
 // ---------------------------------------------------------------------------
 
 describe("eventToLogRecord (LoomEvent -> OTLP log record)", () => {
@@ -365,151 +181,95 @@ describe("eventToLogRecord (LoomEvent -> OTLP log record)", () => {
 // NotchLogs — the OTLP wire shape
 // ---------------------------------------------------------------------------
 
-describe("NotchLogs (OTLP/HTTP JSON export)", () => {
-  afterEach(() => vi.unstubAllGlobals());
 
-  it("posts a log record with every field SigNoz needs, including trace linkage", async () => {
-    const { calls } = stubFetch();
-    const l = new NotchLogs(cfg());
-    l.log({
-      timeUnixNano: 1_700_000_000_000_000_000n,
-      severityNumber: SEVERITY.INFO,
-      body: "codex completed a turn in 1500ms",
-      attributes: { "gen_ai.agent.id": "codex", "notch.turn.duration_ms": 1500 },
-      traceId: "a".repeat(32),
-      spanId: "b".repeat(16),
-    });
-    l.flush();
-    await settle();
-
-    expect(calls[0]!.url).toBe("http://collector:4318/v1/logs");
-    const rl = JSON.parse(calls[0]!.opts.body).resourceLogs[0];
-    expect(rl.resource.attributes.find((a: { key: string }) => a.key === "service.name").value.stringValue).toBe("notch");
-    const r = rl.scopeLogs[0].logRecords[0];
-    expect(r.timeUnixNano).toBe("1700000000000000000"); // int64 as string
-    expect(r.observedTimeUnixNano).toBe(r.timeUnixNano);
-    expect(r.severityNumber).toBe(9);
-    expect(r.severityText).toBe("INFO");
-    expect(r.body.stringValue).toBe("codex completed a turn in 1500ms");
-    expect(r.traceId).toMatch(/^[0-9a-f]{32}$/);
-    expect(r.spanId).toMatch(/^[0-9a-f]{16}$/);
-    expect(r.attributes.find((a: { key: string }) => a.key === "notch.turn.duration_ms").value.intValue).toBe("1500");
+describe("recordAgentEvent — one event becomes a span and a log in HydraDB", () => {
+  let up = false;
+  beforeAll(async () => {
+    up = await hydraUp();
+    if (!up) console.warn(`skipping telemetry write test — ${HYDRA_SKIP_MESSAGE}`);
   });
 
-  it("omits traceId/spanId rather than sending empty ones", async () => {
-    const { calls } = stubFetch();
-    const l = new NotchLogs(cfg());
-    l.log({ timeUnixNano: 1n, severityNumber: SEVERITY.ERROR, body: "orphan", attributes: {} });
-    l.flush();
-    await settle();
-    const r = JSON.parse(calls[0]!.opts.body).resourceLogs[0].scopeLogs[0].logRecords[0];
-    expect(r.traceId).toBeUndefined();
-    expect(r.spanId).toBeUndefined();
-    expect(r.severityText).toBe("ERROR");
-  });
+  it("writes a turn span with its model, tokens and cost, and a log correlated to the same trace", async () => {
+    if (!up) return;
+    const { loomDir } = isolatedProject("telemetry");
+    const graph = projectGraph(path.resolve(loomDir));
+    await graph.open();
+    const store = new TelemetryStore(graph);
 
-  it("does not post when logs are switched off", async () => {
-    const { fn } = stubFetch();
-    const l = new NotchLogs(cfg({ logsEnabled: false }));
-    expect(l.enabled).toBe(false);
-    l.log({ timeUnixNano: 1n, severityNumber: SEVERITY.INFO, body: "x", attributes: {} });
-    l.flush();
-    await settle();
-    expect(fn).not.toHaveBeenCalled();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// recordAgentEvent — the single funnel, fanning one event out to three signals
-// ---------------------------------------------------------------------------
-
-describe("recordAgentEvent (one event -> span + metric + log)", () => {
-  // Every other block here builds its exporter with an explicit config object,
-  // so the suite-wide NOTCH_TELEMETRY_DISABLED never reached them. These tests
-  // are the exception: recordAgentEvent goes through the process-wide singleton,
-  // which reads the environment, and a disabled singleton posts nothing — the
-  // assertions then read [0] of an empty array. Cleared before the first `it`,
-  // which is when the singleton first wakes, and restored afterwards so the
-  // rest of the run stays hermetic.
-  const wasDisabled = process.env.NOTCH_TELEMETRY_DISABLED;
-  beforeAll(() => {
+    // Telemetry is disabled suite-wide so an ordinary test does not pay for it;
+    // this one is about telemetry, so it turns it back on for the call.
+    const was = process.env.NOTCH_TELEMETRY_DISABLED;
     delete process.env.NOTCH_TELEMETRY_DISABLED;
-  });
-  afterAll(() => {
-    if (wasDisabled != null) process.env.NOTCH_TELEMETRY_DISABLED = wasDisabled;
-  });
-  afterEach(() => vi.unstubAllGlobals());
+    try {
+      recordAgentEvent(
+        {
+          id: 7,
+          ts: Date.now(),
+          kind: "run_complete",
+          agentId: "funnel-a",
+          payload: {
+            durationMs: 1500,
+            model: "m1",
+            adapter: "echo",
+            costUsd: 0.002,
+            inputTokens: 80,
+            outputTokens: 20,
+          },
+        },
+        { project: "acme" },
+        store,
+      );
+      await store.flush();
+    } finally {
+      if (was != null) process.env.NOTCH_TELEMETRY_DISABLED = was;
+    }
 
-  /** Sort a batch of posts by signal, so a test can assert on one at a time. */
-  function bySignal(calls: Array<{ url: string; opts: { body: string } }>) {
-    const pick = (suffix: string) => calls.filter((c) => c.url.endsWith(suffix)).map((c) => JSON.parse(c.opts.body));
-    return { traces: pick("/v1/traces"), metrics: pick("/v1/metrics"), logs: pick("/v1/logs") };
-  }
+    const spans = await store.spans({ limit: 20 });
+    const turn = spans.find((s) => s.name === "gen_ai.agent.turn");
+    expect(turn).toBeTruthy();
+    expect(turn!.agent).toBe("funnel-a");
+    expect(turn!.model).toBe("m1");
+    expect(turn!.ade).toBe("echo");
+    expect(turn!.tin).toBe(80);
+    expect(turn!.tout).toBe(20);
+    expect(turn!.cost).toBeCloseTo(0.002, 6);
+    expect(turn!.ms).toBe(1500);
+    expect(turn!.code).toBe(0);
 
-  it("emits a span, a log correlated to that exact span, and datapoints — from one event", async () => {
-    const { calls } = stubFetch();
-    recordAgentEvent(
-      { id: 7, ts: 1_700_000_000_000, kind: "run_complete", agentId: "funnel-a", payload: { durationMs: 1500, model: "m1", adapter: "echo", costUsd: 0.002, inputTokens: 80, outputTokens: 20 } },
-      { project: "acme" },
-    );
-    flushTelemetry();
-    await settle();
-
-    const { traces, metrics: mp, logs: lp } = bySignal(calls);
-    const span = traces[0].resourceSpans[0].scopeSpans[0].spans[0];
-    const record = lp[0].resourceLogs[0].scopeLogs[0].logRecords[0];
-    // The log points at the span this same event produced — that is the link
-    // that makes a trace clickable through to what the agent actually said.
-    expect(record.traceId).toBe(span.traceId);
-    expect(record.spanId).toBe(span.spanId);
-    expect(record.body.stringValue).toContain("completed a turn in 1500ms");
-
-    const names = mp[0].resourceMetrics[0].scopeMetrics[0].metrics.map((m: { name: string }) => m.name);
-    expect(names).toContain("gen_ai.client.token.usage");
-    expect(names).toContain("gen_ai.client.operation.duration");
-    expect(names).toContain("notch.turns");
-    expect(names).toContain("notch.cost.usd");
-  });
-
-  it("tracks the active-agents gauge for adapters that never emit turn_started", async () => {
-    const { calls } = stubFetch();
-    // echo / opencode / antigravity-cli announce no turn boundary at all; the
-    // first event of a turn is all we get, and the gauge must still move.
-    recordAgentEvent({ id: 1, ts: 1, kind: "message", agentId: "gauge-a", payload: { text: "working" } }, {});
-    flushTelemetry();
-    await settle();
-    const opened = bySignal(calls).metrics.at(-1)!.resourceMetrics[0].scopeMetrics[0].metrics.find((m: { name: string }) => m.name === "notch.agents.active");
-    expect(opened.gauge.dataPoints[0].asInt).toBe("1");
-
-    recordAgentEvent({ id: 2, ts: 2, kind: "run_complete", agentId: "gauge-a", payload: { durationMs: 5 } }, {});
-    flushTelemetry();
-    await settle();
-    const closed = bySignal(calls).metrics.at(-1)!.resourceMetrics[0].scopeMetrics[0].metrics.find((m: { name: string }) => m.name === "notch.agents.active");
-    expect(closed.gauge.dataPoints[0].asInt).toBe("0");
+    // The log points at the same trace — that is the link that makes a span
+    // clickable through to what the agent actually said.
+    const logs = await store.logs({ limit: 20 });
+    const line = logs.find((l) => l.agent === "funnel-a");
+    expect(line).toBeTruthy();
+    expect(line!.traceId).toBe(turn!.traceId);
+    expect(line!.body).toContain("completed a turn in 1500ms");
+    expect(line!.kind).toBe("run_complete");
   });
 
-  it("brings the gauge back down when a turn dies instead of completing", async () => {
-    const { calls } = stubFetch();
-    recordAgentEvent({ id: 1, ts: 1, kind: "message", agentId: "gauge-b", payload: { text: "starting" } }, {});
-    recordAgentEvent({ id: 2, ts: 2, kind: "error", agentId: "gauge-b", payload: { message: "agy exited 1" } }, {});
-    flushTelemetry();
-    await settle();
-    const g = bySignal(calls).metrics.at(-1)!.resourceMetrics[0].scopeMetrics[0].metrics.find((m: { name: string }) => m.name === "notch.agents.active");
-    // an errored turn is over; a gauge that only counts down on the happy path
-    // ratchets up forever and stops being worth reading
-    expect(g.gauge.dataPoints.at(-1).asInt).toBe("0");
-  });
+  it("records an errored turn with span status 2, so health scoring counts it", async () => {
+    if (!up) return;
+    const { loomDir } = isolatedProject("telemetry-err");
+    const graph = projectGraph(path.resolve(loomDir));
+    await graph.open();
+    const store = new TelemetryStore(graph);
 
-  it("gives a failed turn its own trace instead of folding it into the next one", async () => {
-    const { calls } = stubFetch();
-    recordAgentEvent({ id: 1, ts: 1, kind: "message", agentId: "trace-a", payload: { text: "one" } }, {});
-    recordAgentEvent({ id: 2, ts: 2, kind: "error", agentId: "trace-a", payload: { message: "boom" } }, {});
-    recordAgentEvent({ id: 3, ts: 3, kind: "message", agentId: "trace-a", payload: { text: "two" } }, {});
-    flushTelemetry();
-    await settle();
-    const records = bySignal(calls).logs.flatMap((p) => p.resourceLogs[0].scopeLogs[0].logRecords);
-    const [one, boom, two] = ["one", "boom", "two"].map((b) => records.find((r: { body: { stringValue: string } }) => r.body.stringValue.includes(b))!);
-    expect(one.traceId).toBe(boom.traceId); // the failure belongs to the turn it killed
-    expect(two.traceId).not.toBe(boom.traceId); // the next turn is a new trace
+    const was = process.env.NOTCH_TELEMETRY_DISABLED;
+    delete process.env.NOTCH_TELEMETRY_DISABLED;
+    try {
+      recordAgentEvent(
+        { id: 9, ts: Date.now(), kind: "error", agentId: "sick", payload: { message: "boom" } },
+        { project: "acme" },
+        store,
+      );
+      await store.flush();
+    } finally {
+      if (was != null) process.env.NOTCH_TELEMETRY_DISABLED = was;
+    }
+
+    const spans = await store.spans({ limit: 20 });
+    const err = spans.find((s) => s.name === "notch.error");
+    expect(err?.code).toBe(2);
+    expect(err?.msg).toBe("boom");
+    expect(await store.errorsSince("sick", 0)).toBeGreaterThanOrEqual(1);
   });
 });

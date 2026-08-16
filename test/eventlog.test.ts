@@ -13,7 +13,11 @@ for (const store of stores) {
     });
 
     async function open() {
-      if (store === "jsonl") process.env.LOOM_STORE = "jsonl";
+      // Named explicitly: HydraDB is the default store now, so a test that
+      // wants the sqlite or jsonl behaviour has to ask for it. These cases
+      // still matter — both stores ship — but they are no longer what you
+      // get by saying nothing.
+      process.env.LOOM_STORE = store;
       return EventLog.open(tmpDir(`log-${store}`));
     }
 
@@ -104,6 +108,10 @@ for (const store of stores) {
  * log next to a database full of history.
  */
 describe("event log · migrating a pre-chat sqlite log", () => {
+  afterEach(() => {
+    delete process.env.LOOM_STORE;
+  });
+
   it("adds the column without losing a single event", async () => {
     const sqlite = await import("node:sqlite");
     const dir = tmpDir("oldschema");
@@ -119,6 +127,7 @@ describe("event log · migrating a pre-chat sqlite log", () => {
     ins.run(2, "message", "claude", JSON.stringify({ text: "history two" }));
     old.close();
 
+    process.env.LOOM_STORE = "sqlite";
     const log = await EventLog.open(dir);
     expect(log.list().map((e) => e.payload.text)).toEqual(["history one", "history two"]);
     expect(log.list({ chat: "main" })).toHaveLength(2);

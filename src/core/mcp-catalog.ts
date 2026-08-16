@@ -21,10 +21,12 @@
  *      because "search 4000 servers" is a bad first screen and the registry's
  *      ranking is not ours to reinterpret. Every URL and command in that list
  *      was verified against the vendor's own documentation and, where it is a
- *      remote, probed for a live response. The ones that could NOT be pinned to
- *      a single correct endpoint carry `needsUrl` so the UI asks the user
- *      instead of us guessing — see SigNoz, whose hostname contains the
- *      account's region and is therefore not knowable from here.
+ *      remote, probed for a live response. An entry that could NOT be pinned
+ *      to a single correct endpoint — because the hostname carries the
+ *      account's region, or because it is only ever self-hosted — carries
+ *      `needsUrl`, and the UI asks instead of guessing. A wrong URL is worse
+ *      than an empty field: it fails at handshake with an auth error that
+ *      looks like the user's fault.
  *
  * ## Why the cache exists
  *
@@ -131,9 +133,9 @@ export interface CatalogResult {
  * server saying "not without credentials" and therefore proof the endpoint is
  * real. A DNS failure or a 404 would have disqualified an entry.
  *
- * Three entries are worth reading the comment on rather than trusting the shape:
- * SigNoz (region in the hostname), Postgres (no official server exists at all),
- * and Cloudflare (sixteen servers, not one).
+ * Two entries are worth reading the comment on rather than trusting the shape:
+ * Postgres (no official server exists at all) and Cloudflare (sixteen servers,
+ * not one).
  */
 export const CURATED_MCPS: CuratedProvider[] = [
   {
@@ -292,24 +294,6 @@ export const CURATED_MCPS: CuratedProvider[] = [
     maintainer: "official",
     source: "curated",
   },
-  {
-    slug: "signoz",
-    name: "SigNoz",
-    // SigNoz Cloud's MCP hostname contains the account's region
-    // (mcp.us / mcp.eu / mcp.in …), and their docs are explicit that the wrong
-    // region fails authentication. There is no correct value to hardcode, so
-    // this asks — with the documented shape prefilled so the user only has to
-    // replace the one part we can't know. Self-hosted SigNoz is a different
-    // endpoint entirely, which is another reason not to guess.
-    description: "Query SigNoz metrics, traces, logs, alerts, and dashboards.",
-    homepage: "https://signoz.io/docs/ai/signoz-mcp-server/",
-    transport: "http",
-    needsUrl: true,
-    urlTemplate: "https://mcp.<region>.signoz.cloud/mcp",
-    requires: "your SigNoz Cloud region, or the URL of your self-hosted deployment",
-    maintainer: "official",
-    source: "curated",
-  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -397,7 +381,7 @@ interface RegistryEnvelope {
 export async function searchCatalog(query?: string, limit?: number): Promise<CatalogResult> {
   const q = String(query ?? "").trim();
   const n = Math.min(Math.max(Math.trunc(Number(limit) || DEFAULT_LIMIT), 1), MAX_LIMIT);
-  const key = `${n} ${q}`;
+  const key = `${n}\u0000${q}`;
 
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < hit.ttl) return hit.value;

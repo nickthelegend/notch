@@ -70,7 +70,7 @@ const CODEX_STREAM = [
 ];
 
 const CONFIGURED: McpServerConfig[] = [
-  { name: "SigNoz", url: "http://127.0.0.1:8080/mcp", description: "traces" },
+  { name: "Linear", url: "http://127.0.0.1:8080/mcp", description: "issues" },
   { name: "GitHub", url: "", description: "not connected yet" }, // a built-in suggestion row
   { name: "Slack", url: "https://slack.example/mcp", enabledForSession: false },
   { name: "Local Files", command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"] },
@@ -82,7 +82,7 @@ afterAll(() => sessions.forEach((s) => s.cleanup()));
 describe("selecting servers", () => {
   it("takes the ones with somewhere to connect to, and leaves the placeholders out", () => {
     const names = resolveMcpServers(CONFIGURED).map((s) => s.name);
-    expect(names).toContain("SigNoz");
+    expect(names).toContain("Linear");
     expect(names).toContain("Local Files"); // a command is a destination too
     // An empty url is the built-in suggestion row: a name and an icon, nothing
     // to talk to. Handing it to a CLI would advertise a tool that isn't there.
@@ -115,8 +115,8 @@ describe("the generated config file", () => {
     const doc = JSON.parse(fs.readFileSync(session.configPath, "utf8")) as {
       mcpServers: Record<string, Record<string, unknown>>;
     };
-    expect(Object.keys(doc.mcpServers).sort()).toEqual(["local_files", "signoz"]);
-    expect(doc.mcpServers.signoz).toEqual({ type: "http", url: "http://127.0.0.1:8080/mcp" });
+    expect(Object.keys(doc.mcpServers).sort()).toEqual(["linear", "local_files"]);
+    expect(doc.mcpServers.linear).toEqual({ type: "http", url: "http://127.0.0.1:8080/mcp" });
     expect(doc.mcpServers.local_files).toEqual({
       type: "stdio",
       command: "npx",
@@ -149,7 +149,7 @@ describe("codex config overrides", () => {
   it("renders one -c mcp_servers.<key>=<toml> per server", () => {
     const args = codexMcpArgs(resolveMcpServers(CONFIGURED));
     expect(args).toEqual([
-      "-c", 'mcp_servers.signoz={url="http://127.0.0.1:8080/mcp"}',
+      "-c", 'mcp_servers.linear={url="http://127.0.0.1:8080/mcp"}',
       "-c", 'mcp_servers.local_files={command="npx",args=["-y","@modelcontextprotocol/server-filesystem","/tmp"]}',
     ]);
   });
@@ -189,7 +189,7 @@ describe("what the adapters put on the command line", () => {
     const agent = new CodexAdapter("codex", makeProjectDir({ name: "mcp" }), { bin });
     await agent.send({ text: "go", mcp: mcpFor(CONFIGURED) });
     const argv = argvOf(bin);
-    expect(argv).toContain('mcp_servers.signoz={url="http://127.0.0.1:8080/mcp"}');
+    expect(argv).toContain('mcp_servers.linear={url="http://127.0.0.1:8080/mcp"}');
     // and the prompt is still the last argument, where codex exec wants it
     expect(argv[argv.length - 1]).toBe("go");
   });
@@ -213,7 +213,7 @@ describe("through the runtime", () => {
     const dir = makeProjectDir({
       name: "wired",
       agents: [{ id: "cc", kind: "claude-code", role: "builder", options: { bin } }],
-      mcps: [{ name: "SigNoz", url: "http://127.0.0.1:8080/mcp" }],
+      mcps: [{ name: "Linear", url: "http://127.0.0.1:8080/mcp" }],
     });
     const rt = await ProjectRuntime.open({ id: "wired", name: "wired", dir });
     try {
@@ -221,14 +221,14 @@ describe("through the runtime", () => {
       await waitUntil(() => fs.existsSync(path.join(path.dirname(bin), "argv.json")));
       await waitUntil(() => rt.log.list({ kinds: ["run_complete"] }).length > 0);
       expect(argvOf(bin)).toContain("--mcp-config");
-      expect(mcpSeenBy(bin).mcpServers.signoz).toEqual({ type: "http", url: "http://127.0.0.1:8080/mcp" });
+      expect(mcpSeenBy(bin).mcpServers.linear).toEqual({ type: "http", url: "http://127.0.0.1:8080/mcp" });
       // The config was a temp file for that turn and nothing else: it's gone.
       const argv = argvOf(bin);
       expect(fs.existsSync(argv[argv.indexOf("--mcp-config") + 1]!)).toBe(false);
       // …and it's announced in the thread, so "which servers did that turn get"
       // is answerable after the fact rather than a claim on a settings screen.
       const attached = rt.log.list({ kinds: ["status"] }).find((e) => e.payload.state === "mcp_attached");
-      expect(attached!.payload.servers).toEqual(["SigNoz"]);
+      expect(attached!.payload.servers).toEqual(["Linear"]);
     } finally {
       await rt.close();
     }
@@ -243,7 +243,7 @@ describe("through the runtime", () => {
     const dir = makeProjectDir({
       name: "unwired",
       agents: [{ id: "echobot", kind: "echo", role: "builder" }],
-      mcps: [{ name: "SigNoz", url: "http://127.0.0.1:8080/mcp" }],
+      mcps: [{ name: "Linear", url: "http://127.0.0.1:8080/mcp" }],
     });
     const rt = await ProjectRuntime.open({ id: "unwired", name: "unwired", dir });
     try {

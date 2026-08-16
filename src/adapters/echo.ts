@@ -7,6 +7,7 @@
  *   - text containing "sleep:<ms>"   → stays busy that long (interrupt testing)
  *   - text containing "ask: <q>"     → asks the human (needs_input; route pausing)
  *   - text containing "write:<path>" → writes a small file (turn_diff testing)
+ *   - text containing "fail: <why>"  → the turn errors (self-heal testing)
  */
 
 import fs from "node:fs";
@@ -47,6 +48,16 @@ export class EchoAdapter extends AdapterBase {
       }
       if (this.aborted) {
         this.emit({ kind: "status", payload: { state: "interrupted" } });
+        return;
+      }
+      // A turn that dies. Real adapters report this by emitting `error` and
+      // never reaching run_complete (codex, grok and opencode all do exactly
+      // that when their CLI exits badly), so echo does the same rather than
+      // throwing — the self-heal path is fed by error *spans*, and a turn that
+      // still completed would not produce one.
+      const failMatch = input.text.match(/(?<![a-z])fail:\s*([^\n]+)/i);
+      if (failMatch) {
+        this.emit({ kind: "error", payload: { message: failMatch[1]!.trim() } });
         return;
       }
       const writeMatch = input.text.match(/write:([\w./-]+)/);

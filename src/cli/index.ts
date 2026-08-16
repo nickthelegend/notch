@@ -616,6 +616,149 @@ program
   });
 
 // ---------------------------------------------------------------------------
+// graph — the HydraDB-native reads
+// ---------------------------------------------------------------------------
+
+const graphCmd = program
+  .command("graph")
+  .description("the shared graph: what is in it, who holds the baton, and why things failed");
+
+graphCmd
+  .command("status", { isDefault: true })
+  .description("HydraDB connection and what this project has in it")
+  .action(async () => {
+    const client = await ensureDaemon();
+    const project = await currentProject(client);
+    const h = await client.graphHealth(project.id);
+    console.log(
+      h.ok
+        ? pc.green(`✓ HydraDB ${h.graph}/${h.cell} at ${h.url}`)
+        : pc.red(`✗ HydraDB unreachable at ${h.url} — ${h.detail}`),
+    );
+    if (!h.ok) {
+      console.log(
+        pc.dim(
+          "the log, the baton and the brain all live there, so nothing falls back to a local file",
+        ),
+      );
+      process.exitCode = 1;
+      return;
+    }
+    console.log(pc.dim(`store=${h.store} · ${h.queries} queries this session · ${h.pendingEvents} events queued`));
+    for (const [k, v] of Object.entries(h.counts)) {
+      console.log(`  ${pc.dim(k.padEnd(11))} ${v}`);
+    }
+  });
+
+graphCmd
+  .command("baton")
+  .description("the election ledger — every epoch, who stood, and the sequence they drew")
+  .action(async () => {
+    const client = await ensureDaemon();
+    const project = await currentProject(client);
+    const { state, epochs } = await client.batonLedger(project.id);
+    console.log(
+      state.holder
+        ? pc.green(`${state.holder}`) + pc.dim(` holds epoch ${state.epoch} (tenure from ${state.tenureEpoch})`)
+        : pc.dim("nobody holds the baton"),
+    );
+    if (!epochs.length) return void console.log(pc.dim("no elections yet"));
+    console.log(pc.dim("\nepoch  holder         seq      why        ballots (winner first)"));
+    for (const e of epochs) {
+      const ballots = e.contenders
+        .map((c, i) => (i === 0 ? pc.green(`${c.agent || "—"}@${c.seq}`) : pc.dim(`${c.agent || "—"}@${c.seq}`)))
+        .join(" ");
+      console.log(
+        `${String(e.epoch).padEnd(6)} ${(e.holder ?? "—").padEnd(14)} ${String(e.seq).padEnd(8)} ${e.reason.padEnd(10)} ${ballots}`,
+      );
+    }
+    const { violations } = await client.fencing(project.id);
+    if (violations.length) {
+      console.log(pc.dim(`\n${violations.length} stale write(s) fenced:`));
+      for (const v of violations.slice(0, 8)) {
+        console.log(
+          pc.yellow("  ⚠ ") +
+            `${v.agent} wrote at epoch ${v.staleEpoch}, current ${v.currentEpoch} · ${v.op}`,
+        );
+      }
+    }
+  });
+
+graphCmd
+  .command("fence-drill")
+  .description("attempt a real stale-epoch write and watch it get refused")
+  .option("--agent <id>", "agent to write as (default: the current holder)")
+  .option("--epoch <n>", "epoch to write at (default: one behind the tenure)")
+  .action(async (opts: { agent?: string; epoch?: string }) => {
+    const client = await ensureDaemon();
+    const project = await currentProject(client);
+    const r = await client.fenceDrill(project.id, {
+      ...(opts.agent ? { agent: opts.agent } : {}),
+      ...(opts.epoch ? { epoch: Number(opts.epoch) } : {}),
+    });
+    console.log(r.fenced ? pc.green("✓ fenced") : pc.yellow("• allowed"));
+    console.log(pc.dim(`  ${r.detail}`));
+  });
+
+graphCmd
+  .command("why <memoryId>")
+  .description("walk the causal chain back from a failure")
+  .action(async (memoryId: string) => {
+    const client = await ensureDaemon();
+    const project = await currentProject(client);
+    const chain = await client.causalChain(project.id, memoryId);
+    if (chain.nodes.length < 2) {
+      console.log(pc.dim("no causes recorded for that memory yet"));
+      console.log(pc.dim(chain.cypher));
+      return;
+    }
+    const byId = new Map(chain.nodes.map((n) => [n.memoryId, n]));
+    const seen = new Set<string>();
+    let cur: string | undefined = memoryId;
+    while (cur && byId.has(cur) && !seen.has(cur)) {
+      seen.add(cur);
+      const n = byId.get(cur)!;
+      console.log(`${pc.magenta(`[${n.kind}]`)} ${n.text}`);
+      const link = chain.links.find((l) => l.from === cur && !seen.has(l.to));
+      if (!link) break;
+      console.log(pc.dim(`   ↓ ${link.rel} — ${link.basis}`));
+      cur = link.to;
+    }
+    console.log(pc.dim(`\n${chain.cypher}`));
+  });
+
+graphCmd
+  .command("recall <query...>")
+  .description("memories connected to this work — including the ones no keyword would find")
+  .option("--hops <n>", "how far to traverse", "3")
+  .action(async (queryParts: string[], opts: { hops: string }) => {
+    const client = await ensureDaemon();
+    const project = await currentProject(client);
+    const query = queryParts.join(" ");
+    const { entities, hits, cypher } = await client.connected(
+      project.id,
+      query,
+      Number(opts.hops) || 3,
+    );
+    console.log(pc.dim(`entities: ${entities.join(", ") || "(none found in that query)"}`));
+    if (!hits.length) console.log(pc.dim("nothing connected"));
+    for (const h of hits) {
+      if (!h.memory) continue;
+      console.log(
+        `${pc.dim(`${h.hops} hop${h.hops === 1 ? " " : "s"} via ${h.via}`)}  ${pc.magenta(`[${h.memory.kind}]`)} ${h.memory.text}`,
+      );
+    }
+    const { memories } = await client.crossRun(project.id, query);
+    if (memories.length) {
+      console.log(pc.dim(`\nfrom other runs of this codebase (${memories.length}):`));
+      for (const m of memories) {
+        console.log(`  ${pc.magenta(`[${m.kind}]`)} ${m.text} ${pc.dim(`— learned by ${m.agent}`)}`);
+      }
+    }
+    console.log(pc.dim(`\n${cypher}`));
+  });
+
+// ---------------------------------------------------------------------------
 // pair
 // ---------------------------------------------------------------------------
 

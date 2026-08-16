@@ -18,7 +18,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import type { LoomEvent, ProjectInfo } from "../types.js";
 import { NotHolderError } from "../core/baton.js";
 import type { MemoryKind, MemoryPatch } from "../core/brain.js";
-import { retrieve } from "../core/brain-index.js";
+import { queryEntities, retrieve } from "../core/brain-index.js";
 import { RouteActiveError } from "../core/routes.js";
 import { recordAgentEvent } from "../observability/index.js";
 import { triageAgent } from "../observability/triage.js";
@@ -27,8 +27,12 @@ import { fetchLogs, type InsightLog } from "../observability/logs-query.js";
 import { askObservatory, type AskContext } from "../observability/ask.js";
 import { probeMcpServer, writeMcpSession } from "../core/mcp.js";
 import { searchCatalog } from "../core/mcp-catalog.js";
-import { defaultWebhookUrl, provisionSignoz } from "../core/signoz-provision.js";
 import { buildSnapshots } from "../observability/snapshots.js";
+import { hydra } from "../hydra/client.js";
+import { actionStore, type ActionKind } from "../hydra/actions.js";
+import { graphCounts, replayAt } from "../hydra/views.js";
+import { projectGraph } from "../hydra/graph.js";
+import { attribute, authoredHistory } from "../core/authorship.js";
 import { SkillInstallError } from "../core/skill-install.js";
 import { suggestSkill } from "../core/skills.js";
 import { ADES, buildDefaultRoutes, defaultAgentConfigs, detectAdes } from "../core/ades.js";
@@ -40,11 +44,13 @@ import {
   checkout as gitCheckout,
   commit as gitCommit,
   discard as gitDiscard,
+  commitFiles as gitCommitFiles,
   fileDiff as gitFileDiff,
   GitError,
   init as gitInit,
   listWorktrees as gitListWorktrees,
   log as gitLog,
+  logForFile as gitLogForFile,
   push as gitPush,
   removeWorktree as gitRemoveWorktree,
   stage as gitStage,
@@ -75,7 +81,7 @@ import { GEIST_WOFF2 } from "./geist-font.js";
 import { AuthManager, bearerToken } from "./auth.js";
 import { PUSH_KINDS, pushContent, sendExpoPush } from "./push.js";
 import { BudgetExceededError, ProjectRuntime, QuarantinedError } from "./runtime.js";
-import { buildBoard } from "./board.js";
+import { buildBoard, BOARD_COLUMNS } from "./board.js";
 import {
   ghAuthStatus,
   ghProjectItems,
@@ -176,7 +182,7 @@ function loomRoot(): string | null {
   return null;
 }
 
-const TERM_MARK = "__LOOM_END__";
+const TERM_MARK = "\u0001__LOOM_END__";
 
 /**
  * Just enough to give a pasted attachment a sensible extension.
@@ -263,6 +269,23 @@ function kairoMetrics(rt: ProjectRuntime): Record<string, unknown> {
   };
 }
 
+/**
+ * When an agent gets taken out of rotation.
+ *
+ * Few, and constants rather than config, because this decides whether an agent
+ * may keep working — a rule nobody can recite is a rule nobody trusts. Both
+ * signals come from HydraDB: error spans the fold wrote, and fencing
+ * violations the baton recorded.
+ */
+export const HEAL_THRESHOLDS = {
+  /** How far back each evaluation looks. */
+  windowMs: 10 * 60_000,
+  /** Error spans in the window that trip a quarantine. */
+  errors: 3,
+  /** A single fenced write is enough: it means the agent lost track of its epoch. */
+  fencing: 1,
+} as const;
+
 export class LoomDaemon {
   private app = express();
   private server: Server | null = null;
@@ -272,6 +295,14 @@ export class LoomDaemon {
   private sockets = new Map<WebSocket, { project?: string }>();
   /** In-flight self-heal recheck timers, cleared on close. */
   private healTimers = new Set<ReturnType<typeof setTimeout>>();
+  /**
+   * Set the moment `close()` starts. A heal tick that had already fired when
+   * the daemon began shutting down would otherwise run to completion and try
+   * to append to a log that is closing under it — clearing the timers cannot
+   * catch a callback that is already in flight.
+   */
+  private closing = false;
+  private healWatcher: ReturnType<typeof setInterval> | null = null;
   /** Terminal shells — a real pty when node-pty loaded, else plain pipes. */
   private terminals = new TerminalManager({
     onData: (projectId, term, chunk) =>
@@ -340,8 +371,7 @@ export class LoomDaemon {
     app.get("/", (_req, res) => res.redirect("/app"));
     app.get("/app", (_req, res) => {
       // Never cache the shell: a redeployed daemon must serve its own UI.
-      const signozUrl = (process.env.NOTCH_SIGNOZ_URL || "http://localhost:8080").replace(/["'<>]/g, "");
-      res.type("html").setHeader("Cache-Control", "no-store").send(APP_HTML.replace("%%SIGNOZ_URL%%", signozUrl));
+      res.type("html").setHeader("Cache-Control", "no-store").send(APP_HTML);
     });
     app.get("/app/manifest.webmanifest", (_req, res) => {
       res
@@ -420,13 +450,6 @@ export class LoomDaemon {
 
     // Everything else requires a bearer token.
     app.use((req: Request, res: Response, next: NextFunction) => {
-      // Inbound webhooks (SigNoz alerts) can't carry the admin bearer token, so
-      // they authenticate with their own NOTCH_WEBHOOK_SECRET instead. Set that
-      // secret whenever the daemon binds past localhost.
-      if (req.path.startsWith("/api/webhooks/")) {
-        next();
-        return;
-      }
       const token = bearerToken(req.headers.authorization);
       if (!this.auth.isAuthorized(token)) {
         res.status(401).json({ error: "unauthorized" });
@@ -884,7 +907,7 @@ export class LoomDaemon {
             // 409, like the other "the fleet is in a state that forbids this"
             // refusals. The numbers ride along so a client can say what the cap
             // was and what has been spent against it, without guessing.
-            // Same 409 family: a firing SigNoz alert has this agent out of
+            // Same 409 family: the self-heal watcher has this agent out of
             // rotation, and the client should say so rather than "500".
             if (err instanceof QuarantinedError) {
               res.status(409).json({
@@ -904,6 +927,40 @@ export class LoomDaemon {
                 spentTodayUsd: err.spentUsd,
                 message: err.message,
               });
+              return;
+            }
+            // Caller errors are not server errors.
+            //
+            // Everything below this point used to become a 500, which made a
+            // typo'd project id and a crashed daemon indistinguishable to a
+            // client — and put a red line in the Console for something the
+            // caller did wrong. `runtime()` and the agent lookups throw plain
+            // Errors, so they are classified here by what they say rather than
+            // by inventing an exception type per call site.
+            const msg = err instanceof Error ? err.message : String(err);
+            // Still recorded, but as a warning. The Console is where you look
+            // when something went wrong, and it has to keep showing these — a
+            // burst of 404s is a real signal. What it must not do is call them
+            // errors: a typo'd agent id is not the daemon failing, and filing
+            // it next to a crash makes the crash harder to find.
+            const clientError = (status: number, code: string): void => {
+              logbook.warn("api", `${req.method} ${req.path} refused: ${msg}`, undefined, String(req.params.id ?? ""));
+              res.status(status).json({ error: code, message: msg });
+            };
+            if (/^unknown project\b/i.test(msg)) {
+              clientError(404, "unknown_project");
+              return;
+            }
+            if (/^unknown agent\b|is not a configured agent|has no \.loom\/config\.json/i.test(msg)) {
+              clientError(404, "not_found");
+              return;
+            }
+            if (
+              /is a bridge \(read-only\)|cannot take turns|needs text|missing |must be |no such |unknown memory kind|forgetting needs a reason|matches no agent id or role|unknown agent kind/i.test(
+                msg,
+              )
+            ) {
+              clientError(400, "bad_request");
               return;
             }
             // A 500 used to be a sentence for one caller and nothing else: no
@@ -929,7 +986,7 @@ export class LoomDaemon {
     );
 
     // Observatory metrics: per-agent cost / turns / tokens for the fleet, the
-    // same numbers Notch also ships to SigNoz as gen_ai spans.
+    // same numbers Notch records in HydraDB as gen_ai spans.
     app.get(
       "/api/projects/:id/metrics",
       withRuntime(async (rt, _req, res) => {
@@ -959,21 +1016,21 @@ export class LoomDaemon {
       }),
     );
 
-    // Agent self-triage: read one agent's own traces back out of SigNoz (falling
+    // Agent self-triage: read one agent's own traces back out of HydraDB (falling
     // back to the local event log) and root-cause its last failure.
     app.get(
       "/api/projects/:id/triage/:agentId",
       withRuntime(async (rt, req, res) => {
         const agent = String(req.params.agentId ?? "");
         const events = rt.log.list({ limit: 300 });
-        res.json({ triage: await triageAgent(agent, events) });
+        res.json({ triage: await triageAgent(rt.telemetry, agent, events) });
       }),
     );
 
-    // Observatory insights, read back from SigNoz's ClickHouse (with a local-log
-    // fallback so the panels still work when SigNoz is empty/down):
+    // Observatory insights, read back from HydraDB (with a local-log fallback
+    // for a window of the log that predates telemetry being switched on):
     //   spans  → Span Replay (scrub a turn's spans frame by frame)
-    //   trace  → Trace Waterfall (one trace's span tree + a SigNoz deep link)
+    //   trace  → Trace Waterfall (one trace's span tree)
     //   burn   → per-agent cost over time + a linear 24h projection
     //   health → the 0–100 Agent Health Score with its penalty breakdown
     app.get(
@@ -981,8 +1038,8 @@ export class LoomDaemon {
       withRuntime(async (rt, req, res) => {
         const agent = req.query.agent ? String(req.query.agent) : undefined;
         const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
-        let spans = await fetchSpans(rt.info.name, { agent, limit }).catch(() => [] as InsightSpan[]);
-        let from: "signoz" | "local-log" = "signoz";
+        let spans = await fetchSpans(rt.telemetry, { agent, limit }).catch(() => [] as InsightSpan[]);
+        let from: "hydradb" | "local-log" = "hydradb";
         if (!spans.length) {
           spans = insightSpansFromLog(rt.log.list({ limit: 400 }), agent).slice(0, limit);
           from = "local-log";
@@ -993,7 +1050,7 @@ export class LoomDaemon {
     app.get(
       "/api/projects/:id/insights/trace/:traceId",
       withRuntime(async (rt, req, res) => {
-        const spans = await traceSpans(String(req.params.traceId ?? "")).catch(() => [] as InsightSpan[]);
+        const spans = await traceSpans(rt.telemetry, String(req.params.traceId ?? "")).catch(() => [] as InsightSpan[]);
         res.json({ traceId: String(req.params.traceId ?? ""), spans });
       }),
     );
@@ -1004,9 +1061,9 @@ export class LoomDaemon {
      * Both differ from /insights/spans in one important way: there is no
      * local-log fallback. A span can be reconstructed from the event log because
      * it summarises an event Notch already stored; a log body or a metric sample
-     * cannot be, and faking one would put a number on screen that SigNoz never
-     * saw. So when ClickHouse is unreachable these return `from: "unavailable"`
-     * with an empty payload and the UI is expected to say "SigNoz unreachable"
+     * cannot be, and faking one would put a number on screen that nothing ever
+     * saw. So when the store is unreachable these return `from: "unavailable"`
+     * with an empty payload and the UI is expected to say the store is unreachable
      * rather than render a plausible-looking empty chart.
      *
      * `rt.info.name` — not the project id — is the filter value, because that is
@@ -1017,9 +1074,8 @@ export class LoomDaemon {
       "/api/projects/:id/insights/logs",
       withRuntime(async (rt, req, res) => {
         const limit = Math.min(1000, Math.max(1, Number(req.query.limit) || 200));
-        let from: "signoz" | "unavailable" = "signoz";
-        const logs = await fetchLogs({
-          project: rt.info.name,
+        let from: "hydradb" | "unavailable" = "hydradb";
+        const logs = await fetchLogs(rt.telemetry, {
           agent: req.query.agent ? String(req.query.agent) : undefined,
           severity: req.query.severity ? String(req.query.severity) : undefined,
           traceId: req.query.traceId ? String(req.query.traceId) : undefined,
@@ -1047,9 +1103,8 @@ export class LoomDaemon {
         const now = Date.now();
         const sinceMs = raw <= 0 ? now - 6 * 3600_000 : raw < 1e12 ? now - raw : raw;
         const stepMs = Math.max(1000, Number(req.query.step) || 60_000);
-        let from: "signoz" | "unavailable" = "signoz";
-        const series = await fetchMetricSeries(names.length ? names : NOTCH_METRIC_NAMES, {
-          project: rt.info.name,
+        let from: "hydradb" | "unavailable" = "hydradb";
+        const series = await fetchMetricSeries(rt.telemetry, names.length ? names : NOTCH_METRIC_NAMES, {
           sinceMs,
           stepMs,
         }).catch(() => {
@@ -1060,87 +1115,25 @@ export class LoomDaemon {
       }),
     );
 
-    /**
-     * Ask the Observatory a question about this fleet.
-     *
-     * The evidence is assembled from the same sources the Observatory renders —
-     * status, metrics, health, spans, decisions — so an answer can never cite a
-     * number the screen doesn't also show. Any configured SigNoz MCP server is
-     * handed to the model for the turn, which is the Noz shape: let it query the
-     * telemetry itself rather than trusting a summary.
-     */
-    app.post(
-      "/api/projects/:id/observatory/ask",
-      withRuntime(async (rt, req, res) => {
-        const question = String((req.body ?? {}).question ?? "").trim();
-        if (!question) return void res.status(400).json({ error: "missing question" });
-
-        const status = await rt.status();
-        const metrics = rt.costSummary();
-        const byAgent = new Map(metrics.byAgent.map((a) => [a.agentId, a]));
-
-        let spans = await fetchSpans(rt.info.name, { limit: 120 }).catch(() => [] as InsightSpan[]);
-        let spanSource = "signoz";
-        if (!spans.length) {
-          spans = insightSpansFromLog(rt.log.list({ limit: 300 })).slice(0, 120);
-          spanSource = "local-log";
-        }
-
-        const ctx: AskContext = {
-          projectName: rt.info.name,
-          spendUsd: metrics.totalUsd ?? 0,
-          turns: metrics.turns ?? 0,
-          tokensIn: metrics.tokensIn ?? 0,
-          tokensOut: metrics.tokensOut ?? 0,
-          holder: status.holder ?? null,
-          agents: status.agents.map((a) => {
-            const mine = spans.filter((s) => s.agent === a.id);
-            return {
-              id: a.id, kind: a.kind, role: a.role, busy: a.busy,
-              turns: byAgent.get(a.id)?.turns, usd: byAgent.get(a.id)?.usd,
-              // Scored the same way the Metrics tab scores it: this agent's own
-              // spans, so the answer and the screen can never disagree.
-              health: mine.length ? healthScore(mine).score : null,
-            };
-          }),
-          recentSpans: spans.slice(-40).map((s) => ({ ts: s.ts, agent: s.agent, name: s.name, ms: s.ms, code: s.code, model: s.model, msg: s.msg })),
-          decisions: rt.getDecisions().map((d) => ({ agentId: d.agentId, title: d.title, category: d.category, confidence: d.confidence, source: d.source })),
-          spanSource,
-        };
-
-        // Hand over the project's real MCP servers (SigNoz among them) for this
-        // question, exactly as a turn would get them.
-        const session = writeMcpSession(rt.config.mcps);
-        try {
-          const result = await askObservatory(question, ctx, {
-            cwd: rt.info.dir,
-            mcpConfigPath: session?.configPath,
-            mcpServers: (session?.servers ?? []).map((s) => s.name),
-          });
-          res.json({ ...result, spanSource, evidenceAgents: ctx.agents.length, evidenceSpans: ctx.recentSpans.length });
-        } finally {
-          session?.cleanup?.();
-        }
-      }),
-    );
     app.get(
       "/api/projects/:id/insights/burn",
       withRuntime(async (rt, req, res) => {
         const hours = Math.min(720, Math.max(1, Number(req.query.hours) || 24));
         const buckets = Math.min(60, Math.max(2, Number(req.query.buckets) || 12));
-        const series = await burnSeries(rt.info.name, { hours, buckets }).catch(() => null);
+        const series = await burnSeries(rt.telemetry, { hours, buckets }).catch(() => null);
         // `budgetStatus` is what the caps are actually measured against — the
         // day's real spend per agent and whether it has run out. The bare
         // `budgets` map stays for the inputs that edit it.
         res.json({ burn: series, budgets: rt.budgets(), budgetStatus: rt.budgetStatus() });
       }),
     );
+
     app.get(
       "/api/projects/:id/insights/health",
       withRuntime(async (rt, req, res) => {
         const agent = req.query.agent ? String(req.query.agent) : undefined;
-        let spans = await fetchSpans(rt.info.name, { agent, limit: 300 }).catch(() => [] as InsightSpan[]);
-        let from: "signoz" | "local-log" = "signoz";
+        let spans = await fetchSpans(rt.telemetry, { agent, limit: 300 }).catch(() => [] as InsightSpan[]);
+        let from: "hydradb" | "local-log" = "hydradb";
         if (!spans.length) {
           spans = insightSpansFromLog(rt.log.list({ limit: 500 }), agent);
           from = "local-log";
@@ -1174,131 +1167,260 @@ export class LoomDaemon {
       }),
     );
 
-    // Self-healing loop: a SigNoz alert posts here.
-    //   firing   → quarantine the failing agent and fail the baton over to a
-    //              fallback (Notch keeps working while the agent is degraded).
-    //   resolved → lift the quarantine and hand the baton BACK to the original
-    //              agent — a real pause-then-retry, not a one-way failover.
-    // Closing the loop from metric breach → intervention → recovery → retry.
     /**
-     * Wire SigNoz up from this side: create the dashboard, the alert rules, and
-     * the webhook channel that points back at the receiver below.
+     * Ask the Observatory a question about this fleet.
      *
-     * The self-heal loop already worked, but only for someone who had first
-     * hand-built the alerts in SigNoz's own UI and imported a JSON dashboard.
-     * That is a lot of setup in another product before Notch's most interesting
-     * behaviour is reachable. Credentials are taken per-request and never
-     * stored — this is a one-shot setup call, not a saved integration.
+     * The evidence is assembled from the same sources the Observatory renders —
+     * status, metrics, health, spans, decisions — so an answer can never cite a
+     * number the screen doesn't also show. Any configured MCP server is handed
+     * to the model for the turn: let it query the graph itself rather than
+     * trusting a summary.
      */
-    app.post("/api/signoz/provision", (req, res) => {
-      void (async () => {
-        const { url, email, password, webhookHost } = (req.body ?? {}) as Record<string, string | undefined>;
-        const base = url || process.env.NOTCH_SIGNOZ_URL || "http://localhost:8080";
-        if (!email || !password) {
-          return void res.status(400).json({ error: "email and password for SigNoz are required" });
-        }
-        try {
-          const result = await provisionSignoz(
-            { url: base, email, password },
-            { webhookUrl: defaultWebhookUrl(this.port, webhookHost || "host.docker.internal") },
-          );
-          res.json(result);
-        } catch (err) {
-          // 502, not 500: the failure is upstream in SigNoz, and the message is
-          // the whole value of the reply.
-          res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
-        }
-      })();
-    });
+    app.post(
+      "/api/projects/:id/observatory/ask",
+      withRuntime(async (rt, req, res) => {
+        const question = String((req.body ?? {}).question ?? "").trim();
+        if (!question) return void res.status(400).json({ error: "missing question" });
 
-    app.post("/api/webhooks/signoz", (req, res) => {
-      void (async () => {
-        const secret = process.env.NOTCH_WEBHOOK_SECRET;
-        if (secret && req.query.token !== secret && req.headers["x-notch-secret"] !== secret) {
-          return void res.status(401).json({ error: "unauthorized" });
+        const status = await rt.status();
+        const metrics = rt.costSummary();
+        const byAgent = new Map(metrics.byAgent.map((a) => [a.agentId, a]));
+
+        let spans = await fetchSpans(rt.telemetry, { limit: 120 }).catch(() => [] as InsightSpan[]);
+        let spanSource = "hydradb";
+        if (!spans.length) {
+          spans = insightSpansFromLog(rt.log.list({ limit: 300 })).slice(0, 120);
+          spanSource = "local-log";
         }
-        // No secret set is fine on loopback and nowhere else.
-        //
-        // This route sits in front of the bearer wall on purpose — Alertmanager
-        // posts here and has no Notch token — and its own secret was optional,
-        // which together meant a daemon started with --host or --tailnet served
-        // an unauthenticated endpoint that can quarantine an agent, move the
-        // baton, and append status events the shared brain then reads. On
-        // 127.0.0.1 that is a local-user-only capability and an acceptable
-        // default; reachable from a network it is a stranger steering the fleet.
-        // The comment on the auth bypass already said "set that secret whenever
-        // the daemon binds past localhost" — this makes it true rather than
-        // advisory, and says which variable to set instead of just refusing.
-        if (!secret && !isLoopbackHost(this.host)) {
-          return void res.status(401).json({
-            error:
-              "this daemon is not bound to localhost, so the webhook needs NOTCH_WEBHOOK_SECRET set",
+
+        const ctx: AskContext = {
+          projectName: rt.info.name,
+          spendUsd: metrics.totalUsd ?? 0,
+          turns: metrics.turns ?? 0,
+          tokensIn: metrics.tokensIn ?? 0,
+          tokensOut: metrics.tokensOut ?? 0,
+          holder: status.holder ?? null,
+          agents: status.agents.map((a) => {
+            const mine = spans.filter((s) => s.agent === a.id);
+            return {
+              id: a.id, kind: a.kind, role: a.role, busy: a.busy,
+              turns: byAgent.get(a.id)?.turns, usd: byAgent.get(a.id)?.usd,
+              // Scored the same way the Metrics tab scores it: this agent's own
+              // spans, so the answer and the screen can never disagree.
+              health: mine.length ? healthScore(mine).score : null,
+            };
+          }),
+          recentSpans: spans.slice(-40).map((s) => ({ ts: s.ts, agent: s.agent, name: s.name, ms: s.ms, code: s.code, model: s.model, msg: s.msg })),
+          decisions: rt.getDecisions().map((d) => ({ agentId: d.agentId, title: d.title, category: d.category, confidence: d.confidence, source: d.source })),
+          spanSource,
+        };
+
+        // Hand over the project's real MCP servers for this question, exactly
+        // as a turn would get them.
+        const session = writeMcpSession(rt.config.mcps);
+        try {
+          const result = await askObservatory(question, ctx, {
+            cwd: rt.info.dir,
+            mcpConfigPath: session?.configPath,
+            mcpServers: (session?.servers ?? []).map((s) => s.name),
+          });
+          res.json({ ...result, spanSource, evidenceAgents: ctx.agents.length, evidenceSpans: ctx.recentSpans.length });
+        } finally {
+          session?.cleanup?.();
+        }
+      }),
+    );
+
+    /**
+     * A council: one question, several agents, at the same time.
+     *
+     * POST starts it and returns immediately with the roster — the answers
+     * arrive on the event stream as each member finishes, which is what makes
+     * the parallel panes fill in one at a time rather than all at the end.
+     */
+    app.post(
+      "/api/projects/:id/council",
+      withRuntime(async (rt, req, res) => {
+        const body = (req.body ?? {}) as { question?: string; agents?: string[] };
+        const q = String(body.question ?? "").trim();
+        if (!q) return void res.status(400).json({ error: "bad_request", message: "a council needs a question" });
+        try {
+          res.json({ council: await rt.startCouncil(q, body.agents) });
+        } catch (err) {
+          res.status(409).json({ error: "council_failed", message: err instanceof Error ? err.message : String(err) });
+        }
+      }),
+    );
+
+    /** The council in flight, plus the recent ones out of the graph. */
+    /**
+     * The commit history, with every file attributed to the agent that wrote it.
+     *
+     * Git records the human who ran `commit`; on a fleet that is one name for
+     * everybody's work. Notch's own `turn_diff` events say which agent's turn
+     * touched which file, so the join recovers what git cannot know — see
+     * core/authorship.ts for exactly how a file is credited.
+     */
+    app.get(
+      "/api/projects/:id/git/history",
+      withRuntime(async (rt, req, res) => {
+        const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 30));
+        const commits = await authoredHistory(
+          rt.info.dir,
+          rt.log.list({ limit: 2000 }),
+          limit,
+          (sha) => gitCommitFiles(rt.info.dir, sha).catch(() => []),
+        );
+        res.json({ commits });
+      }),
+    );
+
+    /**
+     * One file's history, with the agent credited for each change.
+     *
+     * The whole-repo view answers "what happened"; this answers "who has been
+     * touching this, and why does it look the way it does" — the question you
+     * ask about a file you did not write, in a workspace where five agents
+     * have write access. Same join as core/authorship.ts, narrowed to one path
+     * so a file with four commits does not require reading two thousand.
+     */
+    /**
+     * Run a read-only Cypher query against the graph, from the Observatory.
+     *
+     * Every panel in the Observatory prints the query behind it. This makes
+     * those printed queries *live*: change one, run it, see the rows. The
+     * point of putting the log, the brain and the lock in one graph is that
+     * questions spanning all three are one query — and a claim like that is
+     * worth more when you can type the query yourself than when a dashboard
+     * asserts it.
+     *
+     * Read-only is enforced by refusing anything that could write, not by
+     * hoping the caller behaves. The list is deliberately blunt: a rejected
+     * legitimate query is an inconvenience, a permitted `DELETE` is somebody's
+     * event log.
+     */
+    app.post(
+      "/api/projects/:id/graph/query",
+      withRuntime(async (rt, req, res) => {
+        const cypher = String((req.body ?? {}).cypher ?? "").trim();
+        if (!cypher) return void res.status(400).json({ error: "bad_request", message: "nothing to run" });
+        if (cypher.length > 4000) {
+          return void res.status(400).json({ error: "bad_request", message: "query too long" });
+        }
+        const WRITES = /\b(CREATE|MERGE|SET|DELETE|DETACH|REMOVE|DROP|LOAD|FOREACH)\b/i;
+        if (WRITES.test(cypher)) {
+          return void res.status(400).json({
+            error: "read_only",
+            message: "this runs read-only queries — MATCH, UNWIND, RETURN. Writes go through the app.",
           });
         }
-        const body = (req.body ?? {}) as Record<string, unknown>;
-        const rawAlerts = Array.isArray(body.alerts) ? (body.alerts as Record<string, unknown>[]) : [body];
-        const q = req.query as Record<string, string>;
-        const common = (body.commonLabels ?? {}) as Record<string, string>;
-        const actions: Array<Record<string, unknown>> = [];
-        for (const raw of rawAlerts) {
-          const al = (raw ?? {}) as Record<string, unknown>;
-          const labels = { ...common, ...((al.labels ?? {}) as Record<string, string>) };
-          const status = String(al.status ?? body.status ?? "firing");
-          const projectRef = labels["notch.project"] ?? labels.notch_project ?? q.project;
-          const agent = labels["gen_ai.agent.id"] ?? labels.gen_ai_agent_id ?? labels.agent ?? q.agent;
-          const alertName = String(labels.alertname ?? body.title ?? "SigNoz alert");
-          if (status !== "firing" && status !== "resolved") { actions.push({ skipped: `status "${status}"` }); continue; }
-          if (!agent) { actions.push({ skipped: "no agent label on alert" }); continue; }
-          const infos = listProjects();
-          // A project ref must actually match — never silently act on an arbitrary
-          // project. Only auto-pick when there's exactly one project and no ref.
-          const info = projectRef
-            ? infos.find((p) => p.name === projectRef || p.id === projectRef)
-            : infos.length === 1 ? infos[0] : undefined;
-          if (!info) {
-            actions.push({ skipped: projectRef ? `no project matching "${projectRef}"` : "project label required (multiple projects)" });
-            continue;
-          }
-          try {
-            const rt = await this.runtime(info.id);
-            if (status === "resolved") {
-              // Recovery: retry the original agent if we had quarantined it.
-              const q0 = rt.unquarantine(String(agent));
-              if (!q0) { actions.push({ project: info.name, agent, alert: alertName, action: "resolved (was not quarantined)" }); continue; }
-              const holder = rt.baton.holder();
-              const retried = q0.displaced && holder !== agent;
-              if (retried) await rt.handoff(String(agent));
-              rt.log.append({ kind: "status", agentId: String(agent),
-                payload: { state: "signoz_recovery", alert: alertName, retried, pausedMs: Date.now() - q0.since } });
-              actions.push({ project: info.name, agent, alert: alertName,
-                action: retried ? `recovered — baton handed back to ${agent}` : "recovered — quarantine lifted" });
-              continue;
-            }
-            // Firing: pause the agent and fail the baton over.
-            const holder = rt.baton.holder();
-            const agents = (await rt.status()).agents;
-            const fallback = agents.find((a) => a.id !== agent)?.id;
-            const displaced = holder === agent && !!fallback;
-            rt.quarantine(String(agent), alertName, displaced);
-            rt.log.append({ kind: "status", agentId: String(agent),
-              payload: { state: "signoz_intervention", alert: alertName, holder, fallback: fallback ?? null } });
-            // Start the recheck loop: pause → recheck → return the baton if the
-            // agent stops erroring, retrying a few times before giving up.
-            this.startHealLoop(rt, String(agent), alertName, Date.now());
-            if (displaced) {
-              await rt.handoff(fallback!);
-              actions.push({ project: info.name, agent, alert: alertName, action: `quarantined; baton handed to ${fallback}` });
-            } else {
-              actions.push({ project: info.name, agent, alert: alertName,
-                action: fallback ? "quarantined (agent wasn't holding the baton)" : "quarantined (no fallback agent)" });
-            }
-          } catch (e) {
-            actions.push({ agent, error: e instanceof Error ? e.message : String(e) });
-          }
+        if (!/^\s*(MATCH|UNWIND|WITH|RETURN|CALL)\b/i.test(cypher)) {
+          return void res.status(400).json({
+            error: "read_only",
+            message: "start with MATCH, UNWIND, WITH, RETURN or CALL",
+          });
         }
-        res.json({ ok: true, actions });
-      })();
-    });
+        // `pv` and `slot` are this project's own handles, offered so the
+        // printed queries in the panels above can be pasted and run as-is.
+        await rt.graph.open();
+        const started = Date.now();
+        try {
+          const out = await hydra().query(cypher, { pv: rt.graph.vid, slot: rt.graph.slot });
+          const rows = out.rows.slice(0, 200);
+          const columns = rows.length ? Object.keys(rows[0] as Record<string, unknown>) : [];
+          res.json({
+            columns,
+            rows,
+            total: out.rows.length,
+            truncated: out.rows.length > rows.length,
+            ms: Date.now() - started,
+          });
+        } catch (err) {
+          res.status(400).json({
+            error: "query_failed",
+            message: err instanceof Error ? err.message : String(err),
+            ms: Date.now() - started,
+          });
+        }
+      }),
+    );
+
+    app.get(
+      "/api/projects/:id/git/file-history",
+      withRuntime(async (rt, req, res) => {
+        const rel = String(req.query.path ?? "").trim();
+        if (!rel) return void res.status(400).json({ error: "bad_request", message: "which file?" });
+        const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 20));
+        try {
+          const commits = await gitLogForFile(rt.info.dir, rel, limit);
+          const changed = new Map<string, string[]>();
+          for (const c of commits) changed.set(c.sha, [rel]);
+          const authored = attribute(commits, rt.log.list({ limit: 2000 }), changed);
+          res.json({
+            path: rel,
+            commits: authored.map((c) => ({
+              sha: c.sha,
+              short: c.short,
+              subject: c.subject,
+              relative: c.relative,
+              ts: c.ts,
+              author: c.author,
+              agent: c.files[0]?.agent ?? null,
+              eventId: c.files[0]?.eventId ?? null,
+            })),
+          });
+        } catch (err) {
+          if (err instanceof GitError) {
+            return void res.status(400).json({ error: "git", message: err.message });
+          }
+          throw err;
+        }
+      }),
+    );
+
+    app.get(
+      "/api/projects/:id/council",
+      withRuntime(async (rt, _req, res) => {
+        res.json({
+          live: rt.councilLive(),
+          history: await rt.council.list(8).catch(() => []),
+        });
+      }),
+    );
+
+    /** Act on one member's answer — recorded, and folded into the brain. */
+    app.post(
+      "/api/projects/:id/council/:runId/choose",
+      withRuntime(async (rt, req, res) => {
+        const agent = String((req.body ?? {}).agent ?? "").trim();
+        if (!agent) return void res.status(400).json({ error: "bad_request", message: "which agent?" });
+        try {
+          res.json(await rt.chooseCouncilAnswer(String(req.params.runId), agent));
+        } catch (err) {
+          res.status(404).json({ error: "not_found", message: err instanceof Error ? err.message : String(err) });
+        }
+      }),
+    );
+
+    /** One evaluation pass, on demand — the Self-heal view's "check now". */
+    app.post(
+      "/api/projects/:id/heal/evaluate",
+      withRuntime(async (rt, _req, res) => {
+        res.json({ ok: true, actions: await this.evaluateHealth(rt) });
+      }),
+    );
+
+    /** What the watcher currently thinks of each agent — the Self-heal view's data. */
+    app.get(
+      "/api/projects/:id/heal",
+      withRuntime(async (rt, _req, res) => {
+        res.json({
+          quarantine: rt.quarantined(),
+          thresholds: HEAL_THRESHOLDS,
+          agents: await this.healthSnapshot(rt),
+        });
+      }),
+    );
 
     app.get(
       "/api/projects/:id/events",
@@ -1309,6 +1431,120 @@ export class LoomDaemon {
         // whole thread, which is what they've always shown
         const chat = req.query.chat ? String(req.query.chat) : undefined;
         res.json({ events: rt.log.list({ since, limit, ...(chat ? { chat } : {}) }) });
+      }),
+    );
+
+    /**
+     * Saved actions — the toolbar's reusable shell commands and agent prompts.
+     *
+     * Not under `/api/projects/:id` because that is the point of them: an
+     * action saved while you were in one workspace is on the toolbar of the
+     * next one. Running an action *is* project-scoped, and that route lives
+     * below with the rest of the per-project verbs.
+     */
+    app.get("/api/actions", (_req, res) => {
+      void (async () => {
+        try {
+          res.json({ actions: await actionStore().list() });
+        } catch (err) {
+          res.status(503).json({
+            error: "graph_unavailable",
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      })();
+    });
+
+    app.post("/api/actions", (req, res) => {
+      void (async () => {
+        const b = (req.body ?? {}) as { id?: string; name?: string; kind?: string; body?: string };
+        try {
+          const saved = await actionStore().save({
+            id: b.id ? String(b.id) : undefined,
+            name: String(b.name ?? ""),
+            kind: (b.kind === "prompt" ? "prompt" : "shell") as ActionKind,
+            body: String(b.body ?? ""),
+          });
+          res.json({ action: saved });
+        } catch (err) {
+          res.status(400).json({
+            error: "bad_request",
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      })();
+    });
+
+    app.delete("/api/actions/:aid", (req, res) => {
+      void (async () => {
+        try {
+          const gone = await actionStore().remove(String(req.params.aid));
+          if (!gone) return void res.status(404).json({ error: "not_found", message: "no such action" });
+          res.json({ ok: true });
+        } catch (err) {
+          res.status(503).json({
+            error: "graph_unavailable",
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      })();
+    });
+
+    /**
+     * Run a saved action in this workspace.
+     *
+     * A `shell` action runs the command in the project directory and returns
+     * what it printed, exit code and all — a non-zero exit is a *result*, not
+     * an HTTP error, because "the test failed" is exactly what you ran it to
+     * find out. A `prompt` action is handed to an agent through the same
+     * `sendMessage` path a typed message takes, so it takes the baton, appears
+     * in the thread, and is folded into the brain like any other turn.
+     */
+    app.post(
+      "/api/projects/:id/actions/:aid/run",
+      withRuntime(async (rt, req, res) => {
+        const store = actionStore();
+        const action = await store.get(String(req.params.aid));
+        if (!action) return void res.status(404).json({ error: "not_found", message: "no such action" });
+
+        if (action.kind === "prompt") {
+          const agentId = String((req.body ?? {}).agentId ?? "") || undefined;
+          const chat = String((req.body ?? {}).chat ?? "") || undefined;
+          const result = await rt.sendMessage(action.body, agentId, chat ? { chat } : {});
+          await store.recordRun(action.id);
+          return void res.json({ kind: "prompt", sent: result });
+        }
+
+        const out = await new Promise<{ code: number; out: string }>((resolve) => {
+          const child = spawn(action.body, {
+            cwd: rt.info.dir,
+            shell: true,
+            env: { ...process.env, CI: "1" },
+          });
+          let buf = "";
+          const take = (chunk: Buffer) => {
+            buf += chunk.toString("utf8");
+            // Enough to read, bounded so a runaway command cannot take the
+            // daemon's memory with it.
+            if (buf.length > 200_000) buf = buf.slice(-200_000);
+          };
+          child.stdout.on("data", take);
+          child.stderr.on("data", take);
+          const kill = setTimeout(() => {
+            child.kill("SIGKILL");
+            buf += "\nnotch: the action was still running after 120s and was stopped";
+          }, 120_000);
+          child.on("error", (err) => {
+            clearTimeout(kill);
+            resolve({ code: 127, out: buf + String(err.message) });
+          });
+          child.on("close", (code) => {
+            clearTimeout(kill);
+            resolve({ code: code ?? 0, out: buf });
+          });
+        });
+        await store.recordRun(action.id);
+        res.json({ kind: "shell", ...out });
       }),
     );
 
@@ -1422,7 +1658,7 @@ export class LoomDaemon {
     // Turn an agent on/off. Off agents stay in the roster but aren't spawned and
     // can't hold the baton. Refused for the baton holder or a mid-turn agent.
     /**
-     * Lift a SigNoz pause by hand.
+     * Lift a self-heal pause by hand.
      *
      * The loop lifts itself when the alert resolves or the recheck sees the
      * agent healthy again, and that is the normal path. This is the override
@@ -1439,7 +1675,7 @@ export class LoomDaemon {
         rt.log.append({
           kind: "status",
           agentId,
-          payload: { state: "signoz_recovery", alert: lifted.reason, retried: false, via: "manual" },
+          payload: { state: "heal_recovery", reason: lifted.reason, retried: false, via: "manual" },
         });
         res.json({ lifted: true, agentId, was: lifted, quarantine: rt.quarantined() });
       }),
@@ -1450,7 +1686,7 @@ export class LoomDaemon {
       withRuntime(async (rt, req, res) => {
         const { enabled } = (req.body ?? {}) as { enabled?: boolean };
         try {
-          res.json(rt.setAgentEnabled(String(req.params.agentId), enabled !== false));
+          res.json(await rt.setAgentEnabled(String(req.params.agentId), enabled !== false));
         } catch (e) {
           res.status(409).json({ error: e instanceof Error ? e.message : String(e) });
         }
@@ -1884,7 +2120,7 @@ export class LoomDaemon {
       "/api/projects/:id/agents/:agentId",
       withRuntime(async (rt, req, res) => {
         try {
-          res.json(rt.removeAgent(String(req.params.agentId)));
+          res.json(await rt.removeAgent(String(req.params.agentId)));
         } catch (err) {
           res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
         }
@@ -1951,6 +2187,284 @@ export class LoomDaemon {
       }),
     );
 
+    // --- the graph ---------------------------------------------------------
+    //
+    // Everything under /graph is answered by HydraDB rather than by folding the
+    // event log in the client. These are the questions that need a traversal:
+    // who held the baton and who stood against them, why something failed, what
+    // an agent knew when it took over, and what other runs of this project
+    // already learned. Each read-back endpoint returns the Cypher it ran, so the
+    // UI can show its working rather than asking to be believed.
+
+    app.get(
+      "/api/projects/:id/graph/health",
+      // Deliberately NOT behind withRuntime.
+      //
+      // Opening a project reads its whole log out of HydraDB, so a health
+      // check that went through the runtime could only answer once the thing
+      // it is diagnosing was already working — and hung for two minutes when
+      // it was not. The ping comes first; the runtime is only consulted once
+      // the node has proved it is answering.
+      (req: Request, res: Response) => {
+        void (async () => {
+          const h = hydra();
+          const ping = await h.ping();
+          const base = {
+            ...ping,
+            writable: ping.writable,
+            url: h.cfg.url,
+            graph: h.cfg.graph,
+            cell: h.cfg.cell,
+            queries: h.queryCount,
+            retries: h.retryCount,
+            store: process.env.LOOM_STORE ?? "hydra",
+          };
+          if (!ping.ok) {
+            res.status(200).json({ ...base, counts: null, pendingEvents: null });
+            return;
+          }
+          try {
+            const rt = await this.runtime(String(req.params.id));
+            res.json({
+              ...base,
+              pendingEvents: rt.log.pending,
+              counts: await graphCounts(rt.graph).catch(() => null),
+            });
+          } catch (err) {
+            res.status(200).json({
+              ...base,
+              counts: null,
+              pendingEvents: null,
+              detail: `node is up, but this project could not be opened: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            });
+          }
+        })();
+      },
+    );
+
+    app.get(
+      "/api/projects/:id/graph/baton",
+      withRuntime(async (rt, _req, res) => {
+        res.json({
+          state: rt.baton.snapshot(),
+          epochs: await rt.baton.history(100),
+        });
+      }),
+    );
+
+    app.get(
+      "/api/projects/:id/graph/fencing",
+      withRuntime(async (rt, _req, res) => {
+        res.json({ violations: await rt.baton.violations(100) });
+      }),
+    );
+
+    /**
+     * Fence drill — a *real* stale-epoch write attempt, on purpose.
+     *
+     * Not a simulation: it calls the same `assertWriter` gate every
+     * baton-authorized action goes through, with an epoch that is genuinely
+     * behind, and the refusal it produces is recorded like any other. The
+     * point is that a guarantee nobody can watch fail is a guarantee nobody
+     * has any reason to believe.
+     */
+    app.post(
+      "/api/projects/:id/graph/fence-drill",
+      withRuntime(async (rt, req, res) => {
+        const body = (req.body ?? {}) as { agent?: string; epoch?: number };
+        const agent = body.agent?.trim() || rt.baton.holder();
+        if (!agent) return void res.status(400).json({ error: "no agent holds the baton" });
+        const current = rt.baton.snapshot();
+        const epoch = Number.isFinite(body.epoch)
+          ? Number(body.epoch)
+          : Math.max(0, current.tenureEpoch - 1);
+        try {
+          await rt.baton.assertWriter(agent, epoch, "fence_drill", "operator-run fence drill");
+          res.json({
+            fenced: false,
+            agent,
+            epoch,
+            current,
+            detail: "the write was authorized — this epoch is current, so nothing was stale",
+          });
+        } catch (err) {
+          res.json({
+            fenced: true,
+            agent,
+            epoch,
+            current,
+            detail: err instanceof Error ? err.message : String(err),
+            violations: await rt.baton.violations(5),
+          });
+        }
+      }),
+    );
+
+    /**
+     * What one agent knows, right now, out of the graph.
+     *
+     * Three different questions, and keeping them apart is the point:
+     *
+     *   handed   what was actually injected the last time the baton reached it
+     *   learned  what it asserted itself — its own contribution to the brain
+     *   shared   what the project knows that it has never been handed
+     *
+     * An agent with a big `shared` number and an empty `handed` list has never
+     * been briefed, which is exactly the failure this project exists to make
+     * visible — and which no per-agent view existed to show until now.
+     */
+    app.get(
+      "/api/projects/:id/agents/:agentId/knows",
+      withRuntime(async (rt, req, res) => {
+        const agentId = String(req.params.agentId ?? "");
+        const known = (await rt.status()).agents.some((a) => a.id === agentId);
+        if (!known) return void res.status(404).json({ error: "not_found", message: `no agent "${agentId}" here` });
+
+        const handoffs = await rt.brainGraph.handoffs(50).catch(() => []);
+        const mine = handoffs.filter((h) => h.to === agentId);
+        const last = mine[0] ?? null;
+        const [handed, learned] = await Promise.all([
+          last ? rt.brainGraph.projectedAt(last.key).catch(() => []) : Promise.resolve([]),
+          rt.brainGraph.assertedBy(agentId).catch(() => []),
+        ]);
+        const all = rt.brain.list({ includeExpired: false });
+        const handedIds = new Set(handed.map((m) => m.memoryId));
+        res.json({
+          agent: agentId,
+          holder: rt.baton.holder() === agentId,
+          lastHandoff: last,
+          handoffsReceived: mine.length,
+          handed,
+          learned,
+          // Everything the project knows that this agent has not been handed.
+          unseen: all.filter((m) => !handedIds.has(m.id)).length,
+          total: all.length,
+        });
+      }),
+    );
+
+    app.get(
+      "/api/projects/:id/graph/causal/:mid",
+      withRuntime(async (rt, req, res) => {
+        const chain = await rt.brainGraph.causalChain(
+          String(req.params.mid),
+          Math.min(6, Number((req.query as Record<string, string>).hops) || 4),
+        );
+        res.json(chain);
+      }),
+    );
+
+    app.get(
+      "/api/projects/:id/graph/connected",
+      withRuntime(async (rt, req, res) => {
+        const q = req.query as Record<string, string | undefined>;
+        const entities = (q.entities ?? "")
+          .split(",")
+          .map((e) => e.trim())
+          .filter(Boolean);
+        const derived = q.q ? queryEntities(q.q) : [];
+        const all = [...new Set([...entities, ...derived])];
+        if (!all.length) return void res.status(400).json({ error: "missing entities or q" });
+        const { hits, cypher } = await rt.brainGraph.connected(all, {
+          maxHops: Math.min(6, Number(q.hops) || 3),
+          limit: Math.min(100, Number(q.limit) || 40),
+        });
+        res.json({
+          entities: all,
+          cypher,
+          hits: hits.map((h) => ({ ...h, memory: rt.brain.get(h.memoryId) ?? null })),
+        });
+      }),
+    );
+
+    app.get(
+      "/api/projects/:id/graph/crossrun",
+      withRuntime(async (rt, req, res) => {
+        const q = req.query as Record<string, string | undefined>;
+        const entities = [
+          ...new Set([
+            ...(q.entities ?? "").split(",").map((e) => e.trim()).filter(Boolean),
+            ...(q.q ? queryEntities(q.q) : []),
+          ]),
+        ];
+        // A typed word is not an identifier, so the extractor finds nothing in
+        // it — "baton" yields no entities at all. Rather than answer a human
+        // with a 400, resolve each word against the entity names that exist.
+        if (!entities.length && q.q) {
+          for (const word of String(q.q).toLowerCase().split(/[^\w.\/-]+/).filter((w) => w.length > 1).slice(0, 4)) {
+            for (const name of await rt.brainGraph.entitiesMatching(word, 8)) entities.push(name);
+          }
+        }
+        if (!entities.length) {
+          return void res.status(400).json({
+            error: "no_entities",
+            message: q.q
+              ? `nothing in the graph is named like "${String(q.q).slice(0, 60)}"`
+              : "missing entities or q",
+          });
+        }
+        const memories = await rt.brainGraph.crossRun(entities, {
+          limit: Math.min(100, Number(q.limit) || 20),
+          includeThisProject: q.all === "1",
+        });
+        // A slot number is the graph's answer; a project name is the human's
+        // question. `(:Project)` carries both and is one row per project, so
+        // resolving them is one small query rather than opening every graph.
+        const names: Record<number, string> = {};
+        try {
+          const rows = await hydra().query("MATCH (p:Project) RETURN p.pid AS pid, p.slot AS slot");
+          const byDir = new Map<string, string>();
+          for (const info of listProjects()) byDir.set(path.resolve(info.dir, ".loom"), info.name);
+          for (const r of rows.rows) {
+            const slot = Number(r.slot ?? -1);
+            const pid = String(r.pid ?? "");
+            if (slot < 0 || !pid) continue;
+            names[slot] = byDir.get(pid) ?? path.basename(path.dirname(pid));
+          }
+        } catch {
+          // A missing name is a cosmetic loss; the memories themselves are the
+          // answer and must still be returned.
+        }
+        res.json({ entities, memories, projectNames: names });
+      }),
+    );
+
+    app.get(
+      "/api/projects/:id/graph/handoffs",
+      withRuntime(async (rt, _req, res) => {
+        res.json({
+          edges: await rt.brainGraph.handoffGraph(),
+          handoffs: await rt.brainGraph.handoffs(50),
+        });
+      }),
+    );
+
+    app.get(
+      "/api/projects/:id/graph/projected/:key",
+      withRuntime(async (rt, req, res) => {
+        res.json({ memories: await rt.brainGraph.projectedAt(String(req.params.key)) });
+      }),
+    );
+
+    /**
+     * Replay a fold of the log at a point in time, at the caller's chosen
+     * consistency. `strong` re-verifies against object storage before pinning
+     * the snapshot — the audit mode. `causal` is the fast scrub.
+     */
+    app.get(
+      "/api/projects/:id/graph/replay",
+      withRuntime(async (rt, req, res) => {
+        const q = req.query as Record<string, string | undefined>;
+        const consistency = q.consistency === "strong" ? "strong" : "causal";
+        const until = Number(q.until) || Number.MAX_SAFE_INTEGER;
+        const started = Date.now();
+        const snap = await replayAt(rt.graph, until, consistency);
+        res.json({ ...snap, consistency, ms: Date.now() - started });
+      }),
+    );
+
     // --- the brain ---------------------------------------------------------
 
     app.get(
@@ -1975,15 +2489,51 @@ export class LoomDaemon {
         if (!q.q?.trim() && !files.length) {
           return void res.status(400).json({ error: "missing q or files" });
         }
+        const limit = Math.min(50, Number(q.limit) || 12);
         const hits = retrieve(rt.brain, {
           ...(q.q ? { query: q.q } : {}),
           ...(files.length ? { files } : {}),
           ...(q.chat ? { chat: q.chat } : {}),
           ...(q.agent ? { agent: q.agent } : {}),
-          limit: Math.min(50, Number(q.limit) || 12),
+          limit,
           explain: q.explain === "1",
         });
-        res.json({ hits });
+        if (hits.length || !q.q?.trim()) return void res.json({ hits });
+
+        /**
+         * Nothing lexical matched — try the graph before answering "no".
+         *
+         * BM25 tokenises `src/core/baton.ts` as a path, so a search for the
+         * bare word `baton` misses a memory that is explicitly *about* that
+         * file. That is the single most obvious thing to type into this box and
+         * it returned nothing. The entity table already holds both the path and
+         * its basename, so resolving the query's words against real entity
+         * names by prefix reaches the memory through its `ABOUT` edge — the
+         * same bridge cross-run recall uses, for the same reason.
+         *
+         * Second, not first: when BM25 does match, its ranking is better than a
+         * prefix hit, and this must not displace it.
+         */
+        const words = String(q.q)
+          .toLowerCase()
+          .split(/[^\w.\/-]+/)
+          .filter((w) => w.length > 1)
+          .slice(0, 4);
+        const names = new Set<string>();
+        for (const w of words) {
+          for (const n of await rt.brainGraph.entitiesMatching(w, 8)) names.add(n);
+        }
+        if (!names.size) return void res.json({ hits: [] });
+        const viaEntity = retrieve(rt.brain, {
+          files: [...names],
+          ...(q.chat ? { chat: q.chat } : {}),
+          ...(q.agent ? { agent: q.agent } : {}),
+          limit,
+          explain: q.explain === "1",
+        });
+        // Say how they were found. A hit nobody can explain is a hit nobody
+        // trusts, and these came from a different channel than the ones above.
+        res.json({ hits: viaEntity, via: "entity", entities: [...names] });
       }),
     );
 
@@ -2224,6 +2774,16 @@ export class LoomDaemon {
           agent?: string;
         };
         if (!title?.trim()) return void res.status(400).json({ error: "missing title" });
+        // A column that is not a column is a caller error, not a nudge. The
+        // board coerces anything it does not recognise to "working" when it
+        // renders, so accepting one here returned 200 and quietly filed the
+        // card somewhere else — the one outcome a client cannot detect.
+        if (column !== undefined && !(BOARD_COLUMNS as readonly string[]).includes(column)) {
+          return void res.status(400).json({
+            error: "bad_request",
+            message: `unknown column "${column}" — expected one of: ${BOARD_COLUMNS.join(", ")}`,
+          });
+        }
         res.json({ task: rt.createTask({ title, ...(column ? { column } : {}), ...(agent ? { agent } : {}) }) });
       }),
     );
@@ -2236,6 +2796,14 @@ export class LoomDaemon {
           column?: string;
           agent?: string;
         };
+        // Same guard as create: an unrecognised column renders as "working",
+        // so accepting one here would silently move the card.
+        if (column !== undefined && !(BOARD_COLUMNS as readonly string[]).includes(column)) {
+          return void res.status(400).json({
+            error: "bad_request",
+            message: `unknown column "${column}" — expected one of: ${BOARD_COLUMNS.join(", ")}`,
+          });
+        }
         const task = rt.updateTask(String(req.params.taskId), {
           ...(title !== undefined ? { title } : {}),
           ...(column !== undefined ? { column } : {}),
@@ -2573,9 +3141,9 @@ export class LoomDaemon {
     rt.log.onEvent((e) => {
       this.broadcast(info.id, e);
       // Single central hook for live events (agent turns AND API-driven handoffs /
-      // routes / memory): fold each into a SigNoz span. Rehydration reads via
+      // routes / memory): fold each into a span in HydraDB. Rehydration reads via
       // log.list(), not append(), so history is never re-exported.
-      recordAgentEvent(e, { project: info.name });
+      recordAgentEvent(e, { project: info.name }, rt.telemetry);
     });
     this.runtimes.set(info.id, rt);
     return rt;
@@ -2687,6 +3255,10 @@ export class LoomDaemon {
 
     // Fan every log record out to connected clients (the Console tab).
     this.unstreamLogs = this.streamLogs();
+    // Watch the fleet's own telemetry and pause an agent that is failing. This
+    // used to arrive as an external alert over a webhook; Notch reads the spans
+    // itself now, so the loop closes without an external system in it.
+    this.startHealWatcher();
     this.writeConfig();
 
     return { host: this.host, port: this.port };
@@ -2788,29 +3360,206 @@ export class LoomDaemon {
 
   /**
    * The self-heal recheck loop: after a firing alert fails the baton over, wait
-   * NOTCH_HEAL_RECHECK_MS, ask SigNoz (or the local log) whether the agent has
+   * NOTCH_HEAL_RECHECK_MS, ask HydraDB (or the local log) whether the agent has
    * errored since it was quarantined, and if not, hand the baton back — retrying
    * up to NOTCH_HEAL_MAX_RETRIES times before giving up. Best-effort and unref'd:
    * a daemon restart simply forgets the loop.
    */
+  /**
+   * One evaluation of every agent's health, and the interventions it triggers.
+   *
+   * The thresholds are deliberately few and stated as constants rather than
+   * tuned per install: this decides whether an agent is taken out of rotation,
+   * and a rule you cannot recite is a rule nobody can trust. An agent trips
+   * when it has produced `errors` or more error spans inside the window, or
+   * when it has been fenced — a stale writer is, by definition, an agent that
+   * has lost track of whether it may act.
+   */
+  /**
+   * Run `evaluateHealth` over every open project on a timer.
+   *
+   * Unref'd and best-effort: a daemon should not be held open by its own
+   * watchdog, and a failed evaluation must never take the daemon with it.
+   * `NOTCH_HEAL_DISABLED=1` turns it off, which the test suite uses so a
+   * background quarantine cannot land in the middle of an unrelated assertion.
+   */
+  private startHealWatcher(): void {
+    if (process.env.NOTCH_HEAL_DISABLED === "1") return;
+    const everyMs = Math.max(5_000, Number(process.env.NOTCH_HEAL_WATCH_MS) || 60_000);
+    const tick = async (): Promise<void> => {
+      if (this.closing) return;
+      for (const rt of [...this.runtimes.values()]) {
+        try {
+          await this.evaluateHealth(rt);
+        } catch {
+          /* one sick project must not stop the others being checked */
+        }
+      }
+    };
+    const t = setInterval(() => void tick(), everyMs);
+    t.unref?.();
+    this.healWatcher = t;
+  }
+
+  /**
+   * When each agent was last let back in, from the log.
+   *
+   * The window alone is not enough to decide whether an agent is sick. Errors
+   * sit in it for ten minutes, so an agent released by the recheck loop was
+   * immediately re-paused by the next watcher pass on *the same three errors* —
+   * a flap every 60s until the window rolled off, and three episodes on screen
+   * for one failure. A release is a clean slate: only failures after it count.
+   *
+   * Derived from the log rather than held in memory so it survives a daemon
+   * restart, which is when a flap would otherwise start over.
+   */
+  private lastReleaseAt(rt: ProjectRuntime): Map<string, number> {
+    const out = new Map<string, number>();
+    for (const e of rt.log.list({ kinds: ["status"], limit: 400 })) {
+      if ((e.payload as Record<string, unknown>).state !== "heal_recovery") continue;
+      const agent = e.agentId ?? "";
+      if (agent) out.set(agent, Math.max(out.get(agent) ?? 0, e.ts));
+    }
+    return out;
+  }
+
+  private async evaluateHealth(rt: ProjectRuntime): Promise<Array<Record<string, unknown>>> {
+    const actions: Array<Record<string, unknown>> = [];
+    const windowStart = Date.now() - HEAL_THRESHOLDS.windowMs;
+    const released = this.lastReleaseAt(rt);
+    const quarantined = rt.quarantined();
+    const agents = (await rt.status()).agents.filter((a) => a.tier === "adapter");
+
+    for (const a of agents) {
+      const since = Math.max(windowStart, released.get(a.id) ?? 0);
+      let errors = 0;
+      try {
+        errors = await recentAgentErrors(rt.telemetry, a.id, since);
+      } catch {
+        // The graph is unreachable. Refusing to guess is the correct move —
+        // quarantining on no evidence is worse than not quarantining.
+        actions.push({ agent: a.id, skipped: "telemetry unavailable" });
+        continue;
+      }
+      const fenced = (await rt.baton.violations(20)).filter(
+        (v) => v.agent === a.id && v.at >= since,
+      ).length;
+      const tripped = errors >= HEAL_THRESHOLDS.errors || fenced >= HEAL_THRESHOLDS.fencing;
+      const already = Boolean(quarantined[a.id]);
+
+      if (tripped && !already) {
+        const reason =
+          fenced >= HEAL_THRESHOLDS.fencing
+            ? `${fenced} fenced write(s) in ${HEAL_THRESHOLDS.windowMs / 60_000}m`
+            : `${errors} error(s) in ${HEAL_THRESHOLDS.windowMs / 60_000}m`;
+        actions.push(...(await this.quarantineAgent(rt, a.id, reason)));
+      } else if (!tripped && already) {
+        actions.push(...(await this.releaseAgent(rt, a.id, "recovered")));
+      } else {
+        actions.push({ agent: a.id, errors, fenced, action: already ? "still paused" : "healthy" });
+      }
+    }
+    return actions;
+  }
+
+  /** Per-agent error/fencing counts over the window, without acting on them. */
+  private async healthSnapshot(
+    rt: ProjectRuntime,
+  ): Promise<Array<{ agent: string; errors: number; fenced: number; paused: boolean }>> {
+    const windowStart = Date.now() - HEAL_THRESHOLDS.windowMs;
+    const released = this.lastReleaseAt(rt);
+    const q = rt.quarantined();
+    const violations = await rt.baton.violations(50).catch(() => []);
+    const agents = (await rt.status()).agents.filter((a) => a.tier === "adapter");
+    // Counted from the same instant `evaluateHealth` judges from, so the panel
+    // and the decision can never show different numbers.
+    return Promise.all(
+      agents.map(async (a) => {
+        const since = Math.max(windowStart, released.get(a.id) ?? 0);
+        return {
+          agent: a.id,
+          errors: await recentAgentErrors(rt.telemetry, a.id, since).catch(() => 0),
+          fenced: violations.filter((v) => v.agent === a.id && v.at >= since).length,
+          paused: Boolean(q[a.id]),
+        };
+      }),
+    );
+  }
+
+  /** Take an agent out of rotation and move the baton off it. */
+  private async quarantineAgent(
+    rt: ProjectRuntime,
+    agent: string,
+    reason: string,
+  ): Promise<Array<Record<string, unknown>>> {
+    const holder = rt.baton.holder();
+    const agents = (await rt.status()).agents;
+    const fallback = agents.find((a) => a.id !== agent && a.tier === "adapter")?.id;
+    const displaced = holder === agent && !!fallback;
+    rt.quarantine(agent, reason, displaced);
+    rt.log.append({
+      kind: "status",
+      agentId: agent,
+      payload: { state: "heal_intervention", reason, holder, fallback: fallback ?? null },
+    });
+    this.startHealLoop(rt, agent, reason, Date.now());
+    if (displaced) {
+      await rt.handoff(fallback!);
+      return [{ agent, reason, action: `quarantined; baton handed to ${fallback}` }];
+    }
+    return [
+      {
+        agent,
+        reason,
+        action: fallback ? "quarantined (wasn't holding the baton)" : "quarantined (no fallback agent)",
+      },
+    ];
+  }
+
+  /** Put a recovered agent back in rotation, handing the baton back if it was displaced. */
+  private async releaseAgent(
+    rt: ProjectRuntime,
+    agent: string,
+    reason: string,
+  ): Promise<Array<Record<string, unknown>>> {
+    const q0 = rt.unquarantine(agent);
+    if (!q0) return [{ agent, action: "was not quarantined" }];
+    const retried = q0.displaced && rt.baton.holder() !== agent;
+    if (retried) await rt.handoff(agent);
+    rt.log.append({
+      kind: "status",
+      agentId: agent,
+      payload: { state: "heal_recovery", reason, retried, pausedMs: Date.now() - q0.since },
+    });
+    return [
+      { agent, reason, action: retried ? `recovered — baton handed back to ${agent}` : "recovered — quarantine lifted" },
+    ];
+  }
+
   private startHealLoop(rt: ProjectRuntime, agent: string, alert: string, since: number): void {
     if (process.env.NOTCH_HEAL_DISABLED === "1") return;
     const recheckMs = Math.max(1, Number(process.env.NOTCH_HEAL_RECHECK_MS) || 60_000);
     const maxRetries = Math.max(1, Number(process.env.NOTCH_HEAL_MAX_RETRIES) || 3);
     let attempt = 0;
     const tick = async (): Promise<void> => {
+      if (this.closing) return;
       attempt += 1;
       if (!rt.quarantined()[agent]) return; // lifted already (a resolved alert, say)
       const recovered = await this.agentRecovered(rt, agent, since).catch(() => false);
+      if (this.closing) return;
       if (recovered) {
         rt.unquarantine(agent);
         const retried = rt.baton.holder() !== agent;
         if (retried) await rt.handoff(agent).catch(() => {});
-        rt.log.append({ kind: "status", agentId: agent, payload: { state: "signoz_recovery", alert, retried, attempt, via: "recheck" } });
+        // Re-checked after the await: handing the baton back is a round trip to
+        // HydraDB, and the daemon can begin shutting down inside it.
+        if (this.closing) return;
+        rt.log.append({ kind: "status", agentId: agent, payload: { state: "heal_recovery", reason: alert, retried, attempt, via: "recheck" } });
         return;
       }
       if (attempt >= maxRetries) {
-        rt.log.append({ kind: "status", agentId: agent, payload: { state: "signoz_heal_exhausted", alert, attempts: attempt } });
+        if (this.closing) return;
+        rt.log.append({ kind: "status", agentId: agent, payload: { state: "heal_exhausted", reason: alert, attempts: attempt } });
         return; // stays quarantined for a human
       }
       schedule();
@@ -2823,11 +3572,13 @@ export class LoomDaemon {
     schedule();
   }
 
-  /** Recovered = no error spans since it was quarantined (SigNoz first, local log fallback). */
+  /** Recovered = no error spans since it was quarantined. */
   private async agentRecovered(rt: ProjectRuntime, agent: string, sinceMs: number): Promise<boolean> {
     try {
-      return (await recentAgentErrors(rt.info.name, agent, sinceMs)) === 0;
+      return (await recentAgentErrors(rt.telemetry, agent, sinceMs)) === 0;
     } catch {
+      // The graph is unreachable; fall back to the log the daemon holds in
+      // memory rather than declaring an agent healthy on no evidence.
       const errs = rt.log.list({ limit: 400 }).filter(
         (e) => e.ts > sinceMs && e.agentId === agent &&
           (e.kind === "error" || (e.kind === "run_complete" && (e.payload as Record<string, unknown>).error)),
@@ -2837,6 +3588,9 @@ export class LoomDaemon {
   }
 
   async close(): Promise<void> {
+    this.closing = true;
+    if (this.healWatcher) clearInterval(this.healWatcher);
+    this.healWatcher = null;
     for (const t of this.healTimers) clearTimeout(t);
     this.healTimers.clear();
     this.unstreamLogs?.();

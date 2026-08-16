@@ -5,7 +5,7 @@
  * not one code path ever read it back, so an agent with a $1 cap would happily
  * spend $40 and the cap was decoration. What's asserted here is the enforcement
  * — a turn refused before anything is committed, a visible event, the same pause
- * record the SigNoz self-heal uses, and a pause that lifts itself when the spend
+ * record the self-heal watcher uses, and a pause that lifts itself when the spend
  * is no longer over.
  *
  * Echo agents report a deterministic $0.001 per turn, which is what makes a
@@ -115,7 +115,7 @@ describe("enforcement", () => {
       expect(refusal).toMatchObject({ agentId: "plannerbot" });
       expect(refusal!.payload).toMatchObject({ budgetUsd: 1, spentTodayUsd: 1.25 });
 
-      // …and the same pause record the SigNoz self-heal writes, so the UI has
+      // …and the same pause record the self-heal watcher writes, so the UI has
       // one thing to render for "this agent is paused" however it got paused.
       expect(rt.quarantined().plannerbot).toMatchObject({ displaced: false });
       expect(rt.quarantined().plannerbot!.reason).toContain("$1.00/day");
@@ -165,18 +165,18 @@ describe("enforcement", () => {
   });
 
   /** A pause somebody else owns is not this guard's to lift. */
-  it("leaves a SigNoz quarantine alone", async () => {
+  it("leaves a self-heal quarantine alone", async () => {
     const rt = await runtimeWith([]);
     try {
-      rt.quarantine("plannerbot", "HighErrorRate", true);
+      rt.quarantine("plannerbot", "3 error(s) in 10m", true);
       rt.setBudget("plannerbot", 5); // under budget, so the budget guard passes
-      // The send is refused — by the *alert* pause, not the budget one. This
+      // The send is refused — by the *health* pause, not the budget one. This
       // case used to assert that the send went through, which encoded the bug:
-      // a SigNoz quarantine was written and never read, so a paused agent kept
-      // taking work. What it is really about is that the budget guard must not
-      // lift someone else's pause, and that still holds below.
-      await expect(rt.sendMessage("go", "plannerbot")).rejects.toThrow(/paused by SigNoz/);
-      expect(rt.quarantined().plannerbot).toMatchObject({ reason: "HighErrorRate", displaced: true });
+      // a quarantine was written and never read, so a paused agent kept taking
+      // work. What it is really about is that the budget guard must not lift
+      // someone else's pause, and that still holds below.
+      await expect(rt.sendMessage("go", "plannerbot")).rejects.toThrow(/paused by self-heal/);
+      expect(rt.quarantined().plannerbot).toMatchObject({ reason: "3 error(s) in 10m", displaced: true });
     } finally {
       await rt.close();
     }

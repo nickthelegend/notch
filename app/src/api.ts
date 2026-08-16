@@ -81,7 +81,7 @@ export interface Project {
   routeNames?: string[];
   costUsd?: number;
   /**
-   * Agents a firing SigNoz alert (or a budget cap) has paused. It rides on the
+   * Agents the self-heal watcher (or a budget cap) has paused. It rides on the
    * project status because a pause otherwise lives only in state on disk, which
    * made the self-heal look like it had done nothing at all.
    *
@@ -140,7 +140,7 @@ export interface TriageSpan {
   tout: number;
 }
 
-/** "Why did I fail?" — an agent root-caused from its own SigNoz traces. */
+/** "Why did I fail?" — an agent root-caused from its own spans in HydraDB. */
 export interface Triage {
   agent: string;
   spanCount: number;
@@ -149,7 +149,7 @@ export interface Triage {
   rootCause: string;
   suggestedFix: string;
   source: "llm" | "heuristic" | "no-data";
-  from: "signoz" | "local-log" | "none";
+  from: "hydradb" | "local-log" | "none";
 }
 
 export interface WorkingTree {
@@ -189,8 +189,8 @@ export type TaskResult =
 
 /**
  * One span behind an Observatory panel. `from` on the response says whether
- * these came out of SigNoz's ClickHouse or were rebuilt from the local event
- * log, which is a provenance fact the UI is required to show rather than hide.
+ * these came out of HydraDB or were rebuilt from the local event log, which is
+ * a provenance fact the UI is required to show rather than hide.
  */
 export interface InsightSpan {
   traceId: string;
@@ -210,10 +210,10 @@ export interface InsightSpan {
   cost: number;
 }
 
-export type SpanSource = "signoz" | "local-log";
+export type SpanSource = "hydradb" | "local-log";
 
 /**
- * One log line Notch shipped, read back out of SigNoz.
+ * One log line Notch recorded, read back out of HydraDB.
  *
  * `traceId`/`spanId` are empty strings when the record was emitted outside a
  * span, which is normal for status lines — an empty string here means "this line
@@ -244,7 +244,7 @@ export interface InsightLog {
  * `"unavailable"` instead of handing back an empty list that would read as
  * "nothing happened".
  */
-export type LogSource = "signoz" | "unavailable";
+export type LogSource = "hydradb" | "unavailable";
 
 /** A 0–100 score with the four penalty buckets that subtracted from 100. */
 export interface Health {
@@ -333,9 +333,9 @@ export interface AskResult {
   answer: string;
   /** Which CLI and model actually answered, e.g. "agy · gemini-3.6-flash-high". */
   via: string;
-  /** MCP servers handed to the model for the question (SigNoz among them, when configured). */
+  /** MCP servers handed to the model for the question, when any are configured. */
   mcpServers: string[];
-  /** "signoz" when the evidence spans came from ClickHouse, "local-log" when it was empty/down. */
+  /** "hydradb" when the evidence spans came from the graph, "local-log" when it had nothing yet. */
   spanSource: SpanSource | string;
   evidenceAgents?: number;
   evidenceSpans?: number;
@@ -517,7 +517,7 @@ export const abortRoute = (c: Creds, id: string) =>
 
 // --- Observatory ------------------------------------------------------------
 
-/** Turn/handoff/error spans. `from` says whether SigNoz answered or the log did. */
+/** Turn/handoff/error spans. `from` says whether HydraDB answered or the log did. */
 export const getSpans = (c: Creds, id: string, agentId?: string, limit = 200) =>
   api<{ from: SpanSource; spans: InsightSpan[] }>(
     c,

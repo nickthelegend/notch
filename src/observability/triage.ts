@@ -2,17 +2,18 @@
  * Agent self-triage — "why did I fail?"
  *
  * Agent-native observability: an agent (or you, on its behalf) reads its OWN
- * OpenTelemetry traces back out of SigNoz and gets a root cause. We query the
- * agent's recent spans from ClickHouse (SigNoz's store), derive a deterministic
+ * own traces back out of HydraDB and gets a root cause. We query the
+ * agent's recent spans from the graph, derive a deterministic
  * root cause + fix from them, and — when Claude is reachable (an Anthropic key,
  * or the `claude` CLI you're already signed into) — have Claude phrase it. The
- * local event log is a fallback source so triage still works if SigNoz is down.
+ * local event log is a fallback source so triage still works before the first
+ * span has been flushed.
  */
 
 import { spawn } from "node:child_process";
 import os from "node:os";
 import type { LoomEvent } from "../types.js";
-import { chQuery } from "./clickhouse.js";
+import type { TelemetryStore } from "../hydra/telemetry.js";
 
 /**
  * The `claude` CLI in print mode emits either JSON (`--output-format json`,
@@ -68,45 +69,45 @@ export type TriageResult = {
   rootCause: string;
   suggestedFix: string;
   source: "llm" | "heuristic" | "no-data";
-  from: "signoz" | "local-log" | "none";
+  from: "hydradb" | "local-log" | "none";
 };
 
 function safeId(id: string): string {
   return id.replace(/[^\w.\-:]/g, "");
 }
 
-/** Pull the agent's own spans (its turns + the handoffs it's part of) from SigNoz. */
-async function fetchAgentSpans(agent: string, limit = 40): Promise<TriageSpan[]> {
-  const a = safeId(agent);
-  const sql = `
-    SELECT toUnixTimestamp64Milli(timestamp) AS ts, name,
-           round(duration_nano / 1e6) AS ms, status_code AS code, status_message AS msg,
-           attributes_string['notch.event.kind'] AS kind,
-           attributes_number['gen_ai.usage.cost_usd'] AS cost,
-           toUInt32(attributes_number['gen_ai.usage.input_tokens']) AS tin,
-           toUInt32(attributes_number['gen_ai.usage.output_tokens']) AS tout
-    FROM signoz_traces.distributed_signoz_index_v3
-    WHERE \`resource_string_service$$name\` = 'notch'
-      AND (attributes_string['gen_ai.agent.id'] = '${a}'
-           OR attributes_string['notch.handoff.to'] = '${a}'
-           OR attributes_string['notch.handoff.from'] = '${a}')
-    ORDER BY timestamp DESC
-    LIMIT ${Math.min(120, limit)}`;
-  const rows = await chQuery(sql);
-  return rows.map((r) => ({
-    ts: Number(r.ts),
-    name: String(r.name),
-    ms: Number(r.ms),
-    code: Number(r.code),
-    msg: String(r.msg ?? ""),
-    kind: String(r.kind ?? ""),
-    cost: Number(r.cost ?? 0),
-    tin: Number(r.tin ?? 0),
-    tout: Number(r.tout ?? 0),
-  }));
+
+/**
+ * One agent's own spans, out of HydraDB.
+ *
+ * Includes the handoffs *into* and *out of* this agent, not just the spans it
+ * authored — the upstream handoff is usually where the answer to "why did I
+ * fail" actually is, and dropping it was how triage used to blame the agent
+ * that merely inherited a bad brief.
+ */
+async function fetchAgentSpans(
+  store: TelemetryStore,
+  agent: string,
+  limit = 40,
+): Promise<TriageSpan[]> {
+  const all = await store.spans({ limit: 400 });
+  return all
+    .filter((s) => s.agent === agent || s.handoffTo === agent || s.handoffFrom === agent)
+    .slice(0, Math.min(120, limit))
+    .map((s) => ({
+      ts: s.ts,
+      name: s.name,
+      ms: s.ms,
+      code: s.code,
+      msg: s.msg,
+      kind: "",
+      cost: s.cost,
+      tin: s.tin,
+      tout: s.tout,
+    }));
 }
 
-/** Fallback: derive trace-shaped rows from the local event log (same data SigNoz gets). */
+/** Fallback: derive trace-shaped rows from the daemon's in-memory event log. */
 function spansFromLog(agent: string, events: LoomEvent[]): TriageSpan[] {
   const out: TriageSpan[] = [];
   for (const e of events) {
@@ -115,7 +116,7 @@ function spansFromLog(agent: string, events: LoomEvent[]): TriageSpan[] {
       e.agentId === agent || p.to === agent || p.from === agent || p.agent === agent;
     if (!mine) continue;
     if (e.kind === "run_complete") {
-      // The turn's real cost, the same field the SigNoz path reads into `cost`
+      // The turn's real cost, the same field the span path reads into `cost`
       // and the same one insightSpansFromLog takes. This was a literal 0: every
       // fallback turn came back free, which is a number nobody measured sitting
       // in the column where a measured one goes. Nothing renders triage evidence
@@ -169,7 +170,7 @@ function heuristic(agent: string, spans: TriageSpan[]): { rootCause: string; sug
   const upTxt = upstream ? ` Upstream: the baton reached it via ${upstream.msg.replace(" -> ", " → ")}.` : "";
   const rootCause = `${agent} hit ${errors.length} error(s); the most recent (${ago}) was on ${where}: "${(last.msg || "unknown").slice(0, 220)}".${upTxt}`;
   const m = last.msg.toLowerCase();
-  let fix = "Open the failing span in SigNoz for the full context, then retry the turn.";
+  let fix = "Open the failing span in the Trace Waterfall for the full context, then retry the turn.";
   if (/exited|crash|serve exited|killed|sigterm|sigkill|process/.test(m)) fix = "The agent process crashed — restart the agent (or its CLI/daemon) and re-hand the baton.";
   else if (/timeout|timed out|deadline/.test(m)) fix = "A call timed out — raise the tool/turn timeout or check the upstream service, then re-hand the baton.";
   else if (/permission|denied|unauthor|not signed|401|403/.test(m)) fix = "Auth/permission failure — re-sign-in the agent's CLI (or refresh its API key) and retry.";
@@ -260,17 +261,22 @@ function claudeCli(prompt: string): Promise<string | null> {
 }
 
 /**
- * Triage one agent. `fallbackEvents` (the local log) is used only when SigNoz
+ * Triage one agent. `fallbackEvents` (the local log) is used only when the graph
  * has nothing, so triage always returns something useful.
  */
-export async function triageAgent(agent: string, fallbackEvents: LoomEvent[] = []): Promise<TriageResult> {
+export async function triageAgent(
+  store: TelemetryStore,
+  agent: string,
+  fallbackEvents: LoomEvent[] = [],
+): Promise<TriageResult> {
   let spans: TriageSpan[] = [];
   let from: TriageResult["from"] = "none";
   try {
-    spans = await fetchAgentSpans(agent);
-    if (spans.length) from = "signoz";
+    spans = await fetchAgentSpans(store, agent);
+    if (spans.length) from = "hydradb";
   } catch {
-    /* SigNoz/ClickHouse unreachable — fall back to the local log */
+    // The graph is unreachable. The daemon's in-memory log still holds this
+    // turn's events, and a triage built on those is worth more than none.
   }
   if (!spans.length && fallbackEvents.length) {
     spans = spansFromLog(agent, fallbackEvents);

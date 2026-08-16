@@ -227,7 +227,12 @@ export async function status(dir: string): Promise<GitStatus> {
 
   for (const line of lines) {
     if (line.startsWith("## ")) {
-      const head = line.slice(3);
+      // A repository with no commits yet reports `## No commits yet on main`
+      // rather than `## main`. Slicing off the marker alone therefore made the
+      // whole sentence the branch name, and the SCM panel rendered a branch
+      // called "No commits yet on main" for every freshly-initialised repo —
+      // which is the first thing you see after `git init` from inside Notch.
+      const head = line.slice(3).replace(/^No commits yet on /, "");
       const [names, counts] = head.split(" [");
       const [local, up] = (names ?? "").split("...");
       branch = (local ?? "").trim();
@@ -341,6 +346,42 @@ export async function log(dir: string, limit = 30): Promise<Commit[]> {
 }
 
 /**
+ * The commits that touched one file, newest first.
+ *
+ * `--follow` deliberately left off: it makes git guess about renames, and a
+ * guess in a provenance view is worse than a short history. What this answers
+ * is "when did this path change", which is the question the authorship join
+ * needs — every commit here is one the file is genuinely in.
+ */
+export async function logForFile(dir: string, rel: string, limit = 20): Promise<Commit[]> {
+  if (!(await hasCommits(dir))) return [];
+  const safe = safeRelPath(dir, rel);
+  const US = "\x1f";
+  const RS = "\x1e";
+  const fmt = ["%H", "%h", "%s", "%an", "%ar", "%at"].join(US) + RS;
+  const n = String(Math.min(100, Math.max(1, Math.floor(limit) || 20)));
+  const out = await git(
+    ["log", `--pretty=format:${fmt}`, "-n", n, "--", safe],
+    dir,
+  ).catch(() => "");
+  return out
+    .split(RS)
+    .map((r) => r.replace(/^\n/, "").trim())
+    .filter(Boolean)
+    .map((r) => {
+      const [sha, short, subject, author, relative, at] = r.split(US);
+      return {
+        sha: sha ?? "",
+        short: short ?? "",
+        subject: subject ?? "",
+        author: author ?? "",
+        relative: relative ?? "",
+        ts: Number(at ?? 0) * 1000,
+      };
+    });
+}
+
+/**
  * The unified diff for one file, HEAD → working tree (both staged and unstaged
  * changes). Before the first commit there's no HEAD, so it diffs against the
  * index instead. Empty string when nothing differs.
@@ -369,6 +410,20 @@ export interface Branches {
 }
 
 /** Local branches and which one is checked out — for the checkout picker. */
+/**
+ * The paths one commit touched.
+ *
+ * `--name-only` with an empty format so the output is nothing but paths; the
+ * root commit needs `--root` or git prints nothing at all for it, which reads
+ * as "this commit changed no files" and is how a project's first commit
+ * silently loses its history.
+ */
+export async function commitFiles(dir: string, sha: string): Promise<string[]> {
+  const clean = assertRef(sha, "commit");
+  const out = await git(["show", "--name-only", "--pretty=format:", "--root", clean], dir).catch(() => "");
+  return out.split("\n").map((l) => l.trim()).filter(Boolean);
+}
+
 export async function branches(dir: string): Promise<Branches> {
   if (!(await hasCommits(dir))) return { current: "", all: [] };
   const out = await git(["branch", "--format=%(refname:short)"], dir).catch(() => "");

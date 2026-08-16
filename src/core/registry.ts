@@ -149,7 +149,7 @@ export interface ProjectState {
   /** Per-agent spend budgets in USD/day, set from the Observatory burn-rate panel. */
   budgets?: Record<string, number>;
   /**
-   * Agents paused by a firing SigNoz alert (self-heal). Keyed by agent id; the
+   * Agents paused by the self-heal watcher. Keyed by agent id; the
    * value records why, when, and who to hand the baton back to once the alert
    * resolves — so the loop can retry the original agent, not just fail over.
    */

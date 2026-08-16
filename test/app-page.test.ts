@@ -91,8 +91,13 @@ describe("web app page", () => {
   });
 
   it("folds Tasks into the Board: one place, and it can search", () => {
-    // the Tasks tab is gone; the Board covers it
-    expect(APP_HTML).toContain('var tabs = ["thread", "board", "brain", "observatory"];');
+    // The Tasks tab is gone; the Board covers it. Asserted as "board is in the
+    // strip and tasks is not" rather than by pinning the whole list, because
+    // the list grows — Council joined it — and a test that fails when a tab is
+    // ADDED is testing the wrong thing.
+    const tabs = APP_HTML.match(/var tabs = \[([^\]]+)\]/)?.[1] ?? "";
+    expect(tabs).toContain('"board"');
+    expect(tabs).not.toContain('"tasks"');
     expect(APP_HTML).not.toContain('id="pane-tasks"');
     expect(APP_HTML).not.toContain('id="pane-routes"');
     // issues and PRs are searchable from the board, in GitHub's own language

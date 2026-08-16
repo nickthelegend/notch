@@ -4,8 +4,8 @@ Written to brief another LLM (or another human) on what Notch is, how it is put
 together, and which parts are worth stealing for a different project. It assumes
 no prior exposure to the repo.
 
-Repo: https://github.com/nickthelegend/notch · MIT · TypeScript · ~31k lines of
-`src`, 70 files, 733 tests.
+Repo: https://github.com/nickthelegend/notch · MIT · TypeScript · ~35k lines of
+`src` across 75 files, 716 tests across 59.
 
 ---
 
@@ -15,9 +15,10 @@ Notch is an orchestrator for a fleet of **coding-agent CLIs** — Claude Code,
 Codex, OpenCode, Grok Code, the Antigravity CLI — plus a GUI bridge for Kiro. It
 does not call model APIs. It drives the binaries the user already has installed,
 headlessly, and stitches them into one conversation with shared memory. Every
-action it takes is emitted as an event, and those events become OpenTelemetry
-spans, metrics and logs shipped to SigNoz. The distinguishing feature is that it
-then **reads its own telemetry back** to score, diagnose and heal itself.
+action it takes is emitted as an event, and those events become OpenTelemetry-shaped
+spans and log lines **in the same HydraDB graph as the events, the baton and the
+brain**. The distinguishing feature is that it then **reads its own telemetry
+back** to score, diagnose and heal itself.
 
 ---
 
@@ -48,9 +49,10 @@ Critical detail people get wrong when reimplementing: the projection is
 
 ### 2.3 The event log is the source of truth
 
-Everything — turns, handoffs, routes, memory folds, errors, decisions, alerts —
-is an append-only event in a SQLite log (`node:sqlite`, JSONL fallback). All UI
-state is *derived* by folding that log. This is what makes time-travel replay
+Everything — turns, handoffs, routes, memory folds, errors, decisions, health
+interventions — is an append-only event: `(:Event)` nodes chained by `[:NEXT]`
+under a `(:Project)` in HydraDB, durable on object storage. `.loom/` holds no log
+at all. All UI state is *derived* by folding that log. This is what makes time-travel replay
 possible: you can reconstruct "who held the baton at 14:32, what every agent's
 state was, and which turn was running" by replaying to an index.
 
@@ -71,11 +73,13 @@ src/
     server.ts      3.2k lines — every HTTP route + WebSocket
     runtime.ts     1.8k lines — ProjectRuntime: baton, turns, routes, quarantine
     app-page.ts    9.1k lines — THE ENTIRE WEB UI, see the warning below
-  observability/   signoz.ts, metrics.ts, logs.ts, insights.ts, triage.ts,
-                   decisions.ts, ask.ts
+  hydra/           client.ts, ids.ts, graph.ts, eventstore.ts, brain-graph.ts,
+                   telemetry.ts, decisions-store.ts, views.ts
+  observability/   index.ts (the fold), metrics.ts, logs.ts, insights.ts,
+                   logs-query.ts, triage.ts, decisions.ts, ask.ts
 app/               Expo / React Native phone app
 desktop/           Electron shell
-test/              733 tests, 57 files
+test/              716 tests, 59 files — all against a real HydraDB node
 ```
 
 ### ⚠ The one landmine: `src/daemon/app-page.ts`
@@ -145,18 +149,20 @@ fans out to all three signals.
 - **Traces** — `gen_ai.agent.turn` spans following the OpenTelemetry
   [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/),
   plus `notch.baton.handoff`. Model, tokens, cost, duration as attributes.
-- **Metrics** — six instruments: `gen_ai.client.token.usage` (split by
-  `gen_ai.token.type`), `gen_ai.client.operation.duration` (histogram, seconds),
-  `notch.handoffs` (labelled from→to), `notch.agents.active` (gauge). Delta
-  temporality.
+- **Metrics** — derived from the turn spans on read rather than stored
+  separately, so a chart and the span list behind it cannot disagree:
+  `notch.turns`, `notch.cost.usd`, `gen_ai.client.token.usage`,
+  `gen_ai.client.operation.duration`.
 - **Logs** — every message, tool call, file edit and error, each carrying the
   **trace id of the turn that produced it**. That correlation is the whole point.
 
-All via OTLP/HTTP to `localhost:4318`. No vendor SDK — hand-rolled JSON payloads.
+Spans and log lines go into HydraDB as `(:Span)` and `(:LogLine)` hanging off the
+project by an edge, batched (64 rows or 400ms) and chained. A failed write is
+requeued and logged — never dropped silently.
 
 ### 5.2 Read path — this is the differentiator
 
-Four features query the telemetry back out of ClickHouse:
+Four features query the telemetry back out of the graph:
 
 1. **Agent Health (0–100)** — a pure, unit-tested function over an agent's own
    spans: error rate (≤40 pts), latency (≤25), token bloat (≤20), recent error
@@ -164,56 +170,78 @@ Four features query the telemetry back out of ClickHouse:
 2. **Triage** — pulls the agent's own `gen_ai.*` spans, finds the most recent
    failure *and the upstream handoff that fed it*, and root-causes it. LLM prose
    when a key is present, deterministic heuristic otherwise.
-3. **Trace waterfall** — spans as time-positioned bars + deep link into SigNoz.
-4. **Logs view** — read straight from ClickHouse. **No local fallback**: if
-   ClickHouse is down it says so rather than showing an empty list that reads as
-   a quiet run.
+3. **Trace waterfall** — one turn's spans as time-positioned bars, with the log
+   lines emitted inside them.
+4. **Logs view** — read straight from `(:LogLine)`. **No local fallback**: if the
+   node is unreachable it says so rather than showing an empty list that reads as
+   a quiet run. A span has a fallback because it summarises an event already in
+   memory; a log line's severity and body do not exist anywhere else.
 
-Every read-back endpoint returns a `from: "signoz" | "unavailable"` (or
-`"log"` where a local fallback exists) so the UI can never imply live data it
-does not have.
+Every read-back endpoint returns a `from: "hydradb" | "local-log" | "unavailable"`
+so the UI can never imply live data it does not have.
 
 ### 5.3 Act path — self-healing
 
-`POST /api/webhooks/signoz` receives Alertmanager payloads.
+A watcher evaluates every open project on a timer, reading the evidence the
+daemon already wrote. There is no inbound webhook and no second system.
 
-- **firing** → quarantine the named agent (refuse it the baton). If it was
-  holding the baton mid-turn, take it and hand to a healthy agent.
-- **resolved** → un-quarantine, hand the baton back.
+- **3 error spans in 10 minutes, or 1 fenced write** → quarantine the agent
+  (refuse it the baton). If it was holding the baton, take it and hand to a
+  healthy agent. One fenced write is enough on its own: a stale writer is by
+  definition an agent that has lost track of whether it may act.
+- **no errors since the pause** → un-quarantine, hand the baton back, retrying up
+  to 3 times before leaving it for a human.
 
 Real episode: `held 17s · baton moved to claude-code · baton handed back`.
 
-The framing that sells it: *SigNoz knows the alert fired; only the orchestrator
-knows the fleet reacted.* That half cannot live in the observability tool.
+A quarantine is **enforced**, not merely recorded: `POST /handoff` to a paused
+agent answers `409 agent_quarantined`. That was a real bug once — the pause was
+written to state and nothing read it back, so a paused agent kept taking work.
 
-**Security note (fixed late, learn from it):** this route sits *in front of* the
-bearer auth wall, because Alertmanager has no token. Its own
-`NOTCH_WEBHOOK_SECRET` was optional, so a daemon bound past localhost served an
-unauthenticated endpoint that could move the baton. It now refuses when no secret
-is set and the bind address is not loopback.
+**Security note (a whole class of risk deleted):** self-heal used to arrive over
+an inbound alert webhook, which had to sit *in front of* the bearer auth wall
+because the alerting system had no token. It was the only unauthenticated way to
+move the baton. Reading the evidence out of the graph the daemon already owns
+closed that door with the feature it existed for — every `/api` route now needs
+the bearer token.
 
 ---
 
-## 6. ClickHouse gotchas (cost real hours)
+## 6. HydraDB gotchas (cost real hours, all measured on a live node)
 
-- `signoz_logs.distributed_logs_v2` stores timestamps in **nanoseconds**, and
-  `trace_id`/`span_id` are **already lowercase hex** — unlike the trace tables.
-- Metrics: join `distributed_samples_v4` to `distributed_time_series_v4` on
-  `fingerprint`, **group by fingerprint** (hour-floored rows multiply samples),
-  and put the time filter on the samples side only.
-- Some builds have **no `histogramQuantile`** — p95 may be impossible.
-
-## 7. SigNoz API gotchas (v0.134)
-
-- Login is `POST /api/v2/sessions/email_password` and **requires `orgID`**, from
-  `/api/v2/sessions/context?email=` — the only open-access org lookup.
-  `/api/v1/orgs` needs a session and returns SPA HTML with a **200**.
-- Alert rules need `version: "v5"` and `condition.compositeQuery.queries` as an
-  **array** — not `builderQueries`.
-- A rule with no channel is refused.
-- Dashboards: a `filters` block normalises to `filter: null`, which v5 rejects —
-  **panels spin forever with no error**. Use `filter: {expression: ""}`.
-- An *ungrouped* gauge query returned 0 points; grouped returned all.
+- **`MATCH … WHERE … SET` is not a compare-and-swap.** It reads and writes
+  without holding anything: eight concurrent claimants passing the same `WHERE`
+  produced **2–4 winners**. The baton is an election over commit order instead.
+- **A single property value is capped at 32 KiB** — 31 KiB commits, 32 KiB fails
+  with an internal error. Anything that can grow must be chunked
+  (`(:Event)-[:CHUNK]->(:EventChunk)`).
+- **Results are paginated and the cursor is easy to miss**: 3000 rows in, 1024
+  out, no error. Follow `next_cursor`, and carry the `query_id` with it or the
+  cursor is refused. `read_epoch` comes back on a response; it is not a snapshot
+  selector to send on the next one.
+- **Supply your own `query_id`.** HydraDB dedupes writes by it, and the server's
+  auto counter resets on restart — so a fresh node collides with ids the client
+  used before it.
+- **The Cypher subset is narrower than it looks**: no `IN`, no `CONTAINS`, no
+  `IS NULL`, no `min`/`max`, no `RETURN *`; a single-node upsert must go through
+  `UNWIND $rows AS row MERGE (n {id: row.id}) SET …`; list parameters are only
+  accepted as `UNWIND` input. See `skills/hydra-cypher-queries`.
+- **Reach rows through edges, never by property.** Measured on 74k events:
+  **2.27s** for `MATCH (e:Event) WHERE e.proj = $slot`, **0.010s** for the same
+  answer through `(:Project)-[:HAS_EVENT]->`. The graph holds every project.
+- **The same rule catches you a second time, on your own id table.** The
+  key→vid map is one global `(:IdMap)` label, so hydrating it unscoped is a full
+  scan whose cost is set by the busiest node rather than the project opening.
+  Measured on a dev node carrying 1671 projects: **2.0s per `open()`**, and the
+  suite's wall clock went from 87s to 322s with timeouts once it got there.
+  Hydration is scoped by key prefix now (`agent:<projectId> `, …), with entities
+  left global because sharing them across runs is the point.
+- **Node's `fetch` keep-alive pool wedges permanently** when the container is
+  recreated on the same port. The client owns an `http.Agent` and retires it on a
+  connection failure.
+- **The `local` object-store backend cannot resume an existing store** (no
+  conditional writes). A restarted node needs a fresh volume; `loom doctor` says
+  so, because the symptom otherwise looks like data loss.
 
 ---
 
@@ -224,7 +252,7 @@ These are cheap and they are most of why the demo lands.
 1. **Never show a number you cannot source.** `$0` not an estimate. `not
    measured` not `0%`. A measured confidence and a pattern-matched one are
    labelled differently.
-2. **Degrade loudly.** "ClickHouse isn't answering" beats an empty list.
+2. **Degrade loudly.** "the graph isn't answering" beats an empty list.
 3. **Two true numbers that disagree are worse than one number.** The Metrics tab
    once showed "Spend — nothing recorded yet" under a `$3.64` total (total summed
    the whole log; the sparkline only the last ten turns). Both true, and it read
@@ -323,8 +351,8 @@ Things a new maintainer should know rather than discover:
 ## 11. Prompt to hand another LLM
 
 > Read `HANDOFF.md` in this repo. It describes Notch, an orchestrator for coding
-> agents with an observability loop that reads its own telemetry back out of
-> ClickHouse to score, diagnose and heal itself.
+> agents with an observability loop that reads its own telemetry back out of the
+> graph it wrote it to, in order to score, diagnose and heal itself.
 >
 > I want to build the same *loop* for CockroachDB: instrument the cluster, read
 > the telemetry back to score nodes and root-cause slow or retrying transactions,

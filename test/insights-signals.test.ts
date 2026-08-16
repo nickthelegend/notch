@@ -1,245 +1,214 @@
 /**
- * Reading the other two OTel signals back out of SigNoz.
+ * Log and metric read-back, against a real HydraDB node.
  *
- * The SQL builders and the row normalisers are pure, so they are asserted here
- * against no live ClickHouse. What matters most is the project filter: without
- * it one daemon would show another project's logs and metrics, so it gets its
- * own test rather than being implied by a happy-path assertion.
+ * This file used to test the *SQL* these functions built — the WHERE clause
+ * where a missing project filter would be a leak, and the escaping that stopped
+ * a search term becoming a LIKE wildcard. There is no SQL any more: the logs
+ * and metrics come out of the graph through parameterised Cypher, and the
+ * filtering that used to be string-built is now either a query parameter or a
+ * plain array filter.
  *
- * The "unavailable" path is exercised by pointing the module's fetch at a dead
- * socket — that is the real failure the routes translate into
- * `from: "unavailable"`, and there is deliberately no fallback data to check.
+ * So the tests moved with the code. What they check is unchanged in spirit —
+ * a query must never cross project boundaries, filters must only apply when
+ * asked for, limits must be clamped — but they check it by writing real rows
+ * and reading them back rather than by asserting on a string.
  */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  buildMetricQuery,
-  expandMetricNames,
-  fetchMetricSeries,
-  rowsToSeries,
-  METRIC_SAMPLES_TABLE,
-  METRIC_SERIES_TABLE,
-  NOTCH_METRIC_NAMES,
-} from "../src/observability/insights.js";
-import { LOG_TABLE, buildLogsQuery, fetchLogs } from "../src/observability/logs-query.js";
+import path from "node:path";
+import { beforeAll, describe, expect, it } from "vitest";
+import { projectGraph } from "../src/hydra/graph.js";
+import { TelemetryStore } from "../src/hydra/telemetry.js";
+import { fetchLogs, parseSeverities } from "../src/observability/logs-query.js";
+import { expandMetricNames, fetchMetricSeries, burnSeries } from "../src/observability/insights.js";
+import { hydraUp, HYDRA_SKIP_MESSAGE, isolatedProject } from "./hydra-helpers.js";
 
-afterEach(() => vi.unstubAllGlobals());
+let up = false;
+beforeAll(async () => {
+  up = await hydraUp();
+  if (!up) console.warn(`skipping insights tests — ${HYDRA_SKIP_MESSAGE}`);
+});
 
-/** Stand in for ClickHouse: hand back JSONEachRow text for whatever is asked. */
-function stubCh(rows: Record<string, unknown>[]): { sql: string | undefined } {
-  const seen: { sql: string | undefined } = { sql: undefined };
-  vi.stubGlobal("fetch", async (_url: string, init: { body?: string }) => {
-    seen.sql = init?.body;
-    return { ok: true, status: 200, text: async () => rows.map((r) => JSON.stringify(r)).join("\n") };
-  });
-  return seen;
+async function storeFor(prefix: string): Promise<TelemetryStore> {
+  const { loomDir } = isolatedProject(prefix);
+  const graph = projectGraph(path.resolve(loomDir));
+  await graph.open();
+  return new TelemetryStore(graph);
 }
 
-describe("buildLogsQuery", () => {
-  it("always scopes to service.name=notch and this project", () => {
-    const sql = buildLogsQuery({ project: "weave" });
-    expect(sql).toContain(LOG_TABLE);
-    expect(sql).toContain("resources_string['service.name'] = 'notch'");
-    expect(sql).toContain("attributes_string['notch.project'] = 'weave'");
+/** A turn span with sensible defaults, so a test only states what it cares about. */
+function turn(store: TelemetryStore, over: Partial<Parameters<TelemetryStore["recordSpan"]>[0]>) {
+  store.recordSpan({
+    traceId: "t".repeat(32),
+    spanId: "s".repeat(16),
+    ts: Date.now(),
+    name: "gen_ai.agent.turn",
+    ms: 1000,
+    code: 0,
+    msg: "",
+    agent: "a1",
+    ade: "echo",
+    model: "m1",
+    tin: 100,
+    tout: 10,
+    cost: 0.01,
+    handoffFrom: "",
+    handoffTo: "",
+    ...over,
+  });
+}
+
+describe("parseSeverities", () => {
+  it("keeps only real severity words, case-insensitively", () => {
+    expect(parseSeverities("Error, WARN")).toEqual(["error", "warn"]);
   });
 
-  it("never lets a project name escape the literal", () => {
-    // A hostile project name must not be able to close the quote and OR the
-    // filter away — chLiteral strips everything outside [\w.\-:/ ].
-    const sql = buildLogsQuery({ project: "weave' OR 1=1 --" });
-    expect(sql).toContain("attributes_string['notch.project'] = 'weave OR 11 --'");
-    expect(sql).not.toContain("OR 1=1");
+  it("treats absent, empty and 'all' as no filter", () => {
+    expect(parseSeverities(undefined)).toEqual([]);
+    expect(parseSeverities("")).toEqual([]);
+    expect(parseSeverities("all")).toEqual([]);
   });
 
-  it("adds agent, trace and severity filters only when asked", () => {
-    // The SELECT list always mentions these columns, so assert on the WHERE
-    // predicates specifically — an unasked-for filter is the actual bug.
-    const bare = buildLogsQuery({ project: "p" });
-    expect(bare).not.toContain("attributes_string['gen_ai.agent.id'] =");
-    expect(bare).not.toContain("upper(severity_text)");
-    expect(bare).not.toContain("trace_id =");
-
-    const full = buildLogsQuery({ project: "p", agent: "plannerbot", traceId: "abc123", severity: "error, warn" });
-    expect(full).toContain("attributes_string['gen_ai.agent.id'] = 'plannerbot'");
-    expect(full).toContain("trace_id = 'abc123'");
-    // Case-insensitive on both sides: callers type "error", SigNoz stores "ERROR".
-    expect(full).toContain("upper(severity_text) IN ('ERROR', 'WARN')");
-  });
-
-  it("searches by substring, not by LIKE — wildcards cannot be smuggled in", () => {
-    const sql = buildLogsQuery({ project: "p", search: "%boom%" });
-    expect(sql).toContain("positionCaseInsensitive(body, 'boom') > 0");
-    expect(sql).not.toContain("%");
-  });
-
-  it("clamps the limit into 1..1000 and defaults to 200", () => {
-    expect(buildLogsQuery({ project: "p" })).toContain("LIMIT 200");
-    expect(buildLogsQuery({ project: "p", limit: 99_999 })).toContain("LIMIT 1000");
-    // 0 and negatives are explicit values, not "unset", so they clamp to 1
-    // rather than falling back to the default.
-    expect(buildLogsQuery({ project: "p", limit: 0 })).toContain("LIMIT 1");
-    expect(buildLogsQuery({ project: "p", limit: -5 })).toContain("LIMIT 1");
+  it("drops values that are not severities, so a typo cannot widen the query", () => {
+    expect(parseSeverities("error,bogus,'; DROP")).toEqual(["error"]);
   });
 });
 
 describe("fetchLogs", () => {
-  it("normalises a real-shaped row to milliseconds and plain strings", async () => {
-    stubCh([
-      {
-        ts: 1784959283969,
-        severity: "INFO",
-        severityNumber: 9,
-        body: "plannerbot completed a turn in 133ms",
-        traceId: "fb91641ae165f8e68bf71bb1a303e98c",
-        spanId: "7ecbe393bf1ec9d9",
-        agent: "plannerbot",
-        kind: "run_complete",
-        chat: "main",
-      },
-      // Status lines are emitted outside a span: empty correlation ids are normal.
-      { ts: 1784959286700, severity: "DEBUG", severityNumber: 5, body: "plannerbot: stopped", agent: "plannerbot" },
-    ]);
-    const logs = await fetchLogs({ project: "weave" });
-    expect(logs).toHaveLength(2);
-    expect(logs[0]).toEqual({
-      ts: 1784959283969,
-      severity: "INFO",
-      severityNumber: 9,
-      body: "plannerbot completed a turn in 133ms",
-      traceId: "fb91641ae165f8e68bf71bb1a303e98c",
-      spanId: "7ecbe393bf1ec9d9",
-      agent: "plannerbot",
-      kind: "run_complete",
-      chat: "main",
-    });
-    expect(logs[1].traceId).toBe("");
-    expect(logs[1].spanId).toBe("");
+  it("returns this project's lines and nobody else's", async () => {
+    if (!up) return;
+    const mine = await storeFor("logs-mine");
+    const theirs = await storeFor("logs-theirs");
+    mine.recordLog({ ts: Date.now(), level: "info", agent: "a1", body: "mine", traceId: "x", kind: "message" });
+    theirs.recordLog({ ts: Date.now(), level: "info", agent: "a1", body: "theirs", traceId: "y", kind: "message" });
+    await Promise.all([mine.flush(), theirs.flush()]);
+
+    const rows = await fetchLogs(mine);
+    expect(rows.map((r) => r.body)).toContain("mine");
+    expect(rows.map((r) => r.body)).not.toContain("theirs");
   });
 
-  it("throws when ClickHouse is unreachable — there is no log fallback to invent", async () => {
-    vi.stubGlobal("fetch", async () => {
-      throw new Error("ECONNREFUSED");
-    });
-    await expect(fetchLogs({ project: "weave" })).rejects.toThrow();
+  it("filters by severity, by agent, and by substring — only when asked", async () => {
+    if (!up) return;
+    const s = await storeFor("logs-filter");
+    const now = Date.now();
+    s.recordLog({ ts: now, level: "error", agent: "a1", body: "disk on fire", traceId: "t1", kind: "error" });
+    s.recordLog({ ts: now, level: "info", agent: "a1", body: "all quiet", traceId: "t1", kind: "message" });
+    s.recordLog({ ts: now, level: "info", agent: "a2", body: "other agent", traceId: "t2", kind: "message" });
+    await s.flush();
+
+    expect((await fetchLogs(s)).length).toBe(3);
+    expect((await fetchLogs(s, { severity: "error" })).map((r) => r.body)).toEqual(["disk on fire"]);
+    expect((await fetchLogs(s, { agent: "a2" })).map((r) => r.body)).toEqual(["other agent"]);
+    expect((await fetchLogs(s, { search: "FIRE" })).map((r) => r.body)).toEqual(["disk on fire"]);
+    expect((await fetchLogs(s, { traceId: "t2" })).map((r) => r.body)).toEqual(["other agent"]);
+  });
+
+  it("accepts several severities at once", async () => {
+    if (!up) return;
+    const s = await storeFor("logs-multi");
+    const now = Date.now();
+    s.recordLog({ ts: now, level: "error", agent: "a", body: "e", traceId: "", kind: "error" });
+    s.recordLog({ ts: now, level: "warn", agent: "a", body: "w", traceId: "", kind: "status" });
+    s.recordLog({ ts: now, level: "info", agent: "a", body: "i", traceId: "", kind: "message" });
+    await s.flush();
+
+    const rows = await fetchLogs(s, { severity: "error,warn" });
+    expect(rows.map((r) => r.body).sort()).toEqual(["e", "w"]);
+  });
+
+  it("clamps the limit into 1..1000 and defaults to 200", async () => {
+    if (!up) return;
+    const s = await storeFor("logs-limit");
+    for (let i = 0; i < 5; i++) {
+      s.recordLog({ ts: Date.now() + i, level: "info", agent: "a", body: `l${i}`, traceId: "", kind: "message" });
+    }
+    await s.flush();
+    expect((await fetchLogs(s, { limit: 2 })).length).toBe(2);
+    expect((await fetchLogs(s, { limit: 0 })).length).toBeGreaterThan(0);
+    expect((await fetchLogs(s, { limit: 99_999 })).length).toBe(5);
+  });
+
+  it("carries severity, trace and kind through, and never invents a span id", async () => {
+    if (!up) return;
+    const s = await storeFor("logs-shape");
+    s.recordLog({ ts: Date.now(), level: "warn", agent: "a1", body: "careful", traceId: "abc", kind: "status" });
+    await s.flush();
+    const [row] = await fetchLogs(s);
+    expect(row!.severity).toBe("WARN");
+    expect(row!.severityNumber).toBe(13);
+    expect(row!.traceId).toBe("abc");
+    expect(row!.kind).toBe("status");
+    // A log line is emitted by an event; only some events produce a span. An
+    // invented span id would render as a link to nothing.
+    expect(row!.spanId).toBe("");
   });
 });
 
 describe("expandMetricNames", () => {
-  it("expands a histogram into the parts the exporter actually writes", () => {
-    const names = expandMetricNames(["gen_ai.client.operation.duration"]);
-    expect(names).toContain("gen_ai.client.operation.duration.sum");
-    expect(names).toContain("gen_ai.client.operation.duration.count");
-    expect(names).toContain("gen_ai.client.operation.duration.min");
-    expect(names).toContain("gen_ai.client.operation.duration.max");
-    // Per-le bucket series are noise on a chart unless explicitly asked for.
-    expect(names).not.toContain("gen_ai.client.operation.duration.bucket");
+  it("keeps only metrics that can actually be derived from a turn span", () => {
+    expect(expandMetricNames(["notch.turns", "not.a.metric"])).toEqual(["notch.turns"]);
   });
 
-  it("honours an explicitly suffixed name without re-suffixing it", () => {
-    expect(expandMetricNames(["notch.turns.sum"])).toEqual(["notch.turns.sum"]);
-    expect(expandMetricNames(["gen_ai.client.operation.duration.bucket"])).toEqual([
-      "gen_ai.client.operation.duration.bucket",
-    ]);
-  });
-
-  it("drops empties and dedupes", () => {
-    expect(expandMetricNames(["", "   ", "notch.turns.sum", "notch.turns.sum"])).toEqual(["notch.turns.sum"]);
-  });
-});
-
-describe("buildMetricQuery", () => {
-  it("joins samples to series on fingerprint and scopes to notch + this project", () => {
-    const sql = buildMetricQuery(["notch.turns"], { project: "weave", sinceMs: 1_784_950_000_000, stepMs: 300_000 });
-    expect(sql).toContain(METRIC_SAMPLES_TABLE);
-    expect(sql).toContain(METRIC_SERIES_TABLE);
-    expect(sql).toContain("ON s.fingerprint = sm.fingerprint");
-    expect(sql).toContain("resource_attrs['service.name'] = 'notch'");
-    expect(sql).toContain("attrs['notch.project'] = 'weave'");
-    expect(sql).toContain("intDiv(sm.unix_milli, 300000) * 300000");
-    expect(sql).toContain("sm.unix_milli >= 1784950000000");
-  });
-
-  it("collapses the one-row-per-hour series table so samples are not multiplied", () => {
-    const sql = buildMetricQuery(["notch.turns"], { project: "p" });
-    expect(sql).toContain("GROUP BY fingerprint\n    ) AS s");
-  });
-
-  it("time-filters only the samples side — the series table's unix_milli is hour-floored", () => {
-    const sql = buildMetricQuery(["notch.turns"], { project: "p", sinceMs: 1_784_950_000_000 });
-    const inner = sql.slice(sql.indexOf("FROM " + METRIC_SERIES_TABLE), sql.indexOf("GROUP BY fingerprint"));
-    expect(inner).not.toContain("unix_milli");
-  });
-
-  it("clamps a silly step to at least a second", () => {
-    expect(buildMetricQuery(["notch.turns"], { project: "p", stepMs: 0 })).toContain("intDiv(sm.unix_milli, 1000)");
-  });
-});
-
-describe("rowsToSeries", () => {
-  // Two buckets of one Sum series plus one Gauge series, shaped exactly as the
-  // live query returns them.
-  const rows: Record<string, unknown>[] = [
-    {
-      metric: "notch.cost.usd", type: "Sum", unit: "USD", temporality: "Cumulative",
-      labels: { "gen_ai.agent.id": "plannerbot", "notch.project": "weave", __temporality__: "Cumulative" },
-      fingerprint: "3533699151431890685", t: 1784958300000, vsum: 0.015, vavg: 0.001875, vmax: 0.003, n: 8,
-    },
-    {
-      metric: "notch.cost.usd", type: "Sum", unit: "USD", temporality: "Cumulative",
-      labels: { "gen_ai.agent.id": "plannerbot", "notch.project": "weave", __temporality__: "Cumulative" },
-      fingerprint: "3533699151431890685", t: 1784958000000, vsum: 0.006, vavg: 0.002, vmax: 0.003, n: 3,
-    },
-    {
-      metric: "notch.agents.active", type: "Gauge", unit: "{agent}", temporality: "Unspecified",
-      labels: { "notch.project": "weave", __temporality__: "Unspecified" },
-      fingerprint: "5639057939949183367", t: 1784958300000, vsum: 19, vavg: 1.7272727272727273, vmax: 3, n: 11,
-    },
-  ];
-
-  it("folds rows into one entry per fingerprint with points in time order", () => {
-    const series = rowsToSeries(rows);
-    expect(series.map((s) => s.metric)).toEqual(["notch.agents.active", "notch.cost.usd"]);
-    const cost = series.find((s) => s.metric === "notch.cost.usd")!;
-    expect(cost.points.map((p) => p.t)).toEqual([1784958000000, 1784958300000]);
-    expect(cost.points[1]).toEqual({ t: 1784958300000, sum: 0.015, avg: 0.001875, max: 0.003, n: 8 });
-  });
-
-  it("strips SigNoz's internal __ labels but keeps the real ones", () => {
-    const cost = rowsToSeries(rows).find((s) => s.metric === "notch.cost.usd")!;
-    expect(cost.labels).toEqual({ "gen_ai.agent.id": "plannerbot", "notch.project": "weave" });
-  });
-
-  it("prefers sum for a counter and avg for a gauge", () => {
-    const series = rowsToSeries(rows);
-    expect(series.find((s) => s.metric === "notch.cost.usd")!.prefer).toBe("sum");
-    expect(series.find((s) => s.metric === "notch.agents.active")!.prefer).toBe("avg");
-  });
-
-  it("keeps the fingerprint as a string — UInt64 does not survive a JS number", () => {
-    const s = rowsToSeries(rows)[0];
-    expect(typeof s.fingerprint).toBe("string");
-    expect(s.fingerprint).toBe("5639057939949183367");
+  it("falls back to every known metric when nothing valid was asked for", () => {
+    const all = expandMetricNames([]);
+    expect(all).toContain("notch.turns");
+    expect(all).toContain("notch.cost.usd");
+    expect(all).toContain("gen_ai.client.token.usage");
   });
 });
 
 describe("fetchMetricSeries", () => {
-  it("asks for every notch metric when handed the default set", async () => {
-    const seen = stubCh([]);
-    await fetchMetricSeries(NOTCH_METRIC_NAMES, { project: "weave" });
-    for (const n of NOTCH_METRIC_NAMES) expect(seen.sql).toContain(`'${n}'`);
-    expect(seen.sql).toContain("'gen_ai.client.operation.duration.sum'");
+  it("derives one series per metric per agent, from the turn spans themselves", async () => {
+    if (!up) return;
+    const s = await storeFor("metrics");
+    turn(s, { agent: "a1", cost: 0.02, tin: 100, tout: 10, ms: 1000 });
+    turn(s, { agent: "a1", cost: 0.03, tin: 200, tout: 20, ms: 3000 });
+    turn(s, { agent: "a2", cost: 0.05, tin: 50, tout: 5, ms: 500 });
+    await s.flush();
+
+    const series = await fetchMetricSeries(s, ["notch.turns", "notch.cost.usd"]);
+    const turnsA1 = series.find((x) => x.metric === "notch.turns" && x.labels["gen_ai.agent.id"] === "a1");
+    const costA1 = series.find((x) => x.metric === "notch.cost.usd" && x.labels["gen_ai.agent.id"] === "a1");
+    const costA2 = series.find((x) => x.metric === "notch.cost.usd" && x.labels["gen_ai.agent.id"] === "a2");
+
+    expect(turnsA1!.points.reduce((a, p) => a + p.sum, 0)).toBe(2);
+    expect(costA1!.points.reduce((a, p) => a + p.sum, 0)).toBeCloseTo(0.05, 6);
+    expect(costA2!.points.reduce((a, p) => a + p.sum, 0)).toBeCloseTo(0.05, 6);
   });
 
-  it("returns nothing without querying when no usable name is given", async () => {
-    const seen = stubCh([]);
-    expect(await fetchMetricSeries(["", "  "], { project: "weave" })).toEqual([]);
-    expect(seen.sql).toBeUndefined();
+  it("marks a duration metric as one to average rather than sum", async () => {
+    if (!up) return;
+    const s = await storeFor("metrics-prefer");
+    turn(s, { agent: "a1", ms: 1000 });
+    turn(s, { agent: "a1", ms: 3000 });
+    await s.flush();
+    const [dur] = await fetchMetricSeries(s, ["gen_ai.client.operation.duration"]);
+    expect(dur!.prefer).toBe("avg");
+    expect(dur!.points[0]!.avg).toBe(2000);
+    expect(dur!.points[0]!.max).toBe(3000);
+    expect(dur!.points[0]!.n).toBe(2);
   });
 
-  it("throws when ClickHouse is unreachable — the route turns this into from:unavailable", async () => {
-    vi.stubGlobal("fetch", async () => {
-      throw new Error("ECONNREFUSED");
-    });
-    await expect(fetchMetricSeries(["notch.turns"], { project: "weave" })).rejects.toThrow();
+  it("returns nothing rather than a flat zero line when there are no turns", async () => {
+    if (!up) return;
+    const s = await storeFor("metrics-empty");
+    expect(await fetchMetricSeries(s, ["notch.turns"])).toEqual([]);
+  });
+});
+
+describe("burnSeries", () => {
+  it("buckets real per-agent cost and projects a 24h rate", async () => {
+    if (!up) return;
+    const s = await storeFor("burn");
+    turn(s, { agent: "a1", cost: 0.25 });
+    turn(s, { agent: "a2", cost: 0.75 });
+    await s.flush();
+
+    const burn = await burnSeries(s, { hours: 24, buckets: 12 });
+    expect(burn.totalUsd).toBeCloseTo(1.0, 6);
+    expect(burn.ratePerHour).toBeCloseTo(1.0 / 24, 6);
+    expect(burn.projected24h).toBeCloseTo(1.0, 6);
+    const agents = burn.buckets.flatMap((b) => Object.keys(b.byAgent));
+    expect(new Set(agents)).toEqual(new Set(["a1", "a2"]));
   });
 });

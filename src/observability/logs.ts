@@ -1,5 +1,5 @@
 /**
- * Notch → SigNoz logs (OTLP/HTTP JSON, `/v1/logs`).
+ * LoomEvent → log record.
  *
  * Notch already has a log: the LoomEvent stream is the source of truth for the
  * whole product. This ships it. Every agent message, tool call, file edit,
@@ -9,7 +9,7 @@
  *
  * That last part is the whole point. Without trace correlation this is just a
  * second copy of the event log in a different database. With it, a slow turn in
- * SigNoz's trace view has a "related logs" tab showing what the agent actually
+ * The Logs view shows what the agent actually
  * said and did while it was slow, and a log line has a link back to the span
  * that produced it. Traces tell you a turn took 40s; logs tell you why.
  *
@@ -18,14 +18,6 @@
  */
 
 import type { LoomEvent } from "../types.js";
-import {
-  encodeAttributes,
-  postOtlp,
-  resourceAttributes,
-  type AttrValue,
-  type KeyValue,
-  type NotchTelemetryConfig,
-} from "./signoz.js";
 
 /**
  * OTLP SeverityNumber. The spec's named levels; we use four of them.
@@ -38,6 +30,19 @@ import {
  * every event it logs, and a severity nobody can act on is noise with a red
  * icon.
  */
+/**
+ * An attribute value, as the GenAI conventions allow one.
+ *
+ * These types outlived the OTLP exporter that defined them: the fold still
+ * produces convention-shaped attributes, and keeping the shape means the
+ * mapping tests, the span names and the attribute keys are all unchanged by
+ * the move to HydraDB. Only the transport went away.
+ */
+export type AttrValue = string | number | boolean | undefined | null;
+
+/** A flat key/value attribute bag. */
+export type KeyValue = Record<string, AttrValue>;
+
 export const SEVERITY = {
   DEBUG: 5,
   INFO: 9,
@@ -292,71 +297,3 @@ function str(v: unknown): string {
 }
 
 /** Buffered OTLP log exporter. Mirrors NotchTelemetry's batching exactly. */
-export class NotchLogs {
-  private buffer: Record<string, unknown>[] = [];
-  private timer: NodeJS.Timeout | null = null;
-  private readonly logsUrl: string;
-  private readonly resource: KeyValue[];
-
-  constructor(private readonly cfg: NotchTelemetryConfig) {
-    this.logsUrl = `${cfg.endpoint}/v1/logs`;
-    this.resource = resourceAttributes(cfg);
-  }
-
-  get enabled(): boolean {
-    return this.cfg.logsEnabled && typeof globalThis.fetch === "function";
-  }
-
-  /** Buffer one record. No-op when logs are disabled. */
-  log(input: LogRecordInput): void {
-    if (!this.enabled) return;
-    const ts = input.timeUnixNano.toString();
-    this.buffer.push({
-      timeUnixNano: ts,
-      // When the event happened vs. when we saw it. Identical here — Notch
-      // observes its own events synchronously — but the field is required for
-      // SigNoz to order records, and omitting it makes it fall back to ingest
-      // time, which reorders a burst of turn output arbitrarily.
-      observedTimeUnixNano: ts,
-      severityNumber: input.severityNumber,
-      severityText: SEVERITY_TEXT[input.severityNumber] ?? "INFO",
-      body: { stringValue: input.body },
-      attributes: encodeAttributes(input.attributes),
-      ...(input.traceId ? { traceId: input.traceId } : {}),
-      ...(input.spanId ? { spanId: input.spanId } : {}),
-    });
-    if (this.buffer.length >= 64) this.drain();
-    else this.ensureTimer();
-  }
-
-  private ensureTimer(): void {
-    if (this.timer) return;
-    this.timer = setTimeout(() => {
-      this.timer = null;
-      this.drain();
-    }, 1500);
-    if (typeof this.timer.unref === "function") this.timer.unref();
-  }
-
-  private drain(): void {
-    if (this.buffer.length === 0) return;
-    const logRecords = this.buffer;
-    this.buffer = [];
-    postOtlp(this.logsUrl, this.cfg.headers, {
-      resourceLogs: [
-        {
-          resource: { attributes: this.resource },
-          scopeLogs: [{ scope: { name: "notch" }, logRecords }],
-        },
-      ],
-    });
-  }
-
-  flush(): void {
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
-    this.drain();
-  }
-}

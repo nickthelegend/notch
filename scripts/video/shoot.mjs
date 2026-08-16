@@ -201,8 +201,8 @@ await hold(4200);
 // --- Logs ---
 await stage(`
   s.highlight(null); s.metric(null);
-  s.say('<span class="hl">Logs</span> — straight from ClickHouse.',
-        'Severity filter, text filter, trace id per line. When SigNoz has nothing it says so, instead of showing an empty list that looks like a quiet run.');
+  s.say('<span class="hl">Logs</span> — straight out of the graph.',
+        'Severity filter, text filter, trace id per line. When the store has nothing it says so, instead of showing an empty list that looks like a quiet run.');
   s.point(s.find('Logs'));
 `);
 await hold(800);

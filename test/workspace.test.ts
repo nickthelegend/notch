@@ -95,7 +95,7 @@ function outputSince(mark: number, term: string): string {
     .map((f) => f.chunk)
     .join("")
     // eslint-disable-next-line no-control-regex
-    .replace(/\[[0-9;?]*[ -/]*[@-~]|\][^]*(?:|\\)|./g, "");
+    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)|\u001b./g, "");
 }
 
 /**

@@ -28,6 +28,11 @@ export type EventKind =
   | "route_resumed"
   | "route_completed"
   | "route_failed"
+  // A council: one question put to several agents at once. Advisory by
+  // construction — no member takes the baton, so none of them may write.
+  | "council_started"
+  | "council_answer"
+  | "council_completed"
   | "turn_diff" // working-tree changes attributed to one agent turn
   | "memory_import" // an ADE's native memory pulled into the shared brain
   // The brain. A memory is not a row in a table somewhere — it is these three
@@ -400,7 +405,7 @@ export interface ProjectStatus {
   /** Lifetime spend across all agents in this project (USD). */
   costUsd?: number;
   /**
-   * Agents a firing SigNoz alert (or a budget cap) has paused, keyed by agent
+   * Agents the self-heal watcher (or a budget cap) has paused, keyed by agent
    * id. Exposed so the UI can show a pause that is otherwise only visible in
    * state on disk — the pause was real and completely invisible before.
    */

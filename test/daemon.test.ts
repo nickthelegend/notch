@@ -55,6 +55,52 @@ describe("loom daemon end-to-end", () => {
     expect(projects.map((p) => p.id)).toContain(projectId);
   });
 
+  /**
+   * The Brain search box has to answer the most obvious thing anyone types.
+   *
+   * BM25 tokenises `src/core/baton.ts` as one path token, so searching the
+   * bare word `baton` scored zero against a memory that is explicitly *about*
+   * that file — the box said "nothing" while the memory sat in the list right
+   * above it. The entity channel is the fix, and it must not displace a
+   * lexical hit when there is one.
+   */
+  it("finds a memory by the bare name of the file it is about", async () => {
+    const seed = await fetch(`${baseUrl}/api/projects/${projectId}/brain`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...adminAuth() },
+      body: JSON.stringify({
+        kind: "constraint",
+        text: "Prefer explicit returns in src/core/wibblefish.ts for readability.",
+      }),
+    });
+    expect(seed.status).toBe(200);
+
+    const search = async (q: string) =>
+      fetch(
+        `${baseUrl}/api/projects/${projectId}/brain/search?q=${encodeURIComponent(q)}`,
+        { headers: adminAuth() },
+      ).then((r) => r.json());
+
+    // The bare stem: no lexical token matches it, so it comes through the graph.
+    const bare = await search("wibblefish");
+    expect(bare.hits.length).toBeGreaterThan(0);
+    expect(bare.via).toBe("entity");
+
+    // The full basename does match lexically, and must still be ranked that way.
+    const exact = await search("wibblefish.ts");
+    expect(exact.hits.length).toBeGreaterThan(0);
+    expect(exact.via).toBeUndefined();
+
+    // A word in the prose, unrelated to any entity: still lexical.
+    const prose = await search("readability");
+    expect(prose.hits.length).toBeGreaterThan(0);
+    expect(prose.via).toBeUndefined();
+
+    // And nothing is invented for a query nothing is named like.
+    const nothing = await search("zzzznope");
+    expect(nothing.hits).toEqual([]);
+  });
+
   it("rejects unauthenticated requests", async () => {
     const res = await fetch(`${baseUrl}/api/projects`);
     expect(res.status).toBe(401);
@@ -231,10 +277,21 @@ describe("loom daemon end-to-end", () => {
   });
 
   it("clears a ghost baton holder left by a removed agent", async () => {
-    const stateFile = path.join(projectDir, ".loom", "state.json");
-    const state = JSON.parse(fs.readFileSync(stateFile, "utf8")) as Record<string, unknown>;
-    state.holder = "agent-that-was-deleted";
-    fs.writeFileSync(stateFile, JSON.stringify(state));
+    // The ghost is created the only way one can now occur: an agent takes the
+    // baton and is then edited out of the roster behind the daemon's back.
+    // Poking `.loom/state.json` used to do it, and no longer does anything —
+    // that file is a cache of the baton, not the baton. The election in
+    // HydraDB is what holds the holder.
+    await client.handoff(projectId, "reviewbot");
+    const cfgFile = path.join(projectDir, ".loom", "config.json");
+    const cfg = JSON.parse(fs.readFileSync(cfgFile, "utf8")) as {
+      agents: Array<Record<string, unknown>>;
+    };
+    cfg.agents = cfg.agents.filter((a) => a.id !== "reviewbot");
+    fs.writeFileSync(cfgFile, JSON.stringify(cfg, null, 2));
+    const future = new Date(Date.now() + 2000);
+    fs.utimesSync(cfgFile, future, future);
+
     // Routing must recover (clear the ghost, fall back to the default adapter)…
     const { agentId } = await client.send(projectId, "who picks this up?");
     expect(agentId).toBe("plannerbot");

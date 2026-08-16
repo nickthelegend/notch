@@ -168,6 +168,95 @@ export class DaemonClient {
     return this.request("GET", `/api/projects/${encodeURIComponent(id)}/brain${q ? `?${q}` : ""}`);
   }
 
+  // --- the graph ----------------------------------------------------------
+
+  graphHealth(id: string): Promise<{
+    ok: boolean;
+    detail: string;
+    url: string;
+    graph: string;
+    cell: string;
+    queries: number;
+    pendingEvents: number;
+    store: string;
+    counts: Record<string, number>;
+  }> {
+    return this.request("GET", `/api/projects/${encodeURIComponent(id)}/graph/health`);
+  }
+
+  batonLedger(id: string): Promise<{
+    state: { holder: string | null; epoch: number; tenureEpoch: number; seq: number; reason: string };
+    epochs: {
+      epoch: number;
+      holder: string | null;
+      seq: number;
+      at: number;
+      reason: string;
+      contenders: { agent: string | null; seq: number }[];
+    }[];
+  }> {
+    return this.request("GET", `/api/projects/${encodeURIComponent(id)}/graph/baton`);
+  }
+
+  fencing(id: string): Promise<{
+    violations: {
+      at: number;
+      agent: string;
+      staleEpoch: number;
+      currentEpoch: number;
+      currentHolder: string;
+      op: string;
+      detail: string;
+    }[];
+  }> {
+    return this.request("GET", `/api/projects/${encodeURIComponent(id)}/graph/fencing`);
+  }
+
+  fenceDrill(
+    id: string,
+    body: { agent?: string; epoch?: number } = {},
+  ): Promise<{ fenced: boolean; agent: string; epoch: number; detail: string }> {
+    return this.request("POST", `/api/projects/${encodeURIComponent(id)}/graph/fence-drill`, body);
+  }
+
+  causalChain(
+    id: string,
+    memoryId: string,
+  ): Promise<{
+    nodes: { memoryId: string; kind: string; text: string; agent: string }[];
+    links: { from: string; to: string; rel: string; basis: string }[];
+    cypher: string;
+  }> {
+    return this.request(
+      "GET",
+      `/api/projects/${encodeURIComponent(id)}/graph/causal/${encodeURIComponent(memoryId)}`,
+    );
+  }
+
+  connected(
+    id: string,
+    query: string,
+    hops = 3,
+  ): Promise<{
+    entities: string[];
+    cypher: string;
+    hits: { memoryId: string; hops: number; via: string; memory: Memory | null }[];
+  }> {
+    const qs = new URLSearchParams({ q: query, hops: String(hops) });
+    return this.request("GET", `/api/projects/${encodeURIComponent(id)}/graph/connected?${qs}`);
+  }
+
+  crossRun(
+    id: string,
+    query: string,
+  ): Promise<{
+    entities: string[];
+    memories: { memoryId: string; text: string; kind: string; agent: string; project: number }[];
+  }> {
+    const qs = new URLSearchParams({ q: query });
+    return this.request("GET", `/api/projects/${encodeURIComponent(id)}/graph/crossrun?${qs}`);
+  }
+
   /** The board: cards (yours, agents, issues, PRs) each in one of four columns. */
   board(id: string): Promise<BoardData> {
     return this.request("GET", `/api/projects/${encodeURIComponent(id)}/board`);

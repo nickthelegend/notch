@@ -1,12 +1,15 @@
 /**
- * Observability unit tests: env-driven config + consent gating, the pure
- * LoomEvent -> OTel span mapper (GenAI semantic conventions), and the OTLP/HTTP
- * exporter's payload shape (hex ids, int64-as-string, service.name, batching).
+ * The pure LoomEvent → span mapper (GenAI semantic conventions).
+ *
+ * The OTLP exporter and its env-driven config used to be tested here too. Both
+ * are gone — spans are written into HydraDB now — so what remains is the part
+ * that still decides anything: which event becomes which span, with which
+ * attributes. That mapping is unchanged by the move, which is exactly why it
+ * is worth keeping a test on.
  */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { LoomEvent } from "../src/types.js";
-import { NotchTelemetry, resolveTelemetryConfig } from "../src/observability/signoz.js";
 import { eventToSpan } from "../src/observability/index.js";
 
 const ev = (
@@ -14,33 +17,6 @@ const ev = (
   payload: Record<string, unknown> = {},
   extra: Partial<LoomEvent> = {},
 ): LoomEvent => ({ id: 1, ts: 1_000, kind: kind as LoomEvent["kind"], payload, ...extra });
-
-describe("resolveTelemetryConfig", () => {
-  it("defaults to localhost:4318, service 'notch', enabled", () => {
-    const c = resolveTelemetryConfig({});
-    expect(c.endpoint).toBe("http://localhost:4318");
-    expect(c.serviceName).toBe("notch");
-    expect(c.enabled).toBe(true);
-  });
-
-  it("honors each endpoint env var and trims a trailing slash", () => {
-    expect(resolveTelemetryConfig({ NOTCH_OTEL_ENDPOINT: "http://a:4318/" }).endpoint).toBe("http://a:4318");
-    expect(resolveTelemetryConfig({ OTEL_EXPORTER_OTLP_ENDPOINT: "http://b:4318" }).endpoint).toBe("http://b:4318");
-    expect(resolveTelemetryConfig({ SIGNOZ_ENDPOINT: "http://c:4318" }).endpoint).toBe("http://c:4318");
-  });
-
-  it("disables under every consent opt-out", () => {
-    expect(resolveTelemetryConfig({ DO_NOT_TRACK: "1" }).enabled).toBe(false);
-    expect(resolveTelemetryConfig({ NOTCH_TELEMETRY_DISABLED: "1" }).enabled).toBe(false);
-    expect(resolveTelemetryConfig({ NOTCH_OTEL: "0" }).enabled).toBe(false);
-  });
-
-  it("attaches the SigNoz Cloud ingestion header when a key is present", () => {
-    const c = resolveTelemetryConfig({ SIGNOZ_INGESTION_KEY: "secret" });
-    expect(c.headers["signoz-access-token"]).toBe("secret");
-    expect(c.headers["content-type"]).toBe("application/json");
-  });
-});
 
 describe("eventToSpan (LoomEvent -> OTel span)", () => {
   it("maps run_complete to gen_ai.agent.turn with cost, tokens, model, and a duration window", () => {
@@ -95,86 +71,5 @@ describe("eventToSpan (LoomEvent -> OTel span)", () => {
   it("returns null for non-telemetry kinds (message, status)", () => {
     expect(eventToSpan(ev("message", { text: "hi" }))).toBeNull();
     expect(eventToSpan(ev("status", { state: "turn_cost", costUsd: 0.001 }))).toBeNull();
-  });
-});
-
-describe("NotchTelemetry (OTLP/HTTP JSON export)", () => {
-  afterEach(() => vi.unstubAllGlobals());
-
-  function stubFetch() {
-    const calls: Array<{ url: string; opts: { headers: Record<string, string>; body: string } }> = [];
-    const fn = vi.fn(async (url: string, opts: { headers: Record<string, string>; body: string }) => {
-      calls.push({ url, opts });
-      return { ok: true } as Response;
-    });
-    vi.stubGlobal("fetch", fn);
-    return { fn, calls };
-  }
-
-  it("posts one valid OTLP payload on flush: service.name, hex ids, int64-as-string", async () => {
-    const { fn, calls } = stubFetch();
-    const t = new NotchTelemetry({
-      endpoint: "http://collector:4318",
-      serviceName: "notch",
-      headers: { "content-type": "application/json" },
-      enabled: true,
-    });
-    t.span({
-      name: "gen_ai.agent.turn",
-      startNs: 0n,
-      endNs: 1_000_000n,
-      attributes: { "gen_ai.usage.input_tokens": 100, "gen_ai.usage.cost_usd": 0.02, "gen_ai.agent.id": "codex", flagged: true },
-    });
-    t.flush();
-    await new Promise((r) => setTimeout(r, 10));
-
-    expect(fn).toHaveBeenCalledTimes(1);
-    expect(calls[0].url).toBe("http://collector:4318/v1/traces");
-    const body = JSON.parse(calls[0].opts.body);
-    const rs = body.resourceSpans[0];
-    expect(rs.resource.attributes.find((a: { key: string }) => a.key === "service.name").value.stringValue).toBe("notch");
-    const span = rs.scopeSpans[0].spans[0];
-    expect(span.name).toBe("gen_ai.agent.turn");
-    expect(span.traceId).toMatch(/^[0-9a-f]{32}$/);
-    expect(span.spanId).toMatch(/^[0-9a-f]{16}$/);
-    expect(span.status.code).toBe(1);
-    const attr = (k: string) => span.attributes.find((a: { key: string }) => a.key === k).value;
-    expect(attr("gen_ai.usage.input_tokens").intValue).toBe("100"); // int64 -> string
-    expect(attr("gen_ai.usage.cost_usd").doubleValue).toBe(0.02);
-    expect(attr("flagged").boolValue).toBe(true);
-  });
-
-  it("marks a span with an error message as ERROR status", async () => {
-    const { calls } = stubFetch();
-    const t = new NotchTelemetry({ endpoint: "http://c:4318", serviceName: "notch", headers: {}, enabled: true });
-    t.span({ name: "notch.error", startNs: 0n, endNs: 1n, attributes: {}, error: "kaboom" });
-    t.flush();
-    await new Promise((r) => setTimeout(r, 10));
-    const span = JSON.parse(calls[0].opts.body).resourceSpans[0].scopeSpans[0].spans[0];
-    expect(span.status.code).toBe(2);
-    expect(span.status.message).toBe("kaboom");
-  });
-
-  it("does not post when disabled (consent gate)", async () => {
-    const { fn } = stubFetch();
-    const t = new NotchTelemetry({ endpoint: "http://c:4318", serviceName: "notch", headers: {}, enabled: false });
-    expect(t.enabled).toBe(false);
-    t.span({ name: "x", startNs: 0n, endNs: 1n, attributes: {} });
-    t.flush();
-    await new Promise((r) => setTimeout(r, 10));
-    expect(fn).not.toHaveBeenCalled();
-  });
-
-  it("drops undefined/empty attributes instead of emitting them", async () => {
-    const { calls } = stubFetch();
-    const t = new NotchTelemetry({ endpoint: "http://c:4318", serviceName: "notch", headers: {}, enabled: true });
-    t.span({ name: "s", startNs: 0n, endNs: 1n, attributes: { keep: "yes", drop1: undefined, drop2: null, drop3: "" } });
-    t.flush();
-    await new Promise((r) => setTimeout(r, 10));
-    const keys = JSON.parse(calls[0].opts.body).resourceSpans[0].scopeSpans[0].spans[0].attributes.map((a: { key: string }) => a.key);
-    expect(keys).toContain("keep");
-    expect(keys).not.toContain("drop1");
-    expect(keys).not.toContain("drop2");
-    expect(keys).not.toContain("drop3");
   });
 });

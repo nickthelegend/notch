@@ -1,6 +1,13 @@
 /**
- * The Notch observability layer: folds LoomEvents into OpenTelemetry signals
- * and ships them to SigNoz. One process-wide config, three exporters.
+ * The Notch observability layer: folds LoomEvents into spans, metrics and log
+ * lines, and writes them into **HydraDB** — the same graph the events, the
+ * baton and the brain already live in.
+ *
+ * The fold below still uses the OpenTelemetry GenAI semantic conventions for
+ * names and attributes; what is deliberate is where it lands. One store
+ * instead of two means a span sits one hop from the event that produced it and
+ * the memory that turn learned, nothing can be out of sync with anything, and
+ * no view has to degrade because a second system is down.
  *
  * Mapping (LoomEvent → span, GenAI semantic conventions where they apply):
  *   run_complete            → gen_ai.agent.turn   (duration, cost, tokens, model)
@@ -22,19 +29,37 @@
  * One event can produce all three. Callers still only call recordAgentEvent().
  */
 
+import crypto from "node:crypto";
 import type { LoomEvent } from "../types.js";
-import { NotchTelemetry, newTraceId, resolveTelemetryConfig, type NotchTelemetryConfig, type SpanInput } from "./signoz.js";
-import { NotchMetrics, type MetricAttributes } from "./metrics.js";
-import { NotchLogs, eventToLogRecord } from "./logs.js";
+import type { MetricAttributes } from "./metrics.js";
+import { eventToLogRecord, SEVERITY } from "./logs.js";
+import type { TelemetryStore } from "../hydra/telemetry.js";
 
-let singleton: NotchTelemetry | null = null;
-let metricsSingleton: NotchMetrics | null = null;
-let logsSingleton: NotchLogs | null = null;
-let sharedConfig: NotchTelemetryConfig | null = null;
+/**
+ * A span as the fold produces it, before it reaches a store.
+ *
+ * Nanosecond window and flat attribute bag, because that is the shape the
+ * GenAI conventions describe and the shape the mapping tests assert on. The
+ * store flattens it into graph properties.
+ */
+export type SpanInput = {
+  name: string;
+  startNs: bigint;
+  endNs: bigint;
+  attributes: Record<string, string | number | boolean | undefined | null>;
+  error?: string;
+  /** Correlate related spans (a turn + its tool calls) under one trace. */
+  traceId?: string;
+};
+
+/** A fresh 16-byte trace id — used to group a turn's spans into one trace. */
+export function newTraceId(): string {
+  return crypto.randomBytes(16).toString("hex");
+}
 
 // One trace per agent turn: minted when a turn starts, reused by every span in
-// that turn (tool calls, the completion), cleared when it ends — so SigNoz shows
-// a real span tree per turn instead of one orphan span per event.
+// that turn (tool calls, the completion), cleared when it ends — so the
+// waterfall shows a real span tree per turn instead of one orphan per event.
 const turnTrace = new Map<string, string>();
 /**
  * The trace of the turn that most recently CLOSED, per agent. The decision
@@ -73,7 +98,7 @@ function traceIdFor(event: LoomEvent): { traceId: string; opened: boolean; close
  * The trace id of an agent's in-flight turn, or the one that just finished.
  *
  * Undefined when telemetry is off, because then no trace was ever minted and
- * there is nothing in SigNoz to link to. Callers must leave the field out
+ * there is no trace to link to. Callers must leave the field out
  * rather than substituting "" — an empty trace id renders as a link that opens
  * a search for nothing, which reads as a broken feature rather than an absent
  * one.
@@ -83,38 +108,23 @@ export function turnTraceId(agentId: string): string | undefined {
 }
 
 /**
- * One resolved config for all three signals.
+ * Telemetry is off when `NOTCH_TELEMETRY_DISABLED=1`.
  *
- * Resolved once and shared so traces, metrics and logs can never disagree about
- * the endpoint or the service name — a metric filed under a different
- * service.name than its trace is invisible in SigNoz's service view, and that
- * failure is silent.
+ * Kept as a switch because the test suite needs one — writing a span per event
+ * would triple every test's round trips to prove nothing about the test. It is
+ * not a degradation path: with it unset, telemetry always lands, because the
+ * store it lands in is the one the daemon already cannot run without.
  */
-function config(): NotchTelemetryConfig {
-  if (!sharedConfig) sharedConfig = resolveTelemetryConfig();
-  return sharedConfig;
+/** OTel severity number → the word the Logs view filters on. */
+function severityName(n: number): string {
+  if (n >= SEVERITY.ERROR) return "error";
+  if (n >= SEVERITY.WARN) return "warn";
+  if (n >= SEVERITY.INFO) return "info";
+  return "debug";
 }
 
-export function telemetry(): NotchTelemetry {
-  if (!singleton) singleton = new NotchTelemetry(config());
-  return singleton;
-}
-
-export function metrics(): NotchMetrics {
-  if (!metricsSingleton) metricsSingleton = new NotchMetrics(config());
-  return metricsSingleton;
-}
-
-export function logs(): NotchLogs {
-  if (!logsSingleton) logsSingleton = new NotchLogs(config());
-  return logsSingleton;
-}
-
-/** Push every buffered signal now — for shutdown, and for tests that assert. */
-export function flushTelemetry(): void {
-  singleton?.flush();
-  metricsSingleton?.flush();
-  logsSingleton?.flush();
+export function telemetryEnabled(): boolean {
+  return process.env.NOTCH_TELEMETRY_DISABLED !== "1";
 }
 
 const MS_TO_NS = 1_000_000n;
@@ -336,35 +346,54 @@ function trackActive(agent: string | undefined, opened: boolean, closed: boolean
  * so each checks its own switch, and the shared trace id is minted once so a
  * log record can point at the span covering the same event.
  */
-export function recordAgentEvent(event: LoomEvent, ctx: EventContext = {}): void {
+export function recordAgentEvent(
+  event: LoomEvent,
+  ctx: EventContext = {},
+  store?: TelemetryStore,
+): void {
   try {
-    const t = telemetry();
-    const m = metrics();
-    const l = logs();
-    if (!t.enabled && !m.enabled && !l.enabled) return;
+    if (!store || !telemetryEnabled()) return;
 
-    // Advance the per-agent turn trace for every event, whatever is enabled —
-    // it is the id logs correlate on, not just a trace-exporter detail.
-    const { traceId, opened, closed } = traceIdFor(event);
+    // Advance the per-agent turn trace for every event — it is the id logs
+    // correlate on, not just a trace-exporter detail.
+    const { traceId } = traceIdFor(event);
 
     const span = eventToSpan(event, ctx);
-    const spanId = span ? t.span({ ...span, traceId }) : undefined;
-
-    if (l.enabled) {
-      const record = eventToLogRecord(event, ctx);
-      // traceId always; spanId only when this event really produced that span.
-      // Pointing a log at a span id we invented would be a link to nothing.
-      if (record) l.log({ ...record, traceId, ...(spanId ? { spanId } : {}) });
+    if (span) {
+      const a = span.attributes;
+      const ms = Number(a["notch.turn.duration_ms"] ?? 0) ||
+        Number((span.endNs - span.startNs) / 1_000_000n);
+      store.recordSpan({
+        traceId,
+        spanId: crypto.randomBytes(8).toString("hex"),
+        ts: Number(span.endNs / 1_000_000n),
+        name: span.name,
+        ms,
+        // OTel status: 2 is error. Kept as the same number the fold always
+        // produced so `healthScore` and the Triage prompt need no changes.
+        code: span.error ? 2 : 0,
+        msg: span.error ?? "",
+        agent: String(a["gen_ai.agent.id"] ?? ""),
+        ade: String(a["gen_ai.system"] ?? ""),
+        model: String(a["gen_ai.request.model"] ?? ""),
+        tin: Number(a["gen_ai.usage.input_tokens"] ?? 0),
+        tout: Number(a["gen_ai.usage.output_tokens"] ?? 0),
+        cost: Number(a["gen_ai.usage.cost_usd"] ?? 0),
+        handoffFrom: String(a["notch.handoff.from"] ?? ""),
+        handoffTo: String(a["notch.handoff.to"] ?? ""),
+      });
     }
 
-    if (m.enabled) {
-      for (const op of eventToMetrics(event)) {
-        if (op.op === "count") m.addCount(op.name, op.value, { ...op.attributes, "notch.project": ctx.project }, op.isInt);
-        else m.record(op.name, op.value, { ...op.attributes, "notch.project": ctx.project });
-      }
-      if (trackActive(event.agentId, opened, closed)) {
-        m.setGauge("notch.agents.active", activeAgents.size, { "notch.project": ctx.project });
-      }
+    const record = eventToLogRecord(event, ctx);
+    if (record) {
+      store.recordLog({
+        ts: event.ts,
+        level: severityName(record.severityNumber),
+        agent: event.agentId ?? "",
+        body: typeof record.body === "string" ? record.body : JSON.stringify(record.body ?? ""),
+        traceId,
+        kind: event.kind,
+      });
     }
   } catch {
     /* never let telemetry throw into the agent loop */

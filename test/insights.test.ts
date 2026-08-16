@@ -1,6 +1,6 @@
 /**
  * The Agent Health Score is a pure function of an agent's spans, so it is
- * asserted here without a live ClickHouse — the same math the Observatory badge
+ * asserted here without touching a store — the same math the Observatory badge
  * renders. Each penalty bucket is exercised in isolation, then together.
  */
 

@@ -21,8 +21,9 @@ desktop/build/daemon/
 # alone. Cloned on demand; never ours to commit.
 references/
 
-# installed agent skills (add via: npx skills add SigNoz/agent-skills)
+# installed agent skills (add via: npx skills add <owner>/<repo>)
 .agents/
 
-# Foundry generates these from casting.yaml; the lock and pours/ are committed
-# so a judge can diff what they forge against what we forged.
+# HydraDB local data, if a node is ever started with a host path instead of
+# a named volume. Never a source of truth worth committing.
+.hydradb/

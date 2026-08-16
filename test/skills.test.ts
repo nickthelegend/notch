@@ -64,14 +64,14 @@ describe("buildSkillsBlock", () => {
 
 describe("suggestSkill", () => {
   const skills: SkillManifest[] = [
-    { id: "signoz-agent-multi-agent-triage", name: "", description: "", path: "", body: "", enabled: false, source: "", origin: "project" },
-    { id: "signoz-generating-queries", name: "", description: "", path: "", body: "", enabled: false, source: "", origin: "project" },
+    { id: "hydra-agent-triage", name: "", description: "", path: "", body: "", enabled: false, source: "", origin: "project" },
+    { id: "hydra-cypher-queries", name: "", description: "", path: "", body: "", enabled: false, source: "", origin: "project" },
   ];
   it("suggests triage for a 'why is my agent failing' message", () => {
-    expect(suggestSkill("why is my agent failing?", skills)!.id).toBe("signoz-agent-multi-agent-triage");
+    expect(suggestSkill("why is my agent failing?", skills)!.id).toBe("hydra-agent-triage");
   });
-  it("suggests the query skill for a ClickHouse/traces message", () => {
-    expect(suggestSkill("show me the traces in clickhouse", skills)!.id).toBe("signoz-generating-queries");
+  it("suggests the query skill for a Cypher/traces message", () => {
+    expect(suggestSkill("show me the spans with a cypher query", skills)!.id).toBe("hydra-cypher-queries");
   });
   it("returns null when nothing matches or the match is already enabled", () => {
     expect(suggestSkill("hello there", skills)).toBeNull();

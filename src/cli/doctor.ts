@@ -13,6 +13,7 @@ import { readDaemonConfig, readProjectConfig, readProjectState } from "../core/r
 import { resolveSteps, stepName } from "../core/routes.js";
 import { isAdapter } from "../types.js";
 import { BUILD_REV } from "../daemon/server.js";
+import { hydra } from "../hydra/client.js";
 
 export interface Check {
   name: string;
@@ -129,6 +130,40 @@ function version(cmd: string, args: string[] = ["--version"]): Promise<string | 
 
 export async function envChecks(): Promise<Check[]> {
   const checks: Check[] = [];
+
+  // First, because everything else is downstream of it. The log, the baton and
+  // the brain are all in HydraDB, and none of them degrade to a local file, so
+  // "is the node up" is not one check among many — it is the check that
+  // decides whether the rest of this report describes a working system.
+  const store = process.env.LOOM_STORE ?? "hydra";
+  if (store === "hydra") {
+    const h = hydra();
+    const ping = await h.ping();
+    if (ping.ok) {
+      checks.push(ok("hydradb", `${h.cfg.url} · ${ping.detail}`));
+    } else if (ping.writable === false && !/unreachable/i.test(ping.detail)) {
+      // Reachable but not writable is its own failure, and the one that reads
+      // as a mystery: reads work, so everything looks fine until a turn tries
+      // to record anything.
+      checks.push(fail("hydradb", `${h.cfg.url} — ${ping.detail}`));
+    } else {
+      checks.push(
+        fail(
+          "hydradb",
+          `unreachable at ${h.cfg.url} — ${ping.detail}. Start one with scripts/hydra-up.sh; ` +
+            `nothing falls back to a local store, so the daemon will refuse to open a project.`,
+        ),
+      );
+    }
+  } else {
+    checks.push(
+      warn(
+        "hydradb",
+        `bypassed: LOOM_STORE=${store}. The graph views (Provenance, causal chains, cross-run recall) ` +
+          `have nothing to read, and the baton is a file mutex again.`,
+      ),
+    );
+  }
 
   const [major, minor] = process.versions.node.split(".").map(Number);
   if ((major ?? 0) > 22 || ((major ?? 0) === 22 && (minor ?? 0) >= 5)) {

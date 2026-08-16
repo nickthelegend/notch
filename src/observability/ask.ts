@@ -2,10 +2,9 @@
  * Ask the Observatory — a question about this fleet, answered from its own
  * telemetry.
  *
- * The shape is deliberately the one SigNoz uses for Noz: a model with the
- * SigNoz MCP server attached, so it can go and query traces, metrics and logs
+ * A model with the project's MCP servers attached, so it can go and query
  * itself rather than being handed a pre-chewed summary and asked to sound
- * confident about it. When a SigNoz MCP server is configured for the project
+ * confident about it. When an MCP server is configured for the project
  * (see src/core/mcp.ts) it is passed to the CLI for the turn and the model can
  * call it directly.
  *
@@ -16,7 +15,7 @@
  *     machine with none, the endpoint says so instead of returning a
  *     plausible-sounding paragraph assembled locally.
  *   - It does not invent telemetry. The context block below is rendered from
- *     the same numbers the Observatory renders; if SigNoz is unreachable the
+ *     the same numbers the Observatory renders; if the store is unreachable the
  *     prompt says the spans came from the local event log, so the answer can be
  *     honest about its own evidence rather than implying a trace backend that
  *     isn't running.
@@ -40,7 +39,7 @@ export interface AskContext {
   /** Recent turns/handoffs, newest last. */
   recentSpans: Array<{ ts: number; agent?: string; name?: string; ms?: number; code?: number; model?: string; msg?: string }>;
   decisions: Array<{ agentId: string; title: string; category?: string; confidence?: number; source?: string }>;
-  /** "signoz" when the spans came from ClickHouse, "local-log" when it is down. */
+  /** "hydradb" when the spans came from the graph, "local-log" when it did not. */
   spanSource: string;
 }
 
@@ -48,7 +47,7 @@ export interface AskResult {
   answer: string;
   /** Which CLI and model actually answered. */
   via: string;
-  /** SigNoz MCP servers handed to the model for this question, if any. */
+  /** MCP servers handed to the model for this question, if any. */
   mcpServers: string[];
   /** True when no CLI was available to answer at all. */
   unavailable?: boolean;
@@ -100,7 +99,7 @@ export function renderAskContext(c: AskContext): string {
   }
   if (c.recentSpans.length) {
     L.push("");
-    L.push(`## Recent activity (${c.spanSource === "signoz" ? "from SigNoz spans" : "from the local event log — SigNoz is not reachable, so there are no trace ids"})`);
+    L.push(`## Recent activity (${c.spanSource === "hydradb" ? "from HydraDB spans" : "from the local event log — no trace ids on these"})`);
     for (const s of c.recentSpans.slice(-25)) {
       const when = new Date(s.ts).toISOString().slice(11, 19);
       const parts = [when, s.name ?? "?", s.agent ?? ""];
@@ -117,7 +116,7 @@ export function renderAskContext(c: AskContext): string {
 const SYSTEM = [
   "You are Noz, the observability assistant inside Notch's Observatory.",
   "You answer questions about THIS agent fleet using the evidence below, and any",
-  "SigNoz MCP tools you have been given — prefer calling those tools for anything",
+  "MCP tools you have been given — prefer calling those tools for anything",
   "the evidence block does not already contain.",
   "",
   "Rules:",
@@ -125,7 +124,7 @@ const SYSTEM = [
   "- Cite the concrete numbers you used. Never invent a metric that is not in the",
   "  evidence or returned by a tool; if something cannot be determined, say which",
   "  data would be needed.",
-  "- If the evidence says SigNoz is unreachable, do not imply you queried traces.",
+  "- If the evidence carries no trace ids, do not imply you queried traces.",
   "- Plain text. No markdown headers, no bullet characters other than '-'.",
 ].join("\n");
 

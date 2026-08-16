@@ -1,107 +1,54 @@
 /**
- * Observatory insights, read back from SigNoz's ClickHouse: the spans behind the
- * Span Replay viewer and the Trace Waterfall, the per-agent burn-rate series, and
- * a deterministic 0–100 Agent Health Score. All of it is derived from the same
- * real gen_ai spans Notch exports — nothing here is synthetic.
+ * Observatory read-back — out of HydraDB.
  *
- * The scoring (`healthScore`) is a pure function so it is unit-tested without a
- * live ClickHouse, and it is the same math the UI badges render.
+ * The spans live in the graph (`hydra/telemetry.ts`), so these read them from
+ * there. `InsightSpan` is exactly what the store holds, `healthScore` is a pure
+ * function over it, and the Observatory renders those numbers unchanged.
+ *
+ * `insightSpansFromLog` is NOT a fallback for the store being unreachable —
+ * with one store, "the graph is down" and "the daemon is down" are the same
+ * condition. It is kept because it is still the right answer for a window of
+ * the log that predates telemetry being switched on.
  */
 
 import type { LoomEvent } from "../types.js";
-import { SPAN_TABLE, chLiteral, chQuery } from "./clickhouse.js";
+import type { StoredSpan, TelemetryStore } from "../hydra/telemetry.js";
 
-export type InsightSpan = {
-  traceId: string;
-  spanId: string;
-  ts: number;
-  name: string;
-  ms: number;
-  code: number; // OTel status: 2 = error
-  msg: string;
-  agent: string;
-  ade: string; // gen_ai.system — the adapter kind
-  model: string;
-  tin: number;
-  tout: number;
-  cost: number;
-  handoffFrom: string;
-  handoffTo: string;
-};
-
-const SELECT = `
-  toString(trace_id) AS traceId, toString(span_id) AS spanId,
-  toUnixTimestamp64Milli(timestamp) AS ts, name,
-  round(duration_nano / 1e6) AS ms, status_code AS code, status_message AS msg,
-  attributes_string['gen_ai.agent.id']       AS agent,
-  attributes_string['gen_ai.system']         AS ade,
-  attributes_string['gen_ai.request.model']  AS model,
-  attributes_string['notch.handoff.from']    AS handoffFrom,
-  attributes_string['notch.handoff.to']      AS handoffTo,
-  toFloat64(attributes_number['gen_ai.usage.cost_usd'])     AS cost,
-  toUInt32(attributes_number['gen_ai.usage.input_tokens'])  AS tin,
-  toUInt32(attributes_number['gen_ai.usage.output_tokens']) AS tout`;
-
-const SERVICE = "`resource_string_service$$name` = 'notch'";
-
-function rowToSpan(r: Record<string, unknown>): InsightSpan {
-  return {
-    traceId: String(r.traceId ?? ""),
-    spanId: String(r.spanId ?? ""),
-    ts: Number(r.ts ?? 0),
-    name: String(r.name ?? ""),
-    ms: Number(r.ms ?? 0),
-    code: Number(r.code ?? 0),
-    msg: String(r.msg ?? ""),
-    agent: String(r.agent ?? ""),
-    ade: String(r.ade ?? ""),
-    model: String(r.model ?? ""),
-    tin: Number(r.tin ?? 0),
-    tout: Number(r.tout ?? 0),
-    cost: Number(r.cost ?? 0),
-    handoffFrom: String(r.handoffFrom ?? ""),
-    handoffTo: String(r.handoffTo ?? ""),
-  };
-}
+/** A span as the Observatory renders it. Identical to what the store holds. */
+export type InsightSpan = StoredSpan;
 
 /** Recent spans for a project (optionally one agent), newest first. */
-export async function fetchSpans(project: string, opts: { agent?: string; limit?: number } = {}): Promise<InsightSpan[]> {
-  const proj = chLiteral(project);
-  const limit = Math.min(500, Math.max(1, opts.limit ?? 200));
-  const agentFilter = opts.agent ? `AND attributes_string['gen_ai.agent.id'] = '${chLiteral(opts.agent)}'` : "";
-  const sql = `SELECT ${SELECT} FROM ${SPAN_TABLE}
-    WHERE ${SERVICE} AND attributes_string['notch.project'] = '${proj}' ${agentFilter}
-    ORDER BY timestamp DESC LIMIT ${limit}`;
-  return (await chQuery(sql)).map(rowToSpan);
+export async function fetchSpans(
+  store: TelemetryStore,
+  opts: { agent?: string; limit?: number } = {},
+): Promise<InsightSpan[]> {
+  return store.spans({
+    ...(opts.agent ? { agent: opts.agent } : {}),
+    limit: Math.min(500, Math.max(1, opts.limit ?? 200)),
+  });
 }
 
 /** How many error spans an agent has emitted since `sinceMs` — the self-heal recheck signal. */
-export async function recentAgentErrors(project: string, agent: string, sinceMs: number): Promise<number> {
-  const proj = chLiteral(project);
-  const a = chLiteral(agent);
-  const sinceSec = Math.floor(Math.max(0, sinceMs) / 1000);
-  const sql = `SELECT count() AS n FROM ${SPAN_TABLE}
-    WHERE ${SERVICE} AND attributes_string['notch.project'] = '${proj}'
-      AND attributes_string['gen_ai.agent.id'] = '${a}'
-      AND status_code = 2
-      AND timestamp >= toDateTime(${sinceSec})`;
-  const rows = await chQuery(sql);
-  return Number(rows[0]?.n ?? 0);
+export async function recentAgentErrors(
+  store: TelemetryStore,
+  agent: string,
+  sinceMs: number,
+): Promise<number> {
+  return store.errorsSince(agent, Math.max(0, sinceMs));
 }
 
 /** Every span in one trace, oldest first — the waterfall's rows. */
-export async function traceSpans(traceId: string): Promise<InsightSpan[]> {
-  const t = chLiteral(traceId);
-  if (!t) return [];
-  const sql = `SELECT ${SELECT} FROM ${SPAN_TABLE}
-    WHERE ${SERVICE} AND trace_id = '${t}' ORDER BY timestamp ASC LIMIT 300`;
-  return (await chQuery(sql)).map(rowToSpan);
+export async function traceSpans(store: TelemetryStore, traceId: string): Promise<InsightSpan[]> {
+  if (!traceId) return [];
+  return store.trace(traceId);
 }
 
 /**
- * Fallback: derive InsightSpans from the local event log — the same data SigNoz
- * gets — so the Observatory's replay/health/waterfall still work when ClickHouse
- * is down or the agent hasn't emitted to SigNoz yet.
+ * Derive InsightSpans from the daemon's in-memory event log.
+ *
+ * Not a fallback for a missing store any more — it is the right answer for a
+ * window of the log that predates telemetry being switched on, and for a turn
+ * whose spans have not been flushed yet.
  */
 export function insightSpansFromLog(events: LoomEvent[], agent?: string): InsightSpan[] {
   const out: InsightSpan[] = [];
@@ -133,30 +80,33 @@ export type BurnSeries = {
   projected24h: number;
 };
 
-/** Per-agent cost over time, bucketed — the burn-rate sparkline's data + a linear projection. */
-export async function burnSeries(project: string, opts: { hours?: number; buckets?: number } = {}): Promise<BurnSeries> {
-  const proj = chLiteral(project);
+/**
+ * Per-agent cost over time, bucketed — the burn sparkline plus a projection.
+ *
+ * Bucketed here rather than in Cypher: HydraDB's aggregation has no
+ * `toStartOfInterval` equivalent, and the span count over a 24h window is small
+ * enough that pulling it and grouping in memory is both simpler and faster than
+ * any query that could express it.
+ */
+export async function burnSeries(
+  store: TelemetryStore,
+  opts: { hours?: number; buckets?: number } = {},
+): Promise<BurnSeries> {
   const hours = Math.min(720, Math.max(1, opts.hours ?? 24));
   const nBuckets = Math.min(60, Math.max(2, opts.buckets ?? 12));
-  const stepSec = Math.max(60, Math.round((hours * 3600) / nBuckets));
-  const sql = `SELECT
-      toUnixTimestamp(toStartOfInterval(timestamp, INTERVAL ${stepSec} SECOND)) AS bucket,
-      attributes_string['gen_ai.agent.id'] AS agent,
-      sum(toFloat64(attributes_number['gen_ai.usage.cost_usd'])) AS cost
-    FROM ${SPAN_TABLE}
-    WHERE ${SERVICE} AND attributes_string['notch.project'] = '${proj}'
-      AND name = 'gen_ai.agent.turn'
-      AND timestamp >= now() - INTERVAL ${hours} HOUR
-    GROUP BY bucket, agent ORDER BY bucket ASC`;
-  const rows = await chQuery(sql);
+  const stepMs = Math.max(60_000, Math.round((hours * 3600_000) / nBuckets));
+  const since = Date.now() - hours * 3600_000;
+
+  const spans = (await store.spans({ limit: 2000 })).filter(
+    (s) => s.name === "gen_ai.agent.turn" && s.ts >= since,
+  );
   const map = new Map<number, BurnBucket>();
-  for (const r of rows) {
-    const t = Number(r.bucket ?? 0) * 1000;
-    const agent = String(r.agent ?? "unknown");
-    const cost = Number(r.cost ?? 0);
+  for (const s of spans) {
+    const t = Math.floor(s.ts / stepMs) * stepMs;
+    const agent = s.agent || "unknown";
     const b = map.get(t) ?? { t, byAgent: {}, total: 0 };
-    b.byAgent[agent] = (b.byAgent[agent] ?? 0) + cost;
-    b.total += cost;
+    b.byAgent[agent] = (b.byAgent[agent] ?? 0) + s.cost;
+    b.total += s.cost;
     map.set(t, b);
   }
   const buckets = [...map.values()].sort((a, b) => a.t - b.t);
@@ -166,201 +116,128 @@ export async function burnSeries(project: string, opts: { hours?: number; bucket
 }
 
 /* ------------------------------------------------------------------------- *
- * Metrics read-back
+ * Metric series
  *
- * Notch exports notch.turns, notch.handoffs, notch.cost.usd, notch.agents.active,
- * gen_ai.client.token.usage and a gen_ai.client.operation.duration histogram
- * (observability/metrics.ts). Reading them back closes the loop: the same
- * numbers the Observatory shows can be checked against what SigNoz stored.
- *
- * SigNoz splits a metric across two tables, confirmed by DESCRIBE on the live
- * stack:
- *   distributed_time_series_v4 — one row per (fingerprint, hour) carrying the
- *     metadata and label maps: metric_name, type, unit, temporality, attrs
- *     (metric attributes), resource_attrs, labels (a JSON string).
- *   distributed_samples_v4     — the actual points: metric_name, fingerprint,
- *     unix_milli, value.
- * `fingerprint` is the join key: it identifies one label set, i.e. one series.
+ * Metrics used to live in their own tables and Notch read them back to check
+ * its own arithmetic. There is no separate metric store now — the spans carry
+ * every number the metrics were derived from, so the series are computed from
+ * them directly. That removes a whole class of bug the old design had: a metric
+ * and the spans it summarised could disagree, and nothing would say so.
  * ------------------------------------------------------------------------- */
-
-export const METRIC_SAMPLES_TABLE = "signoz_metrics.distributed_samples_v4";
-export const METRIC_SERIES_TABLE = "signoz_metrics.distributed_time_series_v4";
-
-/**
- * A histogram does not exist under its own name in ClickHouse — the OTLP
- * exporter fans it out into suffixed sums/gauges. Asking for
- * "gen_ai.client.operation.duration" therefore has to expand to the real names,
- * or the query silently returns nothing.
- *
- * `.bucket` is deliberately excluded: it is one series per histogram boundary
- * (le="0.005", le="0.01", …), which is a dozen lines of noise on a chart and
- * never what a caller asking for "the duration metric" means. A caller that
- * genuinely wants buckets can name `...duration.bucket` explicitly, which the
- * exact-name path below still honours.
- */
-const HISTOGRAM_SUFFIXES = ["sum", "count", "min", "max"];
-
-/** Expand each requested name to itself plus its histogram parts, deduped. */
-export function expandMetricNames(names: string[]): string[] {
-  const out = new Set<string>();
-  for (const raw of names) {
-    const n = chLiteral(String(raw ?? "").trim());
-    if (!n) continue;
-    out.add(n);
-    // Suffixing a non-histogram name is harmless — nothing matches it.
-    if (!HISTOGRAM_SUFFIXES.some((s) => n.endsWith(`.${s}`)) && !n.endsWith(".bucket")) {
-      for (const s of HISTOGRAM_SUFFIXES) out.add(`${n}.${s}`);
-    }
-  }
-  return [...out];
-}
 
 export type MetricPoint = {
   /** Bucket start, epoch ms. */
   t: number;
-  /**
-   * Sum of the samples in the bucket. Notch's counters arrive as small
-   * per-export deltas (verified on the live stack: notch.turns reports 1/2/3,
-   * never a running total), so summing is the honest "how much happened in this
-   * window" number for a Sum-typed metric.
-   */
   sum: number;
-  /** Mean of the samples in the bucket — the right read for a Gauge like notch.agents.active. */
   avg: number;
   max: number;
-  /** How many raw samples went into the bucket, so the UI can tell thin data from zero. */
+  /** How many spans went into the bucket, so the UI can tell thin data from zero. */
   n: number;
 };
 
 export type MetricSeries = {
   metric: string;
-  /** SigNoz's type column: "Sum" | "Gauge" | "Histogram" | "". */
   type: string;
   unit: string;
   temporality: string;
-  /** The series' label set (agent id, model, project, …), internal `__*` keys stripped. */
+  /** The series' label set — here, the agent it belongs to. */
   labels: Record<string, string>;
-  /** ClickHouse fingerprint as a string — UInt64 overflows a JS number. */
   fingerprint: string;
-  /** Which of sum/avg the UI should plot by default, chosen from `type`. */
+  /** Which of sum/avg the UI should plot by default. */
   prefer: "sum" | "avg";
   points: MetricPoint[];
 };
 
 export type MetricQueryOpts = {
-  project: string;
   sinceMs?: number;
   stepMs?: number;
 };
 
-/** Drop SigNoz's internal label keys (`__name__`, `__temporality__`, …). */
-function cleanLabels(v: unknown): Record<string, string> {
-  const out: Record<string, string> = {};
-  if (v && typeof v === "object") {
-    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
-      if (k.startsWith("__")) continue;
-      out[k] = String(val ?? "");
+export const NOTCH_METRIC_NAMES = [
+  "notch.turns",
+  "notch.cost.usd",
+  "gen_ai.client.token.usage",
+  "gen_ai.client.operation.duration",
+];
+
+/** How each metric is derived from one turn span, and how to read it. */
+const METRIC_SPEC: Record<
+  string,
+  { value: (s: InsightSpan) => number; unit: string; type: string; prefer: "sum" | "avg" }
+> = {
+  "notch.turns": { value: () => 1, unit: "1", type: "Sum", prefer: "sum" },
+  "notch.cost.usd": { value: (s) => s.cost, unit: "USD", type: "Sum", prefer: "sum" },
+  "gen_ai.client.token.usage": {
+    value: (s) => s.tin + s.tout,
+    unit: "1",
+    type: "Sum",
+    prefer: "sum",
+  },
+  "gen_ai.client.operation.duration": {
+    value: (s) => s.ms,
+    unit: "ms",
+    type: "Histogram",
+    prefer: "avg",
+  },
+};
+
+/** Every metric Notch can chart, with the names a caller may ask for. */
+export function expandMetricNames(names: string[]): string[] {
+  const known = new Set(Object.keys(METRIC_SPEC));
+  const out = names.map((n) => String(n ?? "").trim()).filter((n) => known.has(n));
+  return out.length ? [...new Set(out)] : [...known];
+}
+
+/** One series per (metric, agent), bucketed over the window. */
+export async function fetchMetricSeries(
+  store: TelemetryStore,
+  names: string[],
+  opts: MetricQueryOpts = {},
+): Promise<MetricSeries[]> {
+  const wanted = expandMetricNames(names);
+  const since = opts.sinceMs ?? Date.now() - 24 * 3600_000;
+  const stepMs = Math.max(60_000, opts.stepMs ?? 5 * 60_000);
+  const spans = (await store.spans({ limit: 2000 })).filter(
+    (s) => s.name === "gen_ai.agent.turn" && s.ts >= since,
+  );
+
+  const out: MetricSeries[] = [];
+  for (const metric of wanted) {
+    const spec = METRIC_SPEC[metric]!;
+    const byAgent = new Map<string, Map<number, number[]>>();
+    for (const s of spans) {
+      const agent = s.agent || "unknown";
+      const t = Math.floor(s.ts / stepMs) * stepMs;
+      if (!byAgent.has(agent)) byAgent.set(agent, new Map());
+      const series = byAgent.get(agent)!;
+      if (!series.has(t)) series.set(t, []);
+      series.get(t)!.push(spec.value(s));
+    }
+    for (const [agent, series] of byAgent) {
+      const points: MetricPoint[] = [...series.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([t, vals]) => ({
+          t,
+          sum: vals.reduce((a, b) => a + b, 0),
+          avg: vals.reduce((a, b) => a + b, 0) / vals.length,
+          max: Math.max(...vals),
+          n: vals.length,
+        }));
+      if (!points.length) continue;
+      out.push({
+        metric,
+        type: spec.type,
+        unit: spec.unit,
+        temporality: "Delta",
+        labels: { "gen_ai.agent.id": agent },
+        fingerprint: `${metric}:${agent}`,
+        prefer: spec.prefer,
+        points,
+      });
     }
   }
   return out;
 }
-
-/**
- * Build the SQL for a metric series query — split out so the join, the project
- * filter and the bucketing are testable without a live ClickHouse.
- *
- * Note what the inner subquery does *not* do: filter time_series_v4 by
- * unix_milli. That column is floored to the hour there, so a naive
- * `>= sinceMs` would drop the metadata row for a series whose hour started
- * before the window and take the whole series with it. The metric_name +
- * project filters already narrow it to a handful of fingerprints, so the time
- * filter belongs on the samples side only, where it is exact.
- *
- * The GROUP BY inside the subquery collapses the one-row-per-hour duplication;
- * without it the join would multiply every sample by the number of hours the
- * series has existed.
- */
-export function buildMetricQuery(names: string[], opts: MetricQueryOpts): string {
-  const proj = chLiteral(opts.project ?? "");
-  const step = Math.max(1000, Math.round(opts.stepMs ?? 60_000));
-  const since = Math.max(0, Math.round(opts.sinceMs ?? Date.now() - 6 * 3600_000));
-  const list = expandMetricNames(names)
-    .map((n) => `'${n}'`)
-    .join(", ");
-
-  return `SELECT
-      any(s.s_metric) AS metric, any(s.s_type) AS type, any(s.s_unit) AS unit,
-      any(s.s_temporality) AS temporality, any(s.s_attrs) AS labels,
-      toString(sm.fingerprint) AS fingerprint,
-      intDiv(sm.unix_milli, ${step}) * ${step} AS t,
-      sum(sm.value) AS vsum, avg(sm.value) AS vavg, max(sm.value) AS vmax, count() AS n
-    FROM ${METRIC_SAMPLES_TABLE} AS sm
-    INNER JOIN (
-      SELECT fingerprint,
-        any(metric_name) AS s_metric, any(type) AS s_type, any(unit) AS s_unit,
-        any(temporality) AS s_temporality, any(attrs) AS s_attrs
-      FROM ${METRIC_SERIES_TABLE}
-      WHERE metric_name IN (${list})
-        AND resource_attrs['service.name'] = 'notch'
-        AND attrs['notch.project'] = '${proj}'
-      GROUP BY fingerprint
-    ) AS s ON s.fingerprint = sm.fingerprint
-    WHERE sm.metric_name IN (${list}) AND sm.unix_milli >= ${since}
-    GROUP BY fingerprint, t
-    ORDER BY metric ASC, fingerprint ASC, t ASC`;
-}
-
-/** Fold the flat (series, bucket) rows into one entry per series, points ordered. */
-export function rowsToSeries(rows: Record<string, unknown>[]): MetricSeries[] {
-  const byFp = new Map<string, MetricSeries>();
-  for (const r of rows) {
-    const fp = String(r.fingerprint ?? "");
-    const type = String(r.type ?? "");
-    let s = byFp.get(fp);
-    if (!s) {
-      s = {
-        metric: String(r.metric ?? ""),
-        type,
-        unit: String(r.unit ?? ""),
-        temporality: String(r.temporality ?? ""),
-        labels: cleanLabels(r.labels),
-        fingerprint: fp,
-        prefer: type === "Gauge" ? "avg" : "sum",
-        points: [],
-      };
-      byFp.set(fp, s);
-    }
-    s.points.push({
-      t: Number(r.t ?? 0),
-      sum: Number(r.vsum ?? 0),
-      avg: Number(r.vavg ?? 0),
-      max: Number(r.vmax ?? 0),
-      n: Number(r.n ?? 0),
-    });
-  }
-  for (const s of byFp.values()) s.points.sort((a, b) => a.t - b.t);
-  return [...byFp.values()].sort((a, b) => a.metric.localeCompare(b.metric) || a.fingerprint.localeCompare(b.fingerprint));
-}
-
-/**
- * Read named metrics back for one project, one entry per distinct label set.
- * Throws if ClickHouse is unreachable — like logs, there is no local substitute
- * for a metric SigNoz never received, and the route reports that honestly.
- */
-export async function fetchMetricSeries(names: string[], opts: MetricQueryOpts): Promise<MetricSeries[]> {
-  if (!expandMetricNames(names).length) return [];
-  return rowsToSeries(await chQuery(buildMetricQuery(names, opts)));
-}
-
-/** The metrics Notch actually emits — the default set when a caller names none. */
-export const NOTCH_METRIC_NAMES = [
-  "notch.turns",
-  "notch.handoffs",
-  "notch.cost.usd",
-  "notch.agents.active",
-  "gen_ai.client.token.usage",
-  "gen_ai.client.operation.duration",
-];
 
 export type Health = {
   score: number; // 0–100

@@ -2,14 +2,13 @@
 
 [![ci](https://github.com/nickthelegend/notch/actions/workflows/ci.yml/badge.svg)](https://github.com/nickthelegend/notch/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![SigNoz skill PR](https://img.shields.io/badge/SigNoz%2Fagent--skills-PR%20%2376-orange)](https://github.com/SigNoz/agent-skills/pull/76)
 
 **Mission control for a fleet of coding agents — with the whole fleet observable in
-[SigNoz](https://signoz.io).** Every coding agent — Claude Code, Codex, OpenCode, Grok,
+one graph.** Every coding agent — Claude Code, Codex, OpenCode, Grok,
 Antigravity, Kiro — keeps its own brain in its own files and runs blind to the others.
 Notch makes them **one brain** with **one baton**: connect your agents and their memory,
 decisions, and context become a single shared thread that flows from one agent to the next —
-and **every turn, handoff, route, and memory fold is traced to SigNoz** as OpenTelemetry
+and **every turn, handoff, route, and memory fold is recorded in HydraDB** as OpenTelemetry
 `gen_ai` spans, so you can watch the fleet, its cost, and its tokens in real time.
 
 Today that means **Claude Code, Codex, OpenCode, Grok Code and the Antigravity CLI**
@@ -23,8 +22,8 @@ Notch is **not** another IDE. It's the thin layer *between* your agents — the 
 memory, and **observability** they don't have on their own. It grew out of an
 earlier orchestrator called *loom* — which is still the name of the CLI binary and
 the `.loom/` directory — and adds a purple-dark identity, an in-app
-**[Observatory](#observability--signoz)** (live canvas, handoff graph, event timeline, fleet
-metrics), and end-to-end SigNoz instrumentation built on top.
+**[Observatory](#observability--hydradb)** (live canvas, handoff graph, event timeline, fleet
+metrics), and end-to-end instrumentation built on top.
 
 ```
    CLAUDE.md      AGENTS.md      .antigravity/     ← each ADE's native memory
@@ -46,12 +45,129 @@ metrics), and end-to-end SigNoz instrumentation built on top.
   <em>One thread over every agent — projects and chats on the left, the shared conversation in the middle, the Explorer on the right, and a composer you switch agents from without leaving the box.</em>
 </p>
 
-## Observability — SigNoz
+## HydraDB Edition — the log, the baton and the brain live in a graph
+
+> **Where this came from.** Notch was built for an earlier hackathon, and that
+> version is real and still here: the fleet, the adapters, the Observatory, the
+> OpenTelemetry instrumentation. **This submission is a ground-up
+> re-architecture of its persistence, reasoning and telemetry layers onto
+> [HydraDB](https://github.com/hydra-db/hydradb)**, built during the Hack Hydra
+> window. What changed is the bottom of the stack, and it changed what the
+> product can answer.
+
+Notch used to keep its event log in a per-project SQLite file and its baton in
+`.loom/state.json`. Both worked. Both also decided what the product could never
+ask: a lock in a file cannot detect that two agents believe they hold it, and
+"why did this actually fail" is not a query you can write against a table whose
+join depth you don't know until you've walked it.
+
+### What moved, and what didn't
+
+| | Before (SQLite + JSON) | Now (HydraDB) | Touches |
+|---|---|---|---|
+| **Event log** | `node:sqlite` file per project, JSONL fallback | `(:Event)` nodes chained by `[:NEXT]` under a `(:Project)`, durable on object storage. `.loom/` holds no log at all — delete it and the thread survives | every view; Replay, Timeline |
+| **Brain** | memory units folded from the log, recalled by entities ∪ BM25 | the same units, plus `ABOUT` / `CAUSED_BY` / `CONSTRAINED_BY` / `SUPERSEDES` edges and a **third recall channel**: a bounded traversal from what the turn is touching | Brain tab, handoff briefs, Decisions |
+| **Baton** | read `state.json`, compare, write it back — a read-modify-write with no interlock | an **election** over HydraDB's commit order, with writer epochs and recorded **fencing** of stale writers | Provenance, Self-heal, every turn |
+| **Telemetry** | OTel `gen_ai` spans shipped over OTLP to a second store, read back over SQL | the **same fold**, written as `(:Span)` and `(:LogLine)` one hop from the event that produced them; metrics derived from those spans on read | Metrics, Logs, Trace Waterfall, Self-heal, Provenance |
+
+The telemetry move is the one that surprised us. Two stores meant a window where
+the dashboard and the event log disagreed, a Logs view that had to carry "the
+query store isn't answering" as a first-class state, and a second stack to
+provision before a demo. One store makes all three disappear: a span sits one
+hop from the event that produced it and the memory that turn learned, so the
+question "what did this agent know when it failed" is a traversal rather than a
+correlation across two systems.
+
+### How HydraDB is used
+
+Four of its properties do actual load-bearing work here.
+
+**1. Commit order → the baton.** Every canonical mutation for a cell serialises
+through one writer and returns the storage sequence it committed at. Those
+sequences are a total order, and the client is handed its position in it. Taking
+the baton is therefore an *election*: append a `(:BatonClaim)` for the next
+epoch, keep the sequence, and the lowest sequence at that epoch wins. A ballot
+that arrives later can never draw a lower sequence, so a winner cannot be
+overtaken once anyone has seen it — every client computes the same holder
+without talking to the others. Eight concurrent claimants elect exactly one;
+[`test/hydra-baton-race.test.ts`](test/hydra-baton-race.test.ts) runs that race
+against a real node.
+
+> **What was tried first, and why it isn't here.** The obvious
+> compare-and-swap — `MATCH (b) WHERE b.epoch = $n SET b.epoch = $n+1` — is
+> **not safe**. The predicate is evaluated against a pinned snapshot with no
+> write-write conflict detection, so several writers match and several "win".
+> Measured, not assumed: eight contenders produced two to four winners across
+> repeated runs. The election exists because of that finding.
+
+**2. Writer epochs → fencing.** The winner of epoch N is the writer at epoch N.
+A write carrying an epoch older than the holder's current *tenure* is refused
+and recorded as a `(:FencingViolation)`. The old mutex had no epoch, so there
+was nothing to be stale about and the write simply landed. The Provenance tab
+has a **fence drill** button that performs a real stale-epoch write through the
+same gate every agent action goes through — because a guarantee nobody can watch
+fail is one nobody has reason to believe.
+
+**3. Bounded traversal → recall and causality.** `algo.MSpaths` and
+`algo.SSpaths` answer two questions that were previously out of reach:
+
+- *"which memories are about what I am touching"* — a memory can matter without
+  sharing a single word with your prompt. A failure recorded weeks ago
+  (*"a signalled subprocess never reports completion"*) is two hops from
+  `src/daemon/runtime.ts` because it was `CAUSED_BY` a decision that is `ABOUT`
+  that file. No lexical scoring reaches it; one traversal does.
+- *"why did this actually fail"* — `Failure -[:CAUSED_BY]-> Decision
+  -[:CONSTRAINED_BY]-> Constraint`, walked in one bounded query, with the
+  evidence that justified each edge.
+
+**4. Causal vs strong reads → an honest audit mode.** Routine reads are
+`causal`. Baton elections and Replay's **verify** toggle pay for `strong`, which
+refreshes the reader from object storage before pinning the snapshot. The
+distinction is surfaced rather than hidden, because a verification claim is only
+worth making if the read actually went to the store.
+
+### What this would lose without HydraDB
+
+Not "it would be slower" — these are capabilities, and each maps to a file:
+
+- **Safe concurrent baton acquisition.** [`src/core/baton.ts`](src/core/baton.ts).
+  Back to a read-modify-write on a JSON file whose correctness came from the
+  daemon being single-threaded, not from the lock.
+- **Any detection of a stale writer.** No epoch, no `FencingViolation`, no
+  Self-heal alert for it, nothing to drill.
+- **Connected recall.** [`src/hydra/brain-graph.ts`](src/hydra/brain-graph.ts).
+  Recall collapses back to entities ∪ BM25 — the memory that matters most is
+  usually the one that shares no words with the query.
+- **Multi-hop causal chains.** The Decision Explorer goes back to listing
+  decisions instead of explaining them.
+- **Cross-run memory.** `Entity` nodes are shared across projects while memory
+  units are not, so a new project inherits what an old one learned about the
+  same file. A per-project SQLite file cannot express that at all — its rows
+  died with the file they were in.
+- **A deletable `.loom/`.** The thread lived beside the checkout; now it lives
+  in the graph.
+
+### Try it
+
+```bash
+./scripts/hydra-up.sh          # starts a node and round-trips a write before claiming success
+loom graph                     # what's in the graph
+loom graph baton               # the election ledger: every epoch, ballot and sequence
+loom graph fence-drill         # a real stale-epoch write, refused and recorded
+loom graph recall "src/daemon/runtime.ts is misbehaving"
+loom graph why <memory-id>     # walk the causal chain back from a failure
+```
+
+Everything above is also in the app, under **Observatory → Provenance**, with
+the Cypher for each panel shown next to its result.
+
+## Observability — HydraDB
 
 A fleet of agents you can't see is a fleet you can't trust. Notch instruments the whole
-orchestration and ships it to **SigNoz** using the OpenTelemetry
-[GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) — plus an
-in-app **Observatory** so you never have to leave the app to know what the fleet is doing.
+orchestration using the OpenTelemetry
+[GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) and records
+it into the **same graph** as the events, the baton and the brain — plus an in-app
+**Observatory** so you never have to leave the app to know what the fleet is doing.
 
 ```mermaid
 flowchart LR
@@ -62,34 +178,34 @@ flowchart LR
     GK[Grok]
   end
   Fleet -->|turns · handoffs · routes · memory| D["Notch daemon<br/>baton · routes · brain"]
-  D -->|"OTLP/HTTP · gen_ai.* spans"| SN[("SigNoz<br/>ClickHouse")]
-  SN -->|read spans back| OB{{"Observatory<br/>Triage · Health · Burn · Replay · Waterfall"}}
-  SN -->|alert fires| WH["/api/webhooks/signoz"]
-  WH -->|"quarantine → failover → recheck → retry"| D
+  D -->|"gen_ai.* spans · log lines · events"| HY[("HydraDB<br/>one graph")]
+  HY -->|read spans back| OB{{"Observatory<br/>Triage · Health · Burn · Replay · Waterfall"}}
+  HY -->|"error spans · fencing violations"| WD["self-heal watcher"]
+  WD -->|"quarantine → failover → recheck → retry"| D
   OB -.->|act on it| D
 ```
 
-The write path is the top arrow (fleet → daemon → SigNoz). The two bottom arrows are the
+The write path is the top arrow (fleet → daemon → HydraDB). The two bottom arrows are the
 **read-back** — Notch querying its own spans to triage/score/self-heal the fleet.
 
 ### The Observatory
 
-A tab next to the Brain — **eight live views** over the running project, all backed by real
-data (SigNoz spans / event log, no mocks). A persistent vitals strip (active agents, baton
-holder, spend, turns, tokens) sits above them, **View in SigNoz** jumps to the traces, and
-**Ask Noz** answers questions about the fleet from the same telemetry these views render.
+A tab next to the Brain — **nine live views** over the running project, all backed by real
+data (HydraDB spans / event log, no mocks). A persistent vitals strip (active agents, baton
+holder, spend, turns, tokens) sits above them, and **Ask Noz** answers questions about the
+fleet from the same telemetry these views render.
 
 Each view is named for the question it answers, and says so in a line under the tabs.
 
 | View | What it shows | Source |
 |---|---|---|
-| **Metrics** | the dashboard: totals, then what the spend is *made of* (token and turn donuts per agent/model), then behaviour over time (turn duration, token usage, spend), then each agent's 0–100 **Health** with **⚠ Triage**, then the 24h burn with per-agent USD/day **budgets** | `/metrics` + spans + ClickHouse |
+| **Metrics** | the dashboard: totals, then what the spend is *made of* (token and turn donuts per agent/model), then behaviour over time (turn duration, token usage, spend), then each agent's 0–100 **Health** with **⚠ Triage**, then the 24h burn with per-agent USD/day **budgets** | `/metrics` + spans |
 | **Live fleet** | *right now* — who is running, who is idle, who holds the **baton**, and an edge that marches while an agent is reading and writing the one shared brain (draggable) | live state |
 | **Handoffs** | *what already happened* — the baton's actual route between agents, each edge labelled with how many times it was taken, thickest where it was walked most (draggable) | event log |
-| **Self-heal** | what SigNoz told Notch, and what Notch *did about it* — every alert episode as a row: which agent was taken out of rotation, when, who the baton moved to, and whether it was handed back. This is the half SigNoz cannot show you: SigNoz knows the alert fired, only Notch knows the fleet reacted. A **Lift** button releases a paused agent by hand | alert webhook + event log |
+| **Self-heal** | what the watcher saw, and what Notch *did about it* — every episode as a row: which agent was taken out of rotation, when, who the baton moved to, and whether it was handed back. A count of error spans can tell you an agent is failing; only this tells you the fleet reacted. A **Lift** button releases a paused agent by hand | error spans + fencing violations + event log |
 | **Timeline** | the chronological trace — turns, handoffs, routes, memory folds, errors, 💡 **decisions**, budget pauses, MCP attach, and the **self-heal** intervention/recovery lines | event log |
 | **Decisions** | a filterable **Decision Explorer** — every agent choice as a card, with reason, alternatives, files, and how each decision was extracted (a measured confidence and a pattern match are not shown as the same claim) | decisions store |
-| **Logs** | the fleet's structured logs read back **out of SigNoz** — every message, tool call, file edit and error at the severity it was recorded, filterable by severity and text. A line belonging to a turn carries its **trace**, so you can jump from a log line to the span that produced it. One of the views with **no local fallback** (the Metric Explorer and the burn series have none either): if ClickHouse isn't answering it says so, rather than showing an empty list that looks like a quiet run | SigNoz / ClickHouse |
+| **Logs** | the fleet's structured logs read back **out of HydraDB** — every message, tool call, file edit and error at the severity it was recorded, filterable by severity and text. A line belonging to a turn carries its **trace**, so you can jump from a log line to the span that produced it. One of the views with **no local fallback** (the Metric Explorer and the burn series have none either): if the graph isn't answering it says so, rather than showing an empty list that looks like a quiet run | `(:LogLine)` |
 | **Replay** | scrub the whole run: at any moment, who held the baton, every agent's state, decisions so far, the thread — *and* the turn that was running then, with its model, duration, tokens, cost and trace. Play / step controls | folded event log + spans |
 
 **Decision capture.** After each turn, Notch mines the agent's prose into structured decisions
@@ -107,24 +223,26 @@ trusted:
 
 They power the Decisions Explorer, the Timeline's 💡 lines, and the Time-Travel snapshots.
 
-Reading the spans **back out of SigNoz** is the agent-native part — Metrics, Logs, burn, the
+Reading the spans **back out of the graph** is the agent-native part — Metrics, Logs, burn, the
 Metric Explorer and Replay all do it. Three go further than rendering what they read:
 
 - **Agent Health Score (0–100).** A per-agent badge from a pure, unit-tested formula over the
   agent's own spans: four penalty buckets (error rate ≤40, latency ≤25, token bloat ≤20, recent
   error ≤15) → healthy / degraded / unhealthy, with a click-through breakdown.
-- **Agent Self-Triage ("why did I fail?").** Pulls the agent's own `gen_ai.*` spans from SigNoz
-  (local-log fallback), finds the most recent failure and the **upstream handoff** that led into
-  it, and root-causes it — with LLM prose when an `ANTHROPIC_API_KEY` or signed-in `claude` CLI
-  is present, deterministic heuristic otherwise. Also shipped as a custom
-  [SigNoz skill (PR #76)](https://github.com/SigNoz/agent-skills/pull/76).
-- **Trace Waterfall + deep link.** Click a turn → its trace's spans as time-positioned bars,
-  with **View full trace in SigNoz ↗**.
+- **Agent Self-Triage ("why did I fail?").** Pulls the agent's own `gen_ai.*` spans out of
+  HydraDB (local-log fallback for a window that predates telemetry), finds the most recent
+  failure and the **upstream handoff** that led into it, and root-causes it — with LLM prose
+  when an `ANTHROPIC_API_KEY` or signed-in `claude` CLI is present, deterministic heuristic
+  otherwise. Also shipped as a bundled skill (`skills/hydra-agent-triage`) so an agent can run
+  the same procedure itself.
+- **Trace Waterfall.** Click a turn → its trace's spans as time-positioned bars, with the log
+  lines that were emitted inside them.
 
 ### Screenshots
 
-**Metrics — the fleet with per-agent Health scores** (claude-code & opencode `100`, codex `63`
-after it errored) and a **⚠ Triage** button each:
+**Metrics — the fleet with per-agent Health scores** (the two healthy agents at `100`, the one
+that errored at `67`) and a **⚠ Triage** button each, over the burn rate and the per-agent
+daily budgets:
 
 ![Observatory Metrics — totals, per-agent tokens, and health scores, all from real turns](docs/screenshots/observatory-metrics.png)
 
@@ -133,26 +251,26 @@ between the brain and whoever holds it:
 
 ![Observatory Live fleet — six agents connected to the one shared brain, baton on claude-code](docs/screenshots/observatory-livefleet.png)
 
-**Self-heal** — what SigNoz told Notch and what Notch *did about it*. The top row is one
-complete episode: a `AgentErrorRateHigh` alert fired against the agent holding the baton, the
-baton moved to `claude-code`, the alert resolved 17 seconds later, and the baton was handed
-back — SigNoz knew the alert fired, only Notch knows the fleet reacted:
+**Self-heal** — what the watcher saw and what Notch *did about it*. Each row is one complete
+episode: the agent tripped `3 error(s) in 10m` while holding the baton, the baton moved to
+another agent, the errors stopped, and the baton was handed back `via recheck` — the span
+count knew the agent was failing, only Notch knows the fleet reacted:
 
-![Observatory Self-heal — alert episodes with the agent quarantined, the failover, and the recovery](docs/screenshots/observatory-selfheal.png)
+![Observatory Self-heal — episodes with the agent quarantined, the failover, and the recovery](docs/screenshots/observatory-selfheal.png)
 
-**Logs** — the fleet's structured logs read back out of SigNoz, each line carrying the trace
+**Logs** — the fleet's structured logs read back out of HydraDB, each line carrying the trace
 of the turn that produced it:
 
-![Observatory Logs — severity chips, text filter, and per-turn trace ids read from SigNoz](docs/screenshots/observatory-logs.png)
+![Observatory Logs — severity chips, text filter, and per-turn trace ids read from the graph](docs/screenshots/observatory-logs.png)
 
-**Metric Explorer** — every series Notch exports, queried back out of SigNoz over a 1h/6h/24h/7d
+**Metric Explorer** — every series Notch derives, queried back over a 1h/6h/24h/7d
 window, with its instrument type, unit and labels. A series with one datapoint says "single
 point" rather than drawing a line through nothing:
 
-![Metric Explorer — 13 series read back from SigNoz with instrument type, unit and labels](docs/screenshots/observatory-metric-explorer.png)
+![Metric Explorer — series read back from HydraDB with instrument type, unit and labels](docs/screenshots/observatory-metric-explorer.png)
 
-**Self-Triage — an agent root-caused from its own SigNoz spans**, and the **Replay → Trace
-Waterfall** with the SigNoz deep link:
+**Self-Triage — an agent root-caused from its own spans**, and the **Replay → Trace
+Waterfall**:
 
 | Triage | Trace Waterfall |
 |---|---|
@@ -165,14 +283,16 @@ Waterfall** with the SigNoz deep link:
 |---|---|
 | ![Burn rate](docs/screenshots/burn.png) | ![Agents ready](docs/screenshots/agents-setup.png) |
 
-**Decision Explorer** — every agent choice as a card with reason, alternatives, and confidence:
+**Provenance** — the questions only the graph can answer: the live HydraDB strip, the graph's
+own counts, and the **baton ledger** — every election claim with the storage sequence it
+committed at, winner first. The `Fenced 1` is a real stale-epoch write, refused:
 
-![Decision Explorer](docs/screenshots/kairo-decisions.png)
+![Provenance — the HydraDB strip, graph counts, and the baton ledger with its ballots](docs/screenshots/graph-provenance.png)
 
 **Time-Travel Replay** — scrub any frame of the run and see the exact fleet state, baton,
-decisions, memory, and thread at that instant:
+decisions, memory, and thread at that instant, with the turn that was running:
 
-![Time-Travel Replay](docs/screenshots/kairo-time-travel.png)
+![Time-Travel Replay](docs/screenshots/replay.png)
 
 **Dense KAIRO-style metrics grid** — agents, files, tokens, cost, critical path, confidence,
 retries, with sparklines and per-agent token bars:
@@ -184,25 +304,32 @@ and a smart **skill suggestion** banner that surfaces a relevant skill as you ty
 
 ![Composer with skill suggestion + Skills panel](docs/screenshots/composer-skills.png)
 
-### Self-heal: SigNoz alert → intervention → recovery
+### Self-heal: a failing agent takes itself out of rotation
 
-Notch closes the loop the other way too. A SigNoz **alert** (error rate, latency, cost budget)
-posts to `POST /api/webhooks/signoz`:
+Notch closes the loop the other way too. A watcher evaluates every project on a timer and
+reads the evidence it already wrote:
 
-- **firing** → the failing agent is **quarantined** and the baton **fails over** to a fallback;
-- then a background **recheck loop** (every `NOTCH_HEAL_RECHECK_MS`, default 60s) asks SigNoz
-  whether the agent has stopped erroring and, if so, **hands the baton back** — retrying up to
-  `NOTCH_HEAL_MAX_RETRIES` (default 3) times;
-- a **resolved** alert is the fast lane for the same restoration.
+- **3 error spans in 10 minutes, or a single fenced write** → the agent is **quarantined**
+  and the baton **fails over** to a fallback. One fenced write is enough on its own: a stale
+  writer is by definition an agent that has lost track of whether it may act.
+- then a background **recheck loop** (every `NOTCH_HEAL_RECHECK_MS`, default 60s) asks the
+  graph whether the agent has errored *since it was paused* and, if not, **hands the baton
+  back** — retrying up to `NOTCH_HEAL_MAX_RETRIES` (default 3) times before leaving it for a
+  human;
+- a paused agent is genuinely refused: `POST /handoff` answers **409 `agent_quarantined`**,
+  so the pause is enforced rather than merely recorded. `DELETE /quarantine/:agentId` is the
+  operator override.
 
-Metric breach → intervention → recovery → retry, all visible as green/violet lines in the
-Timeline.
+Failure → intervention → recovery → retry, all visible as green/violet lines in the Timeline
+and as episodes in **Self-heal**. `POST /heal/evaluate` runs one pass on demand; `GET /heal`
+returns each agent's error and fencing counts alongside the thresholds they were judged
+against.
 
-### SigNoz export
+### What gets recorded
 
-The daemon is already a stream of events; Notch folds the notable ones into OTel spans over a
-single central hook and exports them **OTLP/HTTP (JSON)** — no OpenTelemetry SDK dependency,
-just `fetch`, batched and best-effort (an unreachable collector never touches the agent loop).
+The daemon is already a stream of events; Notch folds the notable ones into OTel-shaped spans
+over a single central hook and writes them into HydraDB, batched (64 rows or 400ms) and
+chained. A write that fails is requeued and logged — never dropped silently.
 
 | Event | Span | Key attributes |
 |---|---|---|
@@ -211,9 +338,10 @@ just `fetch`, batched and best-effort (an unreachable collector never touches th
 | baton handoff | `notch.baton.handoff` | `notch.handoff.from` / `.to` |
 | route lifecycle | `notch.route.<phase>` | `notch.route.id` |
 | memory fold | `notch.memory.<op>` | `notch.memory.kind` / `.scope` |
-| error | `notch.error` (ERROR status) | message |
+| error | `notch.error` (status code 2) | message |
 
-Every span carries `service.name = notch`, plus `notch.project` and `notch.chat`.
+Every span carries the project it belongs to as an edge, plus its trace — one trace per agent
+turn, so a turn is one span tree rather than a scatter of orphans.
 
 ### LLM cost tracer
 
@@ -224,40 +352,36 @@ from what each CLI reports, and reports nothing where a CLI reports nothing. **C
 zero rather than being back-derived from a price table we'd have to keep current. The
 **Antigravity CLI** hands over neither, so its turns carry a model and a duration and no
 numbers. It's exposed at
-`GET /api/projects/:id/metrics` and shipped to SigNoz as the `gen_ai.usage.*` span attributes.
+`GET /api/projects/:id/metrics` and recorded as the `gen_ai.usage.*` span attributes.
 
-### Point it at your SigNoz, or turn it off
-
-Self-hosted works out of the box (exports to `http://localhost:4318`). For another collector or
-SigNoz Cloud, set `NOTCH_OTEL_ENDPOINT` (and `SIGNOZ_INGESTION_KEY`). Opt out entirely with
-`DO_NOT_TRACK=1`, `NOTCH_TELEMETRY_DISABLED=1`, or `NOTCH_OTEL=0`. A ready-to-import dashboard
-ships at [`docs/signoz-dashboard.json`](docs/signoz-dashboard.json); full details in
-[`docs/observability.md`](docs/observability.md).
-
-**Know which source you are actually reading.** Notch degrades honestly when SigNoz is
-unreachable: `/insights/spans` reports `from: "local-log"`, trace ids come back empty, and the
-Replay tab says *"this turn came from the local event log"* instead of offering a trace
-waterfall. That is real data — it is Notch's own event log, the same turns and token counts the
-CLIs reported — but it is **not** SigNoz, and it is easy to run that way for days without
-noticing. To bring the local stack up and check:
+### Turn it off
 
 ```bash
-./scripts/signoz-up.sh                              # zookeeper → clickhouse → collector → UI
-NOTCH_SIGNOZ_URL=http://localhost:8085 loom up      # so deep links reach that UI
-
-curl -s localhost:7420/api/projects/<id>/insights/spans | jq .from   # must say "signoz"
+export NOTCH_TELEMETRY_DISABLED=1
 ```
 
-Start order matters and the script enforces it: ClickHouse needs its keeper first, and a
-collector that booted while ClickHouse was down keeps failing its exporter until it is bounced —
-which looks exactly like "ingestion is broken".
+That is the whole switch. It is not a degradation path — with it unset, telemetry always
+lands, because the store it lands in is the one the daemon already cannot run without. Full
+details in [`docs/observability.md`](docs/observability.md).
 
-The exporter and the event→span mapping are covered by unit **and** integration tests
-(a stand-in OTLP collector receives real spans from live daemon turns):
+**Know which source you are actually reading.** A window of the log that predates telemetry
+being switched on still renders: `/insights/spans` reports `from: "local-log"`, trace ids come
+back empty, and the Replay tab says *"this turn came from the local event log"* instead of
+offering a trace waterfall. That is real data — Notch's own event log, the same turns and
+token counts the CLIs reported — but it is a different claim, and the UI makes it.
 
 ```bash
-npm test -- observability          # config, mapper, OTLP payload shape
-npm test -- observability-export   # end-to-end: daemon turns → collector spans
+./scripts/hydra-up.sh                                              # bring the node up
+curl -s localhost:7420/api/projects/<id>/insights/spans | jq .from  # must say "hydradb"
+```
+
+The fold, the store and the read-back are covered by unit **and** integration tests, all
+against a real node:
+
+```bash
+npm test -- observability          # the event → span/metric/log mappers
+npm test -- observability-export   # end-to-end: daemon turns → spans in HydraDB
+npm test -- self-heal              # error spans and fenced writes → quarantine
 ```
 
 ## Codex & GPT‑5.6
@@ -327,10 +451,10 @@ agents' **memory together** so work *continues* across them instead of forking.
 
 ## Install
 
-Requires **Node ≥ 22.5** — `package.json` pins it because the event log's default store is
-the built-in `node:sqlite`. That's the supported floor, not an absolute wall: on a runtime
-without that module the log falls back to a portable JSONL store on its own (Electron's
-bundled Node is exactly that case, which is why `LOOM_NODE` exists).
+Requires **Node ≥ 22.5** (`package.json` pins it) and **one HydraDB node** — the log, the
+baton, the brain and the telemetry all live in it, so `./scripts/hydra-up.sh` is part of
+setup rather than an optional extra. The Node floor is for the runtime itself and for the
+optional `node:sqlite` store; the default store is HydraDB and writes nothing to disk.
 
 ```bash
 npm install -g notch          # → `notch` on your PATH
@@ -484,18 +608,18 @@ would look like a recommendation it hadn't earned. Rename them to the jobs you
 actually have (the rail's agent picker, or `loom route`), and see
 [Routes](#routes) before expecting `loom route ship` to exist.
 
-**For the Observatory to show you anything, SigNoz has to be running.** Notch
-works without it — the daemon, the baton, the shared brain and the thread are all
-local and need nothing — but Metrics, Logs, Self-heal and the trace links all read
-back out of SigNoz, and without it they say so rather than showing you zeros:
+**Everything needs one HydraDB node — including the Observatory.** The log, the
+baton, the brain and the telemetry all live in it, so there is no second stack to
+bring up for observability:
 
 ```bash
-./scripts/signoz-up.sh          # brings the stack up in dependency order
-# UI on http://localhost:8085 · OTLP on :4318
+./scripts/hydra-up.sh           # starts the node and round-trips a real write
+./scripts/hydra-up.sh --fresh   # …or start over on an empty store (asks first)
+# HTTP API on http://127.0.0.1:8443
 ```
 
-Notch ships to `http://localhost:4318` by default, so once the stack is up the
-next turn you run is already traced. `NOTCH_TELEMETRY_DISABLED=1` turns it off.
+Once it is up the next turn you run is already recorded.
+`NOTCH_TELEMETRY_DISABLED=1` turns the span and log recording off.
 
 ```
   ██      ▄████▄  ▄████▄  ▄█▄▄█▄
@@ -738,9 +862,11 @@ and files what's worth keeping as typed memory *units* — a constraint, a decis
 convention, a fact, a failure — reconciled on write (add / update / forget, never a
 growing blob), the approach [mem0](https://github.com/mem0ai/mem0) pioneered, adapted to
 Notch's event log. Every unit's evidence is verified against the turn before it's kept, so
-the brain doesn't remember things that were never said. Retrieval is hybrid too — exact
-entity matches (file paths, symbols, error codes) unioned with BM25 over the text, no
-embedding model to ship — with failures and constraints biased to the top of the brief,
+the brain doesn't remember things that were never said. Retrieval has **three** channels, unioned: exact
+entity matches (file paths, symbols, error codes), BM25 over the text, and — the one the
+graph adds — a bounded traversal from what the turn is touching, so a memory that shares
+no words with your query still arrives when it is one `ABOUT` hop from the same file. No
+embedding model to ship. Failures and constraints are biased to the top of the brief,
 because getting burned twice is worse than missing a detail.
 
 The brain is the **project's**, not each agent's: a fact one agent learns is scoped to the
@@ -758,9 +884,12 @@ the extractor off per project in Settings.
 
 ## How it works
 
-- **Event log** (`.loom/log.db`, SQLite via `node:sqlite`, JSONL fallback) — every
-  message, tool call, file edit, decision, and handoff, appended in order. The log *is*
-  the project's memory; everything else is a view of it.
+- **Event log** — `(:Event)` nodes chained by `[:NEXT]` under a `(:Project)` in HydraDB:
+  every message, tool call, file edit, decision, and handoff, appended in order. The log
+  *is* the project's memory; everything else is a view of it. `.loom/` holds no log at
+  all — wipe the directory and the thread survives, because the graph is the truth.
+  (`LOOM_STORE=sqlite` or `jsonl` selects the older per-project file stores instead;
+  neither is a fallback — see [Environment](#environment).)
 - **Projection** — on handoff, Notch distills the log into
   `.loom/memory/<agent>.md` (persistent, namespaced) and arms a short one-shot briefing
   injected with the target's next turn (system-prompt append for Claude Code, delimited
@@ -771,7 +900,9 @@ the extractor off per project in Settings.
     `"projection": { "mode": "llm", "model": "haiku" }`. Any failure or timeout falls
     back to the template — a broken Claude never blocks a handoff. Bridges always get
     template views (no N×LLM waste per hop).
-- **Baton** — persisted per project (`.loom/state.json`). Messages route to the holder;
+- **Baton** — an election over HydraDB's commit order, with writer epochs and recorded
+  fencing (`.loom/state.json` is written too, but only as a cache for surfaces that read
+  it directly; delete it and the baton is unaffected). Messages route to the holder;
   addressing a non-holder returns `409 not_holder` and the surface asks you to confirm a
   handoff. Ghost holders (agent removed from config) self-heal. Every handoff snapshots
   the outgoing agent's working-tree state (dirty flag + `git status`) into the log.
@@ -852,15 +983,11 @@ buzzes once, not five times). Verify with `loom clients --ping`.
   allow-listed to this machine's own addresses), and only when you ask. The tailnet is the
   trust boundary: device auth and E2E encryption come from Tailscale.
 - Every request needs a bearer token (`~/.loom/daemon.json`, mode 0600). Tokens are
-  256-bit random and compared in constant time. **One route sits deliberately in front of
-  that wall**: `POST /api/webhooks/signoz`, because Alertmanager posts to it and has no
-  Notch token to carry. It has its own door instead — `NOTCH_WEBHOOK_SECRET`, sent as
-  `?token=` or `x-notch-secret`. Be clear about what that means: with no secret set and the
-  daemon on loopback the webhook is **open to any local user**, who could quarantine an
-  agent, move the baton, and append status events the shared brain then reads. That is the
-  same trust boundary as the local admin console below, and it is the default. Bound past
-  localhost (`--host`, `--tailnet`) with no secret set, the webhook refuses with a 401 that
-  names the variable, rather than serving a stranger the fleet's steering wheel.
+  256-bit random and compared in constant time. **No route sits in front of that wall.**
+  There used to be one — an inbound alert webhook that had to be reachable by a system
+  with no Notch token — and it was the only unauthenticated way to quarantine an agent and
+  move the baton. Self-heal reads its evidence out of the graph the daemon already owns, so
+  the door closed with the feature it existed for.
 - **The local admin console.** A same-machine window bootstraps the admin token via
   `GET /api/bootstrap` — gated by *both* a loopback TCP peer *and* a loopback `Host` header
   (the second is the anti-DNS-rebinding check: a malicious page carries its own hostname,
@@ -958,9 +1085,9 @@ npm run dev       # run the CLI from source (tsx)
 | Variable | What it does |
 |---|---|
 | `LOOM_HOME` | Where the registry, daemon config, and pair tokens live. Default `~/.loom`. Point it at a temp dir to try Notch without touching real state. |
-| `LOOM_STORE` | `jsonl` forces the portable event store instead of `node:sqlite`. Notch falls back on its own if sqlite is unavailable; this makes it explicit. |
+| `LOOM_STORE` | Which event store to use. Default `hydra` — the log lives in HydraDB and `.loom/` holds no log file. `sqlite` (writes `log.db`) and `jsonl` (writes `log.jsonl`) are the older per-project stores, selectable but **not fallbacks**: nothing degrades into them, and an unreachable HydraDB throws rather than silently starting an empty log beside a full one. |
 | `LOOM_NO_PTY` | `1` forces the pipe-backed shell instead of a real pty. CI runs the suite both ways. |
-| `LOOM_NODE` | Node binary the desktop shell spawns the daemon with (Electron's own Node predates `node:sqlite`). |
+| `LOOM_NODE` | Node binary the desktop shell spawns the daemon with, when Electron's bundled Node is older than the floor. |
 | `LOOM_NO_NOTIFY` | `1` silences desktop notifications. |
 | `LOOM_NO_PUSH` | `1` silences phone push. |
 | `LOOM_ROUTE_STEP_TIMEOUT_MS` | Per-hop route timeout. Default 45 min. |
@@ -969,21 +1096,19 @@ npm run dev       # run the CLI from source (tsx)
 
 | Variable | What it does |
 |---|---|
-| `NOTCH_OTEL_ENDPOINT` / `OTEL_EXPORTER_OTLP_ENDPOINT` / `SIGNOZ_ENDPOINT` | OTLP collector base URL. Default `http://localhost:4318`. |
-| `SIGNOZ_INGESTION_KEY` / `SIGNOZ_ACCESS_TOKEN` | Sent as `signoz-access-token` for SigNoz Cloud. |
-| `NOTCH_CLICKHOUSE_URL` | ClickHouse HTTP for the read-back (triage/health/burn/replay). Default `http://localhost:8123`. |
-| `NOTCH_SIGNOZ_URL` | SigNoz **UI** base for the "View in SigNoz" / trace deep links. Default `http://localhost:8080` — **which is not where `scripts/signoz-up.sh` puts the UI.** That script publishes it on `8085`, so if you followed the quickstart, the default points at nothing and every deep link is dead. Set `NOTCH_SIGNOZ_URL=http://localhost:8085` (or `SIGNOZ_UI_PORT` when starting the stack, to match). |
-| `DO_NOT_TRACK=1` · `NOTCH_TELEMETRY_DISABLED=1` · `NOTCH_OTEL=0` | Any one opts out of all export. |
-| `NOTCH_OTEL_METRICS=0` / `NOTCH_OTEL_LOGS=0` | Drop just that signal while traces keep exporting. Both are on whenever export is on; only the literal value `0` turns one off. |
-| `NOTCH_SERVICE_NAME` | The `service.name` on every exported span, metric and log. Default `notch`. Change it and SigNoz files the fleet under a different service. |
+| `HYDRA_URL` | The node the log, baton, brain and telemetry live in. Default `http://127.0.0.1:8443`. |
+| `HYDRA_TOKEN` | Bearer token for that node. Default `local-development-token-32-bytes`. |
+| `HYDRA_GRAPH` / `HYDRA_NAMESPACE` / `HYDRA_CELL` | Which graph and cell. Defaults `default` / `default` / `cell-0`. |
+| `HYDRA_TIMEOUT_MS` | Per-request budget. Default `30000`. |
+| `NOTCH_TELEMETRY_DISABLED=1` | Stop recording spans and log lines. |
 | `ANTHROPIC_API_KEY` | Enables LLM triage prose headlessly (else the signed-in `claude` CLI, else heuristic). |
 | `NOTCH_TRIAGE_MODEL` | Override the triage model. Default `claude-haiku-4-5-20251001`. |
 | `NOTCH_TRIAGE_NO_LLM=1` | Skip both LLM paths in Self-Triage and answer from the deterministic heuristic. For tests, or an operator who wants no model in the loop. |
 | `NOTCH_DECISIONS_NO_CLI=1` | Skip the local-CLI tier of decision capture (`agy --print` / `claude -p`), leaving API-then-regex. Set it if you don't want the daemon shelling out to a model after every turn. |
-| `NOTCH_WEBHOOK_SECRET` | Shared secret for `POST /api/webhooks/signoz` (via `?token=` or `x-notch-secret`). **Optional while the daemon is on loopback, required once it binds past localhost** — without it, a non-loopback daemon answers that webhook with a 401. |
-| `NOTCH_HEAL_RECHECK_MS` | Self-heal recheck interval. Default `60000`. |
-| `NOTCH_HEAL_MAX_RETRIES` | Self-heal recheck attempts before giving up. Default `3`. |
-| `NOTCH_HEAL_DISABLED=1` | Turn off the background recheck loop (the resolved-alert fast lane still works). |
+| `NOTCH_HEAL_WATCH_MS` | How often the watcher evaluates every open project. Default `60000`, floor `5000`. |
+| `NOTCH_HEAL_RECHECK_MS` | How long a paused agent waits before being re-checked. Default `60000`. |
+| `NOTCH_HEAL_MAX_RETRIES` | Recheck attempts before the pause is left for a human. Default `3`. |
+| `NOTCH_HEAL_DISABLED=1` | Turn the self-heal watcher and its recheck loop off entirely. |
 
 Going the other way, Notch **sets `LOOM_TERMINAL=1`** inside every terminal it opens, so
 your shell profile can tell it's running in Notch's pane. (`LOOM_EXPO_PUSH_URL` and

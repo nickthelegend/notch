@@ -16,6 +16,48 @@
 > Corrections are marked **[shipped]** inline. For what exists today, start at the
 > [README](README.md).
 
+## Storage — HydraDB **[shipped]**
+
+The original design said "Suggested store: **SQLite** (one file per project
+under `.loom/`)". That shipped, ran, and has since been replaced: the event log,
+the baton and the brain are now in **HydraDB**, an object-store-native graph
+database. The decisions in the table below all held — the log is still the only
+source of truth, everything else is still a projection of it, the baton is still
+the write lock — but the *store* changed, and with it what the projections can
+be asked.
+
+| Concept | Then | Now |
+|---|---|---|
+| Event log | `node:sqlite` file, JSONL fallback | `(:Event)` chained by `[:NEXT]` under `(:Project)` |
+| Baton | `.loom/state.json`, read-compare-write | election over HydraDB's commit sequence, with writer epochs |
+| Memory | units folded from the log | the same units plus `ABOUT` / `CAUSED_BY` / `CONSTRAINED_BY` edges |
+| Recall | entities ∪ BM25 | entities ∪ BM25 ∪ **bounded traversal** |
+| `.loom/` | held the log | holds config and a cache; deletable without losing the thread |
+
+Two things are worth recording because they are not obvious from HydraDB's docs
+and both shaped the design:
+
+1. **`MATCH ... WHERE ... SET` is not a compare-and-swap.** The predicate is
+   evaluated against a pinned snapshot with no write-write conflict detection,
+   so concurrent writers all match and all apply. The baton is an election over
+   commit sequences precisely because the obvious CAS is unsafe. See the header
+   of [src/core/baton.ts](src/core/baton.ts).
+2. **A list-valued parameter is only accepted as `UNWIND` input.** So a
+   path procedure's `sourceValues` has to be spelled into the query, which is
+   why [src/hydra/client.ts](src/hydra/client.ts) carries exactly one escaping
+   function and nothing else uses string interpolation.
+
+A third, found by a test rather than by reading: **a single property value is
+capped just under 32 KiB.** Turn diffs exceed that routinely, so payloads are
+split across `(:EventChunk)` nodes and reassembled on read rather than truncated.
+
+HydraDB's own writer leases and SlateDB epoch fencing are **internal** — they
+select which `graph-node` may write a cell and are not exposed as a client lock
+API. What is exposed, and what Notch builds on, is the commit order they
+produce. Stating that plainly matters: the total order is the storage layer's
+and is real; interpreting it as a baton is Notch's, and the fencing check is
+enforced by Notch against an epoch the storage layer's order established.
+
 ## What it is
 
 Notch is a **local-first control plane for coding agents**. One daemon runs on your
@@ -91,6 +133,9 @@ serve/HTTP  headless/SDK   debug port (read-mostly)
 ```
 
 ## Data model — the event log
+
+> **[shipped]** The store below is the original proposal and is no longer what runs —
+> see [Storage](#storage--hydradb-shipped). The event *kinds* are unchanged.
 
 Per-project, append-only, ordered. Suggested store: **SQLite** (one file per project under
 `.loom/`), events as rows + JSON payloads. Event kinds (initial set):

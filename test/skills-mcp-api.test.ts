@@ -58,14 +58,14 @@ describe("skills API", () => {
 describe("MCP API", () => {
   it("returns the built-ins and persists an upserted server", async () => {
     const list = (await (await fetch(`${baseUrl}/api/projects/${projectId}/mcps`, { headers: H() })).json()) as { mcps: Array<{ name: string; url?: string }> };
-    expect(list.mcps.map((m) => m.name)).toEqual(expect.arrayContaining(["GitHub", "SigNoz", "Slack"]));
+    expect(list.mcps.map((m) => m.name)).toEqual(expect.arrayContaining(["GitHub", "Linear", "Slack"]));
 
-    const patch = await fetch(`${baseUrl}/api/projects/${projectId}/mcps`, { method: "PATCH", headers: H(), body: JSON.stringify({ mcp: { name: "SigNoz", url: "http://localhost:8000/mcp", enabledForSession: true } }) });
+    const patch = await fetch(`${baseUrl}/api/projects/${projectId}/mcps`, { method: "PATCH", headers: H(), body: JSON.stringify({ mcp: { name: "Linear", url: "http://localhost:8000/mcp", enabledForSession: true } }) });
     expect(patch.status).toBe(200);
 
     const after = (await (await fetch(`${baseUrl}/api/projects/${projectId}/mcps`, { headers: H() })).json()) as { mcps: Array<{ name: string; url?: string }> };
-    expect(after.mcps.find((m) => m.name === "SigNoz")!.url).toBe("http://localhost:8000/mcp");
-    expect(readProjectConfig(projectDir)!.mcps?.some((m) => m.name === "SigNoz" && m.url)).toBe(true);
+    expect(after.mcps.find((m) => m.name === "Linear")!.url).toBe("http://localhost:8000/mcp");
+    expect(readProjectConfig(projectDir)!.mcps?.some((m) => m.name === "Linear" && m.url)).toBe(true);
   });
 });
 

@@ -1,8 +1,16 @@
 /**
- * Append-only per-project event log — Loom's source of truth.
+ * Append-only per-project event log — Notch's source of truth.
  *
- * Primary store: node:sqlite (built into Node >= 22.5, zero native deps).
- * Fallback store: JSONL (if node:sqlite is unavailable, or LOOM_STORE=jsonl).
+ * Primary store: **HydraDB**. The log is `(:Event)` nodes chained by `[:NEXT]`
+ * under a `(:Project)`, durable on object storage, and every other view in the
+ * product is a fold or a traversal over it. See `hydra/eventstore.ts`.
+ *
+ * `LOOM_STORE` selects a different store: `sqlite` (node:sqlite, the store
+ * Notch shipped with before HydraDB) or `jsonl`. Neither is a fallback —
+ * nothing degrades into them. If HydraDB is the configured store and it cannot
+ * be reached, this throws, for the same reason the SQLite path always threw on
+ * a corrupt file: starting an empty log next to a full one, and writing new
+ * events into it, loses the thread far more expensively than failing does.
  */
 
 import { EventEmitter } from "node:events";
@@ -220,10 +228,23 @@ export class EventLog {
     this.emitter.setMaxListeners(100);
   }
 
-  /** Open (or create) the log inside a project's .loom directory. */
+  /**
+   * Open (or create) the log for a project's .loom directory.
+   *
+   * The directory still names the project — it is the stable natural key the
+   * graph is partitioned by — but with the HydraDB store it holds no log. A
+   * `.loom/` you can delete without losing history is the point: the thread
+   * lives in the graph, not beside the checkout.
+   */
   static async open(loomDir: string): Promise<EventLog> {
     fs.mkdirSync(loomDir, { recursive: true });
-    if (process.env.LOOM_STORE !== "jsonl") {
+    const store = process.env.LOOM_STORE ?? "hydra";
+    if (store === "hydra") {
+      const { HydraEventStore } = await import("../hydra/eventstore.js");
+      const { projectGraph } = await import("../hydra/graph.js");
+      return new EventLog(await HydraEventStore.open(projectGraph(path.resolve(loomDir))));
+    }
+    if (store !== "jsonl") {
       let sqlite: SqliteModule;
       try {
         sqlite = await import("node:sqlite");
@@ -260,6 +281,25 @@ export class EventLog {
 
   lastId(): number {
     return this.store.lastId();
+  }
+
+  /**
+   * Await durability of everything appended so far.
+   *
+   * A no-op for the stores that write synchronously; on HydraDB it drains the
+   * write queue. Call it wherever "this happened" has to outlive the process:
+   * the end of a turn, either side of a handoff, before answering a read that
+   * a phone will act on.
+   */
+  async flush(): Promise<void> {
+    const s = this.store as EventStore & { flush?: () => Promise<void> };
+    if (typeof s.flush === "function") await s.flush();
+  }
+
+  /** Events appended but not yet durable. Surfaced by `loom doctor`. */
+  get pending(): number {
+    const s = this.store as EventStore & { pendingCount?: number };
+    return s.pendingCount ?? 0;
   }
 
   /** Live subscription to appended events; returns unsubscribe. */

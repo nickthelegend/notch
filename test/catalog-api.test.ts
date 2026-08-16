@@ -93,7 +93,7 @@ describe("GET /api/mcp/catalog", () => {
     expect(body.servers.map((s) => s.id)).toEqual(["app.linear/linear"]);
     for (const s of body.servers) expect(Boolean(s.url) || Boolean(s.command)).toBe(true);
 
-    expect(body.featured.map((f) => f.slug)).toEqual(expect.arrayContaining(["github", "linear", "signoz"]));
+    expect(body.featured.map((f) => f.slug)).toEqual(expect.arrayContaining(["github", "linear", "postgres"]));
     for (const f of body.featured) {
       expect(Boolean(f.url) || Boolean(f.command) || f.needsUrl === true).toBe(true);
     }

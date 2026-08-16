@@ -48,8 +48,6 @@ export const APP_HTML = `<!doctype html>
 <script>
 /* Apply the saved theme before first paint so there is no flash. */
 try{if(localStorage.getItem("loomTheme")==="light")document.documentElement.classList.remove("dark")}catch(e){}
-/* SigNoz UI base for the deep links, injected by the daemon (NOTCH_SIGNOZ_URL). */
-window.__notchSignozUrl="%%SIGNOZ_URL%%";
 </script>
 <style>
   @font-face{
@@ -167,8 +165,9 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
   .sendbtn{display:inline-flex;align-items:center;justify-content:center;flex:none;
     width:30px;height:30px;border-radius:15px;background:var(--primary);color:var(--primary-foreground);
     transition:opacity .15s,transform .1s}
-  .sendbtn:hover{opacity:.9}
-  .sendbtn:active{transform:scale(.96)}
+  .sendbtn:hover:not(:disabled){opacity:.9}
+  .sendbtn:active:not(:disabled){transform:scale(.96)}
+  .sendbtn:disabled{opacity:.4;cursor:default}
   .sendbtn svg{width:15px;height:15px}
   /* Stop takes send's place mid-turn. Same shape and position — it's the same
      button answering a different question — but it must not read as "go", so
@@ -367,7 +366,13 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
   .cinput::placeholder{color:color-mix(in srgb, var(--muted-foreground) 55%, transparent)}
   /* the control row under the textarea: small, evenly-spaced pills, all the same
      height and vertically centred with the send button */
-  .crow{display:flex;align-items:center;gap:6px;padding:8px 1px 0 0}
+  /* Wraps rather than overflowing. At 375px the row is 421px wide — the Skills
+     chip and the send button ran off the right edge of the phone, where they
+     could be neither seen nor tapped. Wrapping keeps every control reachable at
+     any width; on a desktop there is room to spare, so nothing moves. */
+  .crow{display:flex;align-items:center;gap:6px;row-gap:7px;flex-wrap:wrap;padding:8px 1px 0 0}
+  /* The spacer pushes send to the end of whatever row it lands on. */
+  .crow > .cgrow{flex:1 1 0;min-width:0}
   .ctool{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 8px;
     background:transparent;border:1px solid color-mix(in srgb, var(--border) 80%, transparent);border-radius:99px;
     color:var(--muted-foreground);cursor:pointer;font:inherit;font-size:11.5px;transition:background .12s,color .12s,border-color .12s}
@@ -483,13 +488,23 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
   /* Off-screen but screen-reader-available: the assertive "agent needs you" region. */
   .visually-hidden{position:absolute;width:1px;height:1px;margin:-1px;padding:0;
     overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
-  #toast{position:fixed;left:50%;transform:translateX(-50%) translateY(6px);bottom:94px;z-index:20;
+  /* Above every scrim, menu and modal (60/70), because the toast is the app's
+     one error channel. At z-index 20 it rendered BEHIND a modal's scrim, so a
+     failure raised from inside any dialog — "no such directory", a rejected
+     commit, a failed attach — was written to an element the user could not
+     see. Errors have to outrank whatever raised them. */
+  #toast{position:fixed;left:50%;transform:translateX(-50%) translateY(6px);bottom:94px;z-index:100;
     background:var(--glass);color:var(--popover-foreground);
     border:1px solid var(--glass-border);border-radius:var(--radius);
     backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
     padding:9px 15px;font-size:13px;opacity:0;transition:opacity .2s,transform .2s;pointer-events:none;max-width:86%;
     box-shadow:0 10px 24px rgb(0 0 0 / .18), inset 0 1px 0 var(--glass-highlight)}
   #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  #toast.act{pointer-events:auto;display:flex;align-items:center;gap:10px}
+  .toastbtn{padding:3px 9px;border-radius:99px;border:1px solid var(--primary);
+    background:var(--primary);color:var(--primary-foreground);font:inherit;font-size:12px;
+    cursor:pointer;flex:none;transition:opacity .12s}
+  .toastbtn:hover{opacity:.9}
   /* ── Pair screen ──────────────────────────────────────── */
   .pairwrap{display:flex;flex-direction:column;gap:16px;align-items:center;justify-content:center;
     min-height:92dvh;padding:28px;text-align:center;max-width:420px;margin:0 auto;position:relative}
@@ -818,6 +833,186 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
     word-break:break-word}
   .railcard.warnc{border-left:2px solid var(--warn)}
   .railcard.threadc{border-left:2px solid color-mix(in srgb, var(--thread) 60%, transparent)}
+  .ttkeys{margin-left:auto;font-family:var(--font-mono);font-size:9.5px;color:var(--muted-foreground);
+    display:flex;align-items:center;gap:3px}
+  .ttkeys kbd{font-family:inherit;font-size:9px;padding:1px 4px;border-radius:3px;
+    border:1px solid var(--border);background:color-mix(in srgb, var(--muted-foreground) 10%, transparent)}
+  /* Saved actions: a toolbar popover, not a tab. It is a thing you reach for
+     mid-thought, so it opens over whatever you were reading and closes on the
+     next click anywhere else. */
+  .actpop{position:fixed;z-index:70;width:340px;max-height:70vh;display:flex;flex-direction:column;
+    border-radius:var(--radius);border:1px solid var(--glass-border);background:var(--popover);
+    color:var(--popover-foreground);overflow:hidden;
+    box-shadow:0 22px 60px rgb(0 0 0 / .38), inset 0 1px 0 var(--glass-highlight);animation:pop .14s ease}
+  .acthead{flex:none;display:flex;align-items:baseline;gap:8px;padding:10px 12px 8px;
+    border-bottom:1px solid var(--border);font-size:12.5px;font-weight:600}
+  .actsub{font-size:10.5px;font-weight:400;color:var(--muted-foreground);margin-left:auto;text-align:right}
+  .actsub.ok{color:var(--ok,#4ade80)}
+  .actsub.bad{color:var(--danger,#f87171)}
+  .actbody{flex:1;min-height:0;overflow:auto;padding:6px}
+  .actempty{padding:14px 10px;font-size:11.5px;line-height:1.55;color:var(--muted-foreground)}
+  .actrow{position:relative;display:grid;grid-template-columns:auto 1fr auto auto;align-items:center;gap:7px;
+    padding:7px 8px;border-radius:7px;cursor:pointer}
+  .actrow:hover{background:var(--sidebar-accent)}
+  .actkind{font-family:var(--font-mono);font-size:9px;letter-spacing:.04em;text-transform:uppercase;
+    padding:2px 5px;border-radius:4px;border:1px solid var(--border);color:var(--muted-foreground)}
+  .actkind.pr{color:var(--primary);border-color:color-mix(in srgb, var(--primary) 45%, transparent)}
+  .actname{font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .actruns{font-size:10px;color:var(--muted-foreground);font-family:var(--font-mono)}
+  .actdel{border:0;background:none;color:var(--muted-foreground);cursor:pointer;padding:2px;
+    border-radius:4px;opacity:0;display:flex}
+  .actdel svg{width:13px;height:13px}
+  .actrow:hover .actdel{opacity:.65}
+  .actdel:hover{opacity:1;color:var(--danger,#f87171)}
+  .actbodytext{grid-column:2/5;font-family:var(--font-mono);font-size:10.5px;color:var(--muted-foreground);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .actout{flex:1;min-height:0;overflow:auto;margin:0;padding:10px 12px;font-family:var(--font-mono);
+    font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-word;color:var(--foreground)}
+  .actfoot{flex:none;padding:6px;border-top:1px solid var(--border)}
+  .actnew{width:100%;padding:7px;border-radius:7px;border:1px dashed var(--border);background:none;
+    color:var(--muted-foreground);font:inherit;font-size:11.5px;cursor:pointer}
+  .actnew:hover{color:var(--foreground);border-color:var(--primary)}
+  .modalfoot{display:flex;gap:8px;justify-content:flex-end;padding:12px 16px;border-top:1px solid var(--border)}
+  .aelab{display:block;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;
+    color:var(--muted-foreground);margin:10px 0 5px}
+  .aelab:first-child{margin-top:0}
+  .aeinput,.aearea{width:100%;background:var(--input,var(--background));color:var(--foreground);
+    border:1px solid var(--border);border-radius:7px;padding:7px 9px;font:inherit;font-size:12.5px;outline:none}
+  .aearea{font-family:var(--font-mono);font-size:11.5px;resize:vertical}
+  .aeinput:focus,.aearea:focus{border-color:var(--primary)}
+  .aekinds{display:flex;gap:6px}
+  .aekind{flex:1;padding:7px;border-radius:7px;border:1px solid var(--border);background:none;
+    color:var(--muted-foreground);font:inherit;font-size:11.5px;cursor:pointer}
+  .aekind.on{border-color:var(--primary);color:var(--foreground);
+    background:color-mix(in srgb, var(--primary) 12%, transparent)}
+  .aehint{margin-top:8px;font-size:11px;line-height:1.5;color:var(--muted-foreground)}
+  .bmem.xrun{border-left:2px solid color-mix(in srgb, var(--primary) 55%, transparent)}
+  .xproj{font-family:var(--font-mono);font-size:10px;padding:1px 5px;border-radius:4px;margin-left:6px;
+    border:1px solid color-mix(in srgb, var(--primary) 40%, transparent);color:var(--primary)}
+  .fhmodal{max-width:620px}
+  .fhsum{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
+  .fhagent{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:99px;
+    border:1px solid var(--border);font-size:11.5px}
+  .fhagent b{font-family:var(--font-mono);font-size:10px;color:var(--muted-foreground);font-weight:400}
+  .fhagent svg,.fhagent img{width:12px;height:12px}
+  .fhagent.fhhuman{border-style:dashed}
+  .fhlist{max-height:46vh;overflow:auto;margin:0 -4px}
+  .fhrow{display:grid;grid-template-columns:auto 1fr auto auto;align-items:center;gap:9px;
+    padding:6px 4px;border-top:1px solid var(--border);font-size:12px}
+  .fhrow:first-child{border-top:0}
+  .fhsha{font-size:10.5px;color:var(--muted-foreground)}
+  .fhsub{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .fhwho{display:inline-flex;align-items:center;gap:4px;font-size:11px;white-space:nowrap}
+  .fhwho svg,.fhwho img{width:12px;height:12px}
+  .fhwhen{font-size:10.5px;white-space:nowrap}
+  .gqbox{width:100%;background:var(--input,var(--background));color:var(--foreground);
+    border:1px solid var(--border);border-radius:8px;padding:9px 11px;
+    font-family:var(--font-mono);font-size:11.5px;line-height:1.55;outline:none;resize:vertical;margin-bottom:9px}
+  .gqbox:focus{border-color:var(--primary)}
+  .gqwrap{max-height:44vh;overflow:auto;margin-top:10px}
+  .gqerr{color:var(--danger,#f87171)}
+  .cnexport{margin-left:10px;padding:2px 9px;border-radius:99px;border:1px solid var(--border);
+    background:none;color:var(--muted-foreground);font:inherit;font-size:10.5px;cursor:pointer}
+  .cnexport:hover{color:var(--foreground);border-color:var(--primary)}
+  .ctxmenu{position:fixed;z-index:90;min-width:200px;padding:4px;border-radius:var(--radius-sm);
+    border:1px solid var(--glass-border);background:var(--popover,var(--background));
+    box-shadow:0 12px 28px rgb(0 0 0 / .28);animation:cnrise .12s ease both}
+  .ctxitem{display:block;width:100%;text-align:left;padding:6px 9px;border-radius:4px;border:0;
+    background:transparent;color:var(--foreground);font:inherit;font-size:12.5px;cursor:pointer}
+  .ctxitem:hover{background:var(--sidebar-accent)}
+  .phl{background:color-mix(in srgb, var(--primary) 30%, transparent);color:var(--foreground);
+    border-radius:2px;padding:0 1px;font-weight:600}
+  .wflive{display:flex;align-items:center;gap:7px;margin-top:10px;font-family:var(--font-mono);
+    font-size:10.5px;color:var(--muted-foreground)}
+  /* --- what one agent has actually been told --- */
+  .knowsbtn{margin-left:6px;padding:0 6px;border-radius:99px;border:1px solid var(--border);
+    background:transparent;color:var(--muted-foreground);font:inherit;font-family:var(--font-mono);
+    font-size:9px;line-height:15px;cursor:pointer;flex:none;opacity:0;transition:opacity .12s,color .12s,border-color .12s}
+  .frow:hover .knowsbtn,.knowsbtn:focus{opacity:1}
+  .knowsbtn:hover{color:var(--foreground);border-color:var(--primary)}
+  .knowsbox{margin:2px 10px 8px 26px;padding:7px 9px;border-radius:var(--radius-sm);
+    border:1px solid var(--border);background:color-mix(in srgb, var(--sidebar-accent) 55%, transparent);
+    animation:cnrise .18s ease both}
+  .knowsnums{display:flex;gap:10px;font-family:var(--font-mono);font-size:9.5px;color:var(--muted-foreground)}
+  .knowsnums b{color:var(--foreground);font-weight:600}
+  .knowsgap b{color:var(--warn)}
+  .knowswhen{margin-top:4px;font-family:var(--font-mono);font-size:9px;color:var(--muted-foreground)}
+  .knowsm{display:flex;gap:6px;margin-top:6px;font-size:11px;line-height:1.45}
+  .knowsk{font-family:var(--font-mono);font-size:8.5px;padding:1px 4px;border-radius:3px;height:14px;flex:none;
+    background:color-mix(in srgb, var(--muted-foreground) 18%, transparent);color:var(--muted-foreground)}
+  .knowsk.constraint{color:var(--accentBlue)}
+  .knowsk.failure{color:var(--warn)}
+  .knowsk.decision{color:var(--primary)}
+  .knowst{color:var(--foreground);overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical}
+  .knowswait,.knowserr{font-family:var(--font-mono);font-size:9.5px;color:var(--muted-foreground);display:block;margin-top:4px}
+  .knowserr{color:var(--warn)}
+  /* --- commit history with agent authorship --- */
+  .gclogwrap{border-bottom:1px solid color-mix(in srgb, var(--border) 45%, transparent)}
+  .gclog{cursor:pointer}
+  .gclog:hover{background:var(--sidebar-accent)}
+  .gcagents{display:flex;flex-wrap:wrap;gap:4px;grid-column:1/-1;margin-top:3px}
+  .gcagent{font-family:var(--font-mono);font-size:9.5px;padding:1px 5px;border-radius:99px;
+    border:1px solid color-mix(in srgb, currentColor 35%, transparent);
+    background:color-mix(in srgb, currentColor 10%, transparent)}
+  .gcagent.human{color:var(--muted-foreground)}
+  .gcfiles{padding:2px 0 6px 12px;animation:cnrise .18s ease both}
+  .gcfile{display:flex;align-items:center;gap:8px;padding:3px 12px 3px 8px;cursor:pointer;border-radius:var(--radius-sm)}
+  .gcfile:hover{background:var(--sidebar-accent)}
+  .gcfp{font-family:var(--font-mono);font-size:11px;color:var(--foreground);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .gcfa{margin-left:auto;font-family:var(--font-mono);font-size:9.5px;flex:none}
+  .gcfa.human{color:var(--muted-foreground)}
+  /* --- Council: parallel agent panes --- */
+  .cnhead{padding:14px 16px 8px;font-size:13px;line-height:1.65;color:var(--muted-foreground);max-width:78ch}
+  .cnhead b{color:var(--foreground);font-weight:600}
+  .cnask{display:flex;gap:8px;padding:6px 16px 14px;max-width:78ch}
+  .cnask input{flex:1;height:34px;padding:0 12px;border-radius:var(--radius-sm);
+    border:1px solid var(--border);background:var(--input,transparent);color:var(--foreground);font:inherit;font-size:13px}
+  .cnask input:focus{outline:none;border-color:var(--primary)}
+  .cnask input:disabled{opacity:.55}
+  .cnq{padding:2px 16px 2px;font-size:14.5px;font-weight:600;color:var(--foreground);max-width:78ch}
+  .cnmeta{padding:2px 16px 12px;font-family:var(--font-mono);font-size:11px;color:var(--muted-foreground)}
+  .cnrun{color:var(--live)}
+  .cnagree{color:var(--ok)}
+  .cnsplit{color:var(--warn)}
+  .cnsec{padding:18px 16px 6px;font-family:var(--font-mono);font-size:10px;letter-spacing:.08em;
+    color:var(--muted-foreground)}
+  /* auto-fit: two agents get two wide panes, six get a readable grid, and it
+     collapses to one column on a phone without a media query. */
+  .cngrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:10px;padding:0 16px 16px}
+  .cnpane{display:flex;flex-direction:column;border:1px solid var(--border);border-radius:var(--radius);
+    background:var(--card,transparent);overflow:hidden;min-height:120px;
+    animation:cnrise .28s cubic-bezier(.2,.8,.2,1) both}
+  @keyframes cnrise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  .cnpane.wait{border-style:dashed;opacity:.85}
+  .cnpane.bad{border-color:color-mix(in srgb, var(--warn) 55%, var(--border))}
+  .cnpane.chosen{border-color:var(--primary);box-shadow:0 0 0 1px var(--primary) inset}
+  .cnpanehd{display:flex;align-items:center;gap:7px;padding:8px 11px;border-bottom:1px solid var(--border);
+    font-family:var(--font-mono);font-size:11px}
+  .cnpane.wait .cndot{width:7px;height:7px;border-radius:50%;background:var(--muted-foreground);
+    animation:cnpulse 1.1s ease-in-out infinite}
+  .cndot{width:7px;height:7px;border-radius:50%;background:var(--ok);flex:none}
+  .cnpane.bad .cndot{background:var(--warn)}
+  @keyframes cnpulse{0%,100%{opacity:.35}50%{opacity:1}}
+  .cnname{font-weight:600}
+  .cnms{margin-left:auto;color:var(--muted-foreground)}
+  .cnbody{padding:10px 12px;font-size:13px;line-height:1.6;overflow:auto;max-height:340px}
+  .cnwait{display:flex;align-items:center;gap:8px;color:var(--muted-foreground);font-family:var(--font-mono);font-size:11.5px}
+  .cnerr{color:var(--warn);font-family:var(--font-mono);font-size:12px}
+  .cnpick{margin:0 12px 12px;padding:6px 10px;border-radius:var(--radius-sm);border:1px solid var(--border);
+    background:transparent;color:var(--muted-foreground);font:inherit;font-size:11.5px;cursor:pointer;
+    transition:background .12s,color .12s,border-color .12s}
+  .cnpick:hover:not(:disabled){background:var(--primary);color:var(--primary-foreground);border-color:var(--primary)}
+  .cnpick:disabled{opacity:.6;cursor:default}
+  .cnhist{padding:8px 16px;border-top:1px solid var(--border)}
+  .cnhq{font-size:12.5px;color:var(--foreground)}
+  .cnhm{font-family:var(--font-mono);font-size:10.5px;color:var(--muted-foreground)}
+  .addall{display:flex;align-items:center;gap:6px;width:calc(100% - 16px);margin:2px 8px 6px;
+    padding:6px 9px;border-radius:var(--radius-sm);border:1px dashed var(--border);
+    background:transparent;color:var(--muted-foreground);font:inherit;font-size:11.5px;
+    text-align:left;cursor:pointer;transition:background .12s,color .12s,border-color .12s}
+  .addall:hover:not(:disabled){background:var(--sidebar-accent);color:var(--foreground);border-color:var(--primary)}
+  .addall:disabled{opacity:.6;cursor:default}
+  .addall svg{width:12px;height:12px;flex:none}
   .rempty{color:color-mix(in srgb, var(--muted-foreground) 80%, transparent);
     font-family:var(--font-mono);font-size:11.5px;padding:2px 2px 6px}
   .taskbtn{width:100%;margin-bottom:10px}
@@ -1150,11 +1345,8 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
   .obtitle svg{width:18px;height:18px;color:var(--primary)}
   .obtitle .obsub{font-weight:400}
   .obsub{color:var(--muted-foreground);font-size:12px}
-  .obsignoz{margin-left:auto;display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:500;
     color:var(--muted-foreground);border:1px solid var(--border);border-radius:var(--radius-sm);
     padding:6px 11px;text-decoration:none;transition:background .15s,color .15s}
-  .obsignoz svg{width:13px;height:13px}
-  .obsignoz:hover{background:color-mix(in srgb, var(--primary) 14%, transparent);color:var(--foreground);
     border-color:color-mix(in srgb, var(--primary) 45%, transparent)}
   .obmetrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:10px;margin-bottom:18px}
   .obcard{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px}
@@ -1290,6 +1482,33 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
   .obhop.recent{filter:drop-shadow(0 0 3px color-mix(in srgb,var(--shuttle) 55%,transparent))}
   .oblgdot{width:6px;height:6px;border-radius:50%;background:var(--live);box-shadow:0 0 0 3px color-mix(in srgb,var(--live) 22%,transparent)}
   .obnote{color:var(--muted-foreground);font-size:12.5px;padding:0 2px 12px;max-width:70ch}
+  /* Provenance tab — the graph-native views. */
+  .obtbl{width:100%;border-collapse:collapse;font-size:12.5px;margin-bottom:10px}
+  .obtbl th{text-align:left;font-weight:500;color:var(--muted-foreground);font-size:11px;letter-spacing:.05em;
+    text-transform:uppercase;padding:6px 10px;border-bottom:1px solid var(--border)}
+  .obtbl td{padding:6px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+  .obtbl tr.obcontested td{background:color-mix(in srgb,var(--shuttle) 9%,transparent)}
+  .obwon{color:var(--shuttle);font-weight:600}
+  .oblost{color:var(--muted-foreground);text-decoration:line-through}
+  .obcypher{font-size:11.5px;color:var(--muted-foreground);background:var(--muted);border:1px solid var(--border);
+    border-radius:var(--radius);padding:8px 10px;margin:6px 0 4px;overflow-x:auto;white-space:pre-wrap;word-break:break-word}
+  .obdrill{background:var(--shuttle);color:var(--primary-foreground);border:0;border-radius:var(--radius);
+    padding:7px 13px;font-size:12.5px;font-weight:500;cursor:pointer}
+  .obdrill:disabled{opacity:.6;cursor:default}
+  .obedge{display:flex;align-items:center;gap:9px;padding:4px 2px;font-size:13px}
+  .obarrow{color:var(--shuttle)}
+  .obbar{height:6px;border-radius:3px;background:var(--shuttle);opacity:.55;min-width:6px}
+  .obsel{background:var(--card);color:var(--foreground);border:1px solid var(--border);border-radius:var(--radius);
+    padding:7px 10px;font-size:12.5px;max-width:100%;margin-bottom:10px}
+  .obchain{display:flex;flex-direction:column;gap:2px;margin:8px 0}
+  .obchainnode{font-size:13px}
+  .obchainedge{color:var(--shuttle);font-size:12px;padding:3px 0 3px 12px}
+  .obinj{color:var(--shuttle);font-size:11.5px}
+  .obinj0{color:var(--muted-foreground);font-size:11.5px}
+  .obreveal{text-decoration:underline;opacity:.7}
+  .obknew:hover{background:var(--muted)}
+  .obkind{display:inline-block;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;
+    color:var(--shuttle);border:1px solid var(--border);border-radius:999px;padding:1px 7px;margin-right:6px}
   .obcanvaswrap.graph{padding:8px}
   /* timeline */
   .obtimeline{list-style:none;margin:0;padding:2px 0 2px 2px;position:relative}
@@ -1398,11 +1617,8 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
   .rppill{font-family:var(--font-mono);font-size:11px;color:var(--foreground);background:var(--secondary);border-radius:999px;padding:3px 10px}
   .rppl{color:var(--muted-foreground)}
   .rpactions{display:flex;gap:8px;flex-wrap:wrap}
-  .rpwf,.rpsignoz{appearance:none;text-decoration:none;font:inherit;font-size:12px;font-weight:600;padding:6px 12px;border-radius:8px;cursor:pointer;border:1px solid var(--border)}
+  .rpwf{appearance:none;text-decoration:none;font:inherit;font-size:12px;font-weight:600;padding:6px 12px;border-radius:8px;cursor:pointer;border:1px solid var(--border)}
   .rpwf{background:color-mix(in srgb,var(--primary) 16%,transparent);color:var(--primary);border-color:color-mix(in srgb,var(--primary) 40%,transparent)}
-  .rpsignoz{background:var(--secondary);color:var(--muted-foreground)}
-  .rpsignoz:hover{color:var(--primary);border-color:var(--primary)}
-  .rpsignoz.wide{display:block;text-align:center;margin-top:12px}
   .rpnote{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;line-height:1.45;color:var(--muted-foreground);background:var(--secondary);border:1px solid var(--border);border-radius:8px;padding:6px 11px}
   .rpnote svg{width:13px;height:13px;flex:none;opacity:.7}
   /* trace waterfall */
@@ -1472,6 +1688,7 @@ window.__notchSignozUrl="%%SIGNOZ_URL%%";
      different claims and must not look identical. */
   .decsrc{display:inline-flex;align-items:center;padding:1px 7px;border-radius:99px;font-size:9.5px;font-weight:600;
     font-family:var(--font-mono);border:1px solid var(--border);color:var(--muted-foreground)}
+  .decsrc.human{color:var(--shuttle);border-color:color-mix(in srgb,var(--shuttle) 40%,transparent);background:color-mix(in srgb,var(--shuttle) 10%,transparent)}
   .decsrc.llm,.decsrc.cli{color:var(--ch2);border-color:color-mix(in srgb,var(--ch2) 40%,transparent);background:color-mix(in srgb,var(--ch2) 10%,transparent)}
   .decfoot{color:var(--muted-foreground);opacity:.75;font-size:10px}
   /* logs — a dense reading surface, so it is monospace and tightly ruled */
@@ -2095,7 +2312,10 @@ ${BRAND_SPRITE}
   var SETUP_SEEN_KEY = "loomSetupSeen";
   var state = { token: localStorage.getItem(TOKEN_KEY) || "", clientId: localStorage.getItem(CLIENT_ID_KEY) || "", projects: [], pid: null,
                 project: null, selected: null, lastId: 0, ws: null, timers: [],
-                tab: "thread", tree: null, wsLive: false, lastQuestion: null };
+                tab: "thread", tree: null, wsLive: false, lastQuestion: null, availFor: null,
+                // Projects this window has already noticed are gone, so one
+                // removal produces one message rather than one per poller.
+                goneProjects: {} };
   var root = document.getElementById("root");
 
   function esc(s){ return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){
@@ -2188,7 +2408,26 @@ ${BRAND_SPRITE}
   }
 
   function toast(msg){ var t = document.getElementById("toast"); t.textContent = msg;
+    t.classList.remove("act");
     t.classList.add("show"); clearTimeout(t._t); t._t = setTimeout(function(){ t.classList.remove("show"); }, 2600); }
+  /**
+   * A toast that offers the obvious next step.
+   *
+   * For the moments where the app knows what you probably want to do next and
+   * the alternative is making you go and find it. Held longer than a plain
+   * toast because it asks for a decision, and dismissed the moment you take it.
+   */
+  function toastAction(msg, label, fn){
+    var t = document.getElementById("toast");
+    t.textContent = "";
+    var span = document.createElement("span"); span.textContent = msg;
+    var btn = document.createElement("button"); btn.className = "toastbtn"; btn.textContent = label;
+    btn.onclick = function(){ t.classList.remove("show"); clearTimeout(t._t); fn(); };
+    t.appendChild(span); t.appendChild(btn);
+    t.classList.add("show", "act");
+    clearTimeout(t._t);
+    t._t = setTimeout(function(){ t.classList.remove("show"); }, 7000);
+  }
   /** Assertive screen-reader announcement for high-stakes moments (an agent
    *  needs you). Cleared then re-set so repeats are re-announced. */
   function announce(msg){ var a = document.getElementById("a11y-alert"); if (!a) return;
@@ -2354,6 +2593,8 @@ ${BRAND_SPRITE}
     up: svg('<path d="M12 19V5"/><path d="m5 12 7-7 7 7"/>'),
     stop: svg('<rect x="6" y="6" width="12" height="12" rx="1.5"/>'),
     thread: svg('<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>'),
+    // lucide users — a council is several agents at once, so the icon is people
+    council: svg('<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>'),
     memory: svg('<path d="m12 3 8.5 4.7L12 12.5 3.5 7.7 12 3Z"/><path d="m3.5 12.2 8.5 4.8 8.5-4.8"/><path d="m3.5 16.6 8.5 4.8 8.5-4.8"/>'),
     // a changed file: document outline with a small +/- pair inside
     tree: svg('<path d="M14.5 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7.5z"/><path d="M14 3v5h5"/><path d="M12 11.5v4"/><path d="M10 13.5h4"/><path d="M10 18h4"/>'),
@@ -2375,6 +2616,9 @@ ${BRAND_SPRITE}
     minus: svg('<path d="M5 12h14"/>'),
     panelRight: svg('<rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M15 4.5v15"/>'),
     terminal: svg('<path d="m5 8 4 4-4 4"/><path d="M12 16h6"/>'),
+    // lucide zap: a saved action is the one-keystroke version of a thing you
+    // would otherwise retype in every workspace
+    bolt: svg('<path d="M13 2 4.5 13H11l-1 9 8.5-11H12l1-9z"/>'),
     // lines of output with one flagged — the Console
     console: svg('<path d="M4 6h16"/><path d="M4 11h9"/><path d="M4 16h6"/><circle cx="18" cy="15.5" r="2.5"/>'),
     // a phone — "connect a device"
@@ -2458,12 +2702,57 @@ ${BRAND_SPRITE}
     opts.headers["Authorization"] = "Bearer " + state.token;
     if (opts.body) opts.headers["Content-Type"] = "application/json";
     return fetch(path, opts).then(function(r){
-      if (r.status === 401) { logout(); throw new Error("session revoked — pair again"); }
+      if (r.status === 401) { logout(); throw new Error("session revoked \u2014 pair again"); }
       return r.json().then(function(j){
-        if (!r.ok) throw new Error(j.message || j.error || ("HTTP " + r.status));
+        if (!r.ok) {
+          var msg = j.message || j.error || ("HTTP " + r.status);
+          // A project this window is open on has gone away \u2014 removed here, on
+          // another device, or by loom projects --forget. Every poll, every
+          // terminal and every panel is now aimed at an id that no longer
+          // resolves, so the window has to let go of it rather than keep
+          // printing "unknown project" into a shell forever.
+          if (r.status === 404 && /unknown project/i.test(String(msg))) {
+            var pm = String(path).match(/\\/api\\/projects\\/([^/?]+)/);
+            if (pm) projectVanished(pm[1]);
+          }
+          throw new Error(msg);
+        }
         return j;
       });
     });
+  }
+
+  /**
+   * Let go of a project that no longer exists.
+   *
+   * Idempotent and quiet after the first time: a dead id is polled from
+   * several places at once, and one disappearance should produce one message,
+   * not eight.
+   */
+  function projectVanished(id){
+    if (!id || state.goneProjects[id]) return;
+    state.goneProjects[id] = true;
+    var name = ((state.projects || []).filter(function(p){ return p.id === id; })[0] || {}).name || id;
+    state.projects = (state.projects || []).filter(function(p){ return p.id !== id; });
+    if (state.closeProjectTerms) { try { state.closeProjectTerms(id); } catch (e) {} }
+    var here = state.project && state.project.id === id;
+    toast(name + " is no longer a Notch project \u2014 closed it here");
+    if (here) {
+      state.project = null;
+      clearTimers();
+      // Deferred, not immediate. This runs inside a fetch handler, and several
+      // more responses for the same dead project are already in flight behind
+      // it; re-rendering underneath them left their continuations binding
+      // handlers to nodes that no longer existed, which surfaced as a raw
+      // "Cannot set properties of null" where the explanation should be.
+      setTimeout(function(){
+        location.hash = "";
+        route();
+        toast(name + " is no longer a Notch project \u2014 closed it here");
+      }, 0);
+    } else if (state.refreshProjects) {
+      state.refreshProjects();
+    }
   }
   function logout(){ state.token = ""; state.clientId = ""; localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(CLIENT_ID_KEY); route(); }
 
@@ -2555,7 +2844,7 @@ ${BRAND_SPRITE}
       if (!e.agentId) {
         if (p.author === "loom") return '<div class="sys">\\u25b8 ' + esc(String(p.text).split("\\n")[0]) + "</div>";
         // Your own messages: markdown too, so a pasted snippet or list reads right.
-        return '<div class="msg user"><div class="bubble md">' + mdToHtml(p.text) + "</div></div>";
+        return '<div class="msg user" data-ask="' + esc(String(p.text || "").slice(0, 400)) + '"><div class="bubble md">' + mdToHtml(p.text) + "</div></div>";
       }
       var h = hue(e.agentId);
       // Reasoning / thinking (codex, grok, and now claude) renders as a distinct
@@ -2730,7 +3019,7 @@ ${BRAND_SPRITE}
       '<span class="cdiv"></span>' +
       '<button class="cslot" id="mcpbtn" type="button" title="connect MCP servers"><span class="cslotico">' + (ICONS.plug || ICONS.route) + '</span>MCPs</button>' +
       '<button class="cslot" id="skillbtn" type="button" title="enable skills">' + (ICONS.bolt || ICONS.spark || ICONS.route) + 'Skills<span class="skcount" id="skcount" style="display:none">0</span></button>' +
-      '<span style="flex:1"></span>' +
+      '<span class="cgrow"></span>' +
       '<button class="sendbtn" id="send" type="submit" title="send">' + ICONS.up + "</button>" +
       '<button class="sendbtn stopbtn" id="stop" type="button" title="interrupt" aria-label="interrupt" style="display:none">' +
       ICONS.stop + "</button>" +
@@ -2752,6 +3041,7 @@ ${BRAND_SPRITE}
         '<span id="tabsbox" style="display:contents"></span>' +
         '<span class="spacer"></span>' +
         // &#96; is a backtick — a literal one would close this template literal
+        '<button id="actionsbtn" class="iconbtn" title="saved actions" aria-label="saved actions">' + ICONS.bolt + "</button>" +
         '<button id="termbtn" class="iconbtn" title="toggle terminal (\\u2303&#96;)">' + ICONS.terminal + "</button>" +
         // Connect a phone: a QR (or copy link) that pairs the native app over the
         // LAN or the tailnet. Sits by the terminal because both are "reach this
@@ -2772,6 +3062,7 @@ ${BRAND_SPRITE}
         '<div class="pane scroll" id="pane-brain" style="display:none">' + LOADER + "</div>" +
         '<div class="pane scroll" id="pane-board" style="display:none"></div>' +
         '<div class="pane scroll" id="pane-observatory" style="display:none">' + LOADER + "</div>" +
+        '<div class="pane scroll" id="pane-council" style="display:none"></div>' +
                 composerHtml +
         "</div>" +
         '<div class="dockpane" id="dockpane">' +
@@ -2819,20 +3110,37 @@ ${BRAND_SPRITE}
     bindTheme();
     var backBtn = document.getElementById("back");
     if (backBtn) backBtn.onclick = function(){ location.hash = ""; };
-    document.getElementById("stop").onclick = function(){
+    // Guarded like every other binding here. The composer is absent whenever
+    // this render is for a project that has since gone away, and an unguarded
+    // bind threw "Cannot set properties of null" into the toast — a raw engine
+    // message where the explanation belonged.
+    var stopBtn0 = document.getElementById("stop");
+    if (stopBtn0) stopBtn0.onclick = function(){
+      var btn = this; btn.disabled = true;
       api("/api/projects/" + pid + "/interrupt", { method: "POST", body: "{}" })
-        .then(function(j){ toast(j.interrupted ? "interrupted " + j.interrupted : "nothing running"); })
-        .catch(function(err){ toast(err.message); });
+        .then(function(j){
+          toast(j.interrupted ? "interrupted " + j.interrupted : "nothing running");
+          // Swap back to Send from the interrupt's own answer rather than
+          // waiting for the 4s status poll. The turn is over the moment the
+          // daemon says so, and a Stop button that stays lit for four seconds
+          // after you stopped something reads as "it didn't work" — which is
+          // exactly when a user clicks it again.
+          refresh();
+        })
+        .catch(function(err){ toast(err.message); })
+        .then(function(){ btn.disabled = false; });
     };
 
     // ---- desktop tabs (Thread / Tasks / Brain / Routes) --------------------
     // mobile has no #tabsbox, so this is a no-op there by construction
     function drawTabs(){
       var box = document.getElementById("tabsbox"); if (!box) return;
-      var tabs = ["thread", "board", "brain", "observatory"];
+      var tabs = ["thread", "board", "brain", "council", "observatory"];
       if (tabs.indexOf(state.tab) < 0) state.tab = "thread";
       var LBL = { thread: [ICONS.thread, "Thread"], board: [ICONS.board, "Board"],
-                  brain: [ICONS.memory, "Brain"], observatory: [ICONS.telescope, "Observatory"] };
+                  brain: [ICONS.memory, "Brain"],
+                  council: [ICONS.council, "Council"],
+                  observatory: [ICONS.telescope, "Observatory"] };
       box.innerHTML = tabs.map(function(tb){
         return '<button class="tab' + (state.tab === tb ? " active" : "") + '" data-tab="' + tb + '">' +
           LBL[tb][0] + LBL[tb][1] + "</button>";
@@ -2843,7 +3151,7 @@ ${BRAND_SPRITE}
     }
     function showTab(name){
       state.tab = name;
-      ["thread", "board", "brain", "observatory"].forEach(function(t){
+      ["thread", "board", "brain", "council", "observatory"].forEach(function(t){
         var p = document.getElementById("pane-" + t);
         if (p) p.style.display = t === name ? "" : "none";
       });
@@ -2857,16 +3165,289 @@ ${BRAND_SPRITE}
       // first open fetches; later opens keep the board (and your pins)
       if (name === "board") { if (board.data) drawBoardPane(); else loadBoard(); }
       if (name === "observatory") drawObservatory();
+      if (name === "council") drawCouncil();
       if (name === "thread") {
         var sc = document.getElementById("pane-thread");
         if (sc) sc.scrollTop = sc.scrollHeight;
       }
     }
 
+    /**
+     * The Council — one question, every agent, at the same time.
+     *
+     * The baton serialises *writes*, and that is the whole safety story of this
+     * project. It does not have to serialise thinking. So this asks the fleet
+     * for answers rather than edits: nobody takes the baton, every member is
+     * briefed from the same HydraDB projection, and the panes fill in
+     * independently as each model finishes.
+     *
+     * The comparison is the feature. Four agents agreeing is a decision you can
+     * trust; four disagreeing is the most useful thing you will see all day.
+     */
+    var council = { live: null, history: [], asking: false, poll: null };
+    /**
+     * Where the fleet agrees, and where it splits.
+     *
+     * The reason to ask several agents is not redundancy, it is disagreement:
+     * unanimity means you can act, and a split means the question was harder
+     * than it looked. Compared on normalised text \u2014 case, punctuation and
+     * whitespace removed \u2014 because two agents saying the same thing with
+     * different commas have not disagreed about anything.
+     */
+    /**
+     * The whole council as markdown, on the clipboard.
+     *
+     * A council is the most quotable thing this app produces — five models on
+     * one question, with the timings and what you picked. It belongs in a PR
+     * description or a design doc, and retyping it from the screen is how it
+     * ends up not being shared at all.
+     */
+    function councilMarkdown(run){
+      var lines = ["## " + String(run.question || "").trim(), ""];
+      var when = run.at ? new Date(run.at).toISOString() : "";
+      lines.push("_" + (run.answers || []).length + " of " + (run.agents || []).length +
+        " answered" + (when ? " \u00b7 " + when : "") + "_", "");
+      (run.agents || []).forEach(function(id){
+        var a = (run.answers || []).filter(function(x){ return x.agent === id; })[0];
+        lines.push("### " + id + (a && a.chosen ? "  \u2190 chosen" : ""));
+        if (!a) { lines.push("", "_no answer_", ""); return; }
+        var meta = [cnDur(a.ms)];
+        if (a.cost > 0) meta.push(money(a.cost));
+        if (!a.ok) meta.push("failed");
+        lines.push("", "_" + meta.join(" \u00b7 ") + "_", "", String(a.text || "").trim(), "");
+      });
+      return lines.join(String.fromCharCode(10));
+    }
+
+    /**
+     * Put text on the clipboard, in the places the async API is not allowed.
+     *
+     * The async clipboard API needs a secure context *and* permission, and it has
+     * neither inside an embedded webview or a plain-http origin that is not
+     * localhost — which is exactly where Notch runs when you open it from
+     * another machine on the tailnet. The textarea + execCommand path is the
+     * older mechanism and still works there. It is tried second because it
+     * steals focus for an instant; the modern path is better when available.
+     */
+    function copyText(text){
+      if (navigator.clipboard && window.isSecureContext) {
+        return navigator.clipboard.writeText(text).catch(function(){ return legacyCopy(text); });
+      }
+      return legacyCopy(text);
+    }
+    function legacyCopy(text){
+      return new Promise(function(resolve, reject){
+        var ta = document.createElement("textarea");
+        ta.value = text;
+        ta.setAttribute("readonly", "");
+        // Off-screen rather than display:none — a hidden element cannot be selected.
+        ta.style.cssText = "position:fixed;top:-1000px;left:-1000px;opacity:0";
+        document.body.appendChild(ta);
+        var prev = document.activeElement;
+        ta.select();
+        var ok = false;
+        try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+        ta.remove();
+        if (prev && prev.focus) prev.focus();
+        ok ? resolve() : reject(new Error("this browser would not let the page write to the clipboard"));
+      });
+    }
+
+    function cnAgreement(answers){
+      var ok = answers.filter(function(a){ return a.ok && String(a.text || "").trim(); });
+      if (ok.length < 2) return "";
+      var groups = {};
+      ok.forEach(function(a){
+        // Drop the agent's own id before comparing. An answer that signs itself
+        // ("codex: use BM25") is not a different position from the same answer
+        // unsigned, and treating it as one turned unanimity into a three-way
+        // split for no reason but the byline.
+        var own = String(a.agent || "").toLowerCase();
+        var k = String(a.text).toLowerCase();
+        if (own) k = k.split(own).join(" ");
+        k = k.replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+        (groups[k] = groups[k] || []).push(a.agent);
+      });
+      var camps = Object.keys(groups).map(function(k){ return groups[k]; })
+        .sort(function(x, y){ return y.length - x.length; });
+      if (camps.length === 1) return ' \u00b7 <span class="cnagree">all ' + ok.length + " agreed</span>";
+      return ' \u00b7 <span class="cnsplit">' + camps.length + " camps: " +
+        camps.map(function(c){ return esc(c.join("+")); }).join(" vs ") + "</span>";
+    }
+
+    function cnDur(ms){
+      ms = Number(ms) || 0;
+      if (ms < 1000) return ms + "ms";
+      if (ms < 60000) return (ms / 1000).toFixed(1) + "s";
+      return Math.floor(ms / 60000) + "m " + Math.round((ms % 60000) / 1000) + "s";
+    }
+
+    function drawCouncil(){
+      var host = document.getElementById("pane-council"); if (!host) return;
+      if (!host.getAttribute("data-init")) {
+        host.setAttribute("data-init", "1");
+        host.innerHTML = LOADER;
+        loadCouncil(true);
+        return;
+      }
+      renderCouncil();
+    }
+
+    function loadCouncil(draw){
+      api("/api/projects/" + pid + "/council").then(function(j){
+        council.live = j.live || null;
+        council.history = j.history || [];
+        if (draw !== false) renderCouncil();
+        // While a council is running the panes are the point, so poll it
+        // closely; once it is done, stop — a finished council does not change.
+        if (council.live && council.live.status === "running") {
+          clearTimeout(council.poll);
+          council.poll = setTimeout(function(){ loadCouncil(); }, 900);
+        }
+      }).catch(function(err){
+        var host = document.getElementById("pane-council");
+        if (host) host.innerHTML = '<div class="obnote">couldn\u2019t read the council \u2014 ' + esc(err.message) + "</div>";
+      });
+    }
+
+    function renderCouncil(){
+      var host = document.getElementById("pane-council"); if (!host) return;
+      var p = state.project || {};
+      var adapters = (p.agents || []).filter(function(a){ return a.tier === "adapter"; });
+      var live = council.live;
+      var running = !!(live && live.status === "running");
+
+      var head =
+        '<div class="cnhead">' +
+          "<b>One question, the whole fleet, at once.</b> Every member is briefed from the same " +
+          "HydraDB projection, so the answers differ because the models differ \u2014 not because they " +
+          "were told different things. Nobody takes the baton: a council asks for answers, not edits." +
+        "</div>" +
+        '<form class="cnask" id="cnform">' +
+          '<input id="cnq" placeholder="ask ' + adapters.length + ' agent' + (adapters.length === 1 ? "" : "s") +
+            ' the same question\u2026" autocomplete="off"' + (running ? " disabled" : "") + ">" +
+          '<button class="btn primary" id="cnsend" type="submit"' + (running || !adapters.length ? " disabled" : "") + ">" +
+            (running ? "asking\u2026" : "Ask the fleet") + "</button>" +
+        "</form>";
+
+      if (!adapters.length) {
+        host.innerHTML = head + '<div class="obnote">No agents on this project yet \u2014 add some from the Agents rail.</div>';
+        wireCouncil();
+        return;
+      }
+
+      var body = "";
+      if (!live) {
+        body = '<div class="obnote">Nothing asked yet. A council runs every agent in parallel and puts ' +
+          "the answers side by side \u2014 the fastest way to find out where your fleet disagrees.</div>";
+      } else {
+        var answered = {};
+        (live.answers || []).forEach(function(a){ answered[a.agent] = a; });
+        var done = (live.answers || []).length, total = (live.agents || []).length;
+        body =
+          '<div class="cnq">' + esc(live.question) + "</div>" +
+          '<div class="cnmeta">' + done + " of " + total + " answered" +
+            (running ? ' \u00b7 <span class="cnrun">running</span>' : " \u00b7 done") +
+            (running ? "" : cnAgreement(live.answers || [])) +
+            (running ? "" : '<button class="cnexport" id="cnexport">Copy as markdown</button>') +
+          '<div class="cngrid">' +
+            (live.agents || []).map(function(id){
+              var a = answered[id];
+              var hh = hue(id);
+              var state_ = a ? (a.ok ? "ok" : "bad") : "wait";
+              return '<div class="cnpane ' + state_ + (a && a.chosen ? " chosen" : "") + '">' +
+                '<div class="cnpanehd">' +
+                  '<span class="cndot"></span>' +
+                  '<span class="cnname" style="color:hsl(' + hh + ',55%,var(--agent-l))">' + esc(id) + "</span>" +
+                  (a ? '<span class="cnms">' + cnDur(a.ms) + (a.cost > 0 ? " \u00b7 " + money(a.cost) : "") + "</span>"
+                     : '<span class="cnms">thinking\u2026</span>') +
+                  (a && a.chosen ? '<span class="abadge">chosen</span>' : "") +
+                "</div>" +
+                '<div class="cnbody">' +
+                  (a ? (a.ok ? mdToHtml(a.text || "(said nothing)") : '<span class="cnerr">' + esc(a.text) + "</span>")
+                     : '<div class="cnwait"><span class="busy"></span>waiting for ' + esc(id) + "\u2026</div>") +
+                "</div>" +
+                (a && a.ok && !a.chosen && !running
+                  ? '<button class="cnpick" data-pick="' + esc(id) + '">Go with this</button>'
+                  : "") +
+              "</div>";
+            }).join("") +
+          "</div>";
+      }
+
+      var hist = council.history.filter(function(h){ return !live || h.id !== live.id; });
+      var histHtml = hist.length
+        ? '<div class="cnsec">EARLIER COUNCILS \u00b7 FROM HYDRADB</div>' +
+          hist.slice(0, 5).map(function(h){
+            var picked = (h.answers || []).filter(function(a){ return a.chosen; })[0];
+            return '<div class="cnhist"><div class="cnhq">' + esc(h.question) + "</div>" +
+              '<div class="cnhm">' + (h.answers || []).length + " answers \u00b7 " +
+              (picked ? "went with " + esc(picked.agent) : "no pick") +
+              '<button class="cnexport" data-hist="' + esc(h.id) + '">Copy as markdown</button>' +
+              "</div></div>";
+          }).join("")
+        : "";
+
+      host.innerHTML = head + body + histHtml;
+      wireCouncil();
+    }
+
+    function wireCouncil(){
+      // Councils persist in the graph; the live one only exists in this
+      // daemon's memory. Exporting had to work from the history too, or the
+      // button quietly disappeared on the next restart — which is the opposite
+      // of the point of writing them down.
+      Array.prototype.forEach.call(document.querySelectorAll("[data-hist]"), function(b){
+        b.onclick = function(){
+          var id = b.getAttribute("data-hist");
+          var run = (council.history || []).filter(function(h){ return h.id === id; })[0];
+          if (!run) return;
+          var md = councilMarkdown(run);
+          copyText(md)
+            .then(function(){ toast("council copied \u00b7 " + md.split(String.fromCharCode(10)).length + " lines"); })
+            .catch(function(err){ toast(String((err && err.message) || err)); });
+        };
+      });
+      var ex = document.getElementById("cnexport");
+      if (ex) ex.onclick = function(){
+        var run = council.live;
+        if (!run) return;
+        var md = councilMarkdown(run);
+        copyText(md)
+          .then(function(){ toast("council copied \u00b7 " + md.split(String.fromCharCode(10)).length + " lines"); })
+          .catch(function(err){ toast(String((err && err.message) || err)); });
+      };
+      var form = document.getElementById("cnform");
+      if (form) form.onsubmit = function(ev){
+        ev.preventDefault();
+        var q = (document.getElementById("cnq").value || "").trim();
+        if (!q) return void toast("ask them something first");
+        var btn = document.getElementById("cnsend");
+        if (btn) { btn.disabled = true; btn.textContent = "asking\u2026"; }
+        api("/api/projects/" + pid + "/council", { method: "POST", body: JSON.stringify({ question: q }) })
+          .then(function(j){ council.live = j.council; renderCouncil(); loadCouncil(false); })
+          .catch(function(err){ toast(err.message); renderCouncil(); });
+      };
+      Array.prototype.forEach.call(document.querySelectorAll("[data-pick]"), function(b){
+        b.onclick = function(){
+          var agent = b.getAttribute("data-pick");
+          b.disabled = true; b.textContent = "recording\u2026";
+          api("/api/projects/" + pid + "/council/" + council.live.id + "/choose",
+              { method: "POST", body: JSON.stringify({ agent: agent }) })
+            .then(function(){
+              toast("went with " + agent + " \u00b7 filed as a decision in the brain");
+              loadCouncil();
+              refreshBrain();
+            })
+            .catch(function(err){ toast(err.message); b.disabled = false; b.textContent = "Go with this"; });
+        };
+      });
+    }
+
     // ---- Observatory: the fleet in action, the one brain -------------------
     // A live canvas of every agent as a node linked to the shared brain, the
     // baton drawn in shuttle, plus fleet metrics — the same numbers Notch ships
-    // to SigNoz as gen_ai spans. Kept dependency-free, rendered from strings.
+    // in HydraDB as gen_ai spans. Kept dependency-free, rendered from strings.
     var obNodePos = {};        // agent id -> {x,y} once dragged, persists across redraws
     var obRefreshT = null;
     var OBS_LIVE_KINDS = { run_complete: 1, handoff: 1, status: 1, route_started: 1,
@@ -2906,72 +3487,20 @@ ${BRAND_SPRITE}
         canvas: "<b>Right now.</b> Who is running this second, who is idle, and where the " + fx + "baton</b> is \\u2014 the ring pulses on whoever holds it. Every agent hangs off the <b>one shared brain</b> in the middle: that is the memory they all read and write, which is the whole point of the fleet. Updates live as turns start and finish. " + drag,
         graph: "<b>What already happened.</b> The baton\\u2019s actual route through the fleet, left to right, oldest handoff first. Each " + fx + "\\u2192</b> is one real handoff from the event log; <code>19t</code> under a name is turns that agent took. Live view is the <b>Live fleet</b> tab \\u2014 this one is history. " + drag,
         timeline: "<b>The run, in the order it happened.</b> Every turn, handoff, route, memory fold, budget pause and self-heal line on one spine \\u2014 so \\u201cwhy did it do that?\\u201d is answered by scrolling rather than by guessing. The \\ud83d\\udca1 lines are <b>decisions</b>; click one to read the reasoning behind it.",
-        metrics: "<b>Where the run\\u2019s time and money actually went.</b> Nothing here is estimated: tokens and cost are what each agent\\u2019s own CLI reported for the turn, and the durations are the spans Notch ships to SigNoz. Every agent carries a 0\\u2013100 <b>health score</b>, and <b>\\u26a0 Triage</b> root-causes a bad one from that agent\\u2019s own spans.",
+        metrics: "<b>Where the run\\u2019s time and money actually went.</b> Nothing here is estimated: tokens and cost are what each agent\\u2019s own CLI reported for the turn, and the durations are the spans Notch records in HydraDB. Every agent carries a 0\\u2013100 <b>health score</b>, and <b>\\u26a0 Triage</b> root-causes a bad one from that agent\\u2019s own spans.",
         decisions: "<b>The reasoning, not just the result.</b> Every choice an agent made, with what it weighed and rejected \\u2014 mined out of its own prose after each turn, so it survives the agent that made it. A confidence it actually measured and one merely pattern-matched are labelled differently, because a number you cannot source is worse than no number.",
-        alerts: "<b>What SigNoz told Notch, and what Notch did about it.</b> A firing alert takes the named agent out of rotation \\u2014 it is refused the baton until the alert resolves \\u2014 and a resolved one puts it back. This is the part SigNoz cannot show you: it knows the alert fired, only Notch knows the fleet reacted.",
-        logs: "<b>The third signal, read back out of SigNoz.</b> Every message, tool call, file edit and error at the severity it was recorded, filterable by both. Each line carries the <b>trace</b> of the turn that produced it, so a log and the span it came from are one click apart. This is the one view with no local fallback: if ClickHouse is not answering it says so, rather than showing an empty list that looks like a quiet run.",
+        alerts: "<b>What the fleet noticed about itself, and what it did about it.</b> Notch reads its own spans and fencing violations out of HydraDB; an agent that trips a threshold is taken out of rotation \\u2014 refused the baton \\u2014 and put back once it stops failing. No external alerting system is involved, so the loop closes even when nothing else is running.",
+        logs: "<b>The third signal, read back out of HydraDB.</b> Every message, tool call, file edit and error at the severity it was recorded, filterable by both. Each line carries the <b>trace</b> of the turn that produced it, so a log and the span it came from are one query apart \\u2014 in the same graph as the events that produced them.",
+        hydra: "<b>The questions only the graph can answer.</b> The baton is not a flag in a file any more \u2014 it is won in an <b>election</b> over HydraDB\u2019s commit order, and every ballot is below with the storage sequence it drew. A writer whose epoch fell behind is <b>fenced</b>, and the refusal is recorded rather than lost. Underneath, <b>why did this fail</b> is one bounded traversal instead of a pile of joins, and every panel shows the Cypher it ran.",
         travel: "<b>Rewind the whole run.</b> Drag the scrubber (or hit Play) to any moment and the whole app rewinds to it: who held the baton, every agent\\u2019s state, the decisions made so far, the thread \\u2014 and the <b>turn running at that instant</b> with its model, tokens, cost and trace. All reconstructed from the event log."
       };
       return E[view] ? '<div class="obexplain">' + E[view] + "</div>" : "";
     }
 
-    /**
-     * One-shot SigNoz setup: the dashboard, the alert rules, and the webhook
-     * that routes those alerts back here so the self-heal loop can act on them.
-     *
-     * Credentials are typed here and posted once — the daemon never stores them.
-     * That is stated on the form, because asking someone for a password without
-     * saying where it goes is not a thing this app should do.
-     */
-    function openProvisionModal(){
-      if (document.querySelector(".scrim")) return;
-      var scrim = document.createElement("div"); scrim.className = "scrim";
-      scrim.innerHTML = '<div class="modal"><div class="modalhead">Set up SigNoz' +
-        '<button class="iconbtn" id="pvx" aria-label="close">' + ICONS.x + "</button></div>" +
-        '<div class="modalbody" id="pvbody">' +
-          '<div class="obsub">Creates the <b>Notch dashboard</b>, two <b>alert rules</b> (turn errors, turn latency) and a <b>webhook channel</b> pointing back at this daemon \\u2014 so a firing alert quarantines the agent it names, and resolving it hands the baton back.</div>' +
-          '<label class="pvl">SigNoz URL<input class="mcpin wide" id="pvurl" value="' + esc(signozBase()) + '"/></label>' +
-          '<label class="pvl">Email<input class="mcpin wide" id="pvemail" autocomplete="off" placeholder="you@example.com"/></label>' +
-          '<label class="pvl">Password<input class="mcpin wide" id="pvpass" type="password" autocomplete="off"/></label>' +
-          '<div class="mcphint">Used once to call SigNoz\\u2019s API. Not stored, not logged.</div>' +
-          '<button class="mcpbtn" id="pvgo">Set it up</button>' +
-          '<div id="pvout"></div>' +
-        "</div></div>";
-      document.body.appendChild(scrim);
-      function close(){ scrim.remove(); document.removeEventListener("keydown", onKey); }
-      function onKey(e){ if (e.key === "Escape") close(); }
-      document.addEventListener("keydown", onKey);
-      scrim.addEventListener("click", function(ev){ if (ev.target === scrim) close(); });
-      document.getElementById("pvx").onclick = close;
-      document.getElementById("pvgo").onclick = function(){
-        var btn = this, out = document.getElementById("pvout");
-        var body = {
-          url: document.getElementById("pvurl").value.trim(),
-          email: document.getElementById("pvemail").value.trim(),
-          password: document.getElementById("pvpass").value
-        };
-        if (!body.email || !body.password){ out.innerHTML = '<div class="pverr">Email and password are required.</div>'; return; }
-        btn.disabled = true; btn.textContent = "Setting up\\u2026"; out.innerHTML = "";
-        api("/api/signoz/provision", { method: "POST", body: JSON.stringify(body) })
-          .then(function(r){
-            var line = function(label, made){ return '<div class="pvrow"><span class="mcpstate ' + (made ? "ok" : "") + '">' + (made ? "created" : "already there") + "</span>" + esc(label) + "</div>"; };
-            var h = "";
-            if (r.channel) h += line("webhook channel \\u00b7 " + r.channel.name, r.channel.created);
-            (r.rules || []).forEach(function(x){ h += line("alert \\u00b7 " + x.alert, x.created); });
-            if (r.dashboard) h += line("dashboard \\u00b7 " + r.dashboard.title, r.dashboard.created);
-            h += '<div class="mcphint">Alerts will POST to <code>' + esc(r.webhookUrl) + "</code></div>";
-            (r.notes || []).forEach(function(n){ h += '<div class="pverr">' + esc(n) + "</div>"; });
-            out.innerHTML = h;
-          })
-          .catch(function(err){ out.innerHTML = '<div class="pverr">' + esc(err.message || "failed") + "</div>"; })
-          .then(function(){ btn.disabled = false; btn.textContent = "Set it up"; });
-      };
-    }
-
     // ---- Ask Noz — the fleet's own telemetry, asked in English --------------
     // Backed by POST /observatory/ask, which assembles the evidence from the
     // same sources this screen renders (status, metrics, health, spans,
-    // decisions) and hands any configured SigNoz MCP server to the model. So an
+    // decisions) and hands any configured MCP server to the model. So an
     // answer can only ever cite numbers that are also on the screen.
     var ASK_SUGGESTIONS = [
       "Which agent is costing me the most, and why?",
@@ -2995,8 +3524,8 @@ ${BRAND_SPRITE}
           if (m.role === "user") return '<div class="askm user">' + esc(m.text) + "</div>";
           if (m.role === "pending") return '<div class="askm noz pending"><span class="askdots"><i></i><i></i><i></i></span>reading the fleet\\u2019s telemetry\\u2026</div>';
           return '<div class="askm noz">' + esc(m.text).replace(/\\n/g, "<br>") +
-            (m.via ? '<div class="askvia">answered by ' + esc(m.via) + (m.mcp && m.mcp.length ? " \\u00b7 via SigNoz MCP: " + esc(m.mcp.join(", ")) : "") +
-              (m.spanSource === "local-log" ? " \\u00b7 local event log (SigNoz unreachable)" : m.spanSource === "signoz" ? " \\u00b7 SigNoz spans" : "") + "</div>" : "") + "</div>";
+            (m.via ? '<div class="askvia">answered by ' + esc(m.via) + (m.mcp && m.mcp.length ? " \\u00b7 via MCP: " + esc(m.mcp.join(", ")) : "") +
+              (m.spanSource === "local-log" ? " \\u00b7 local event log" : m.spanSource === "hydradb" ? " \\u00b7 HydraDB spans" : "") + "</div>" : "") + "</div>";
         }).join("") + "</div>";
       }
       return '<div class="askhd"><span class="askt">' + (ICONS.spark || "") + "Noz</span>" +
@@ -3213,7 +3742,7 @@ ${BRAND_SPRITE}
       // Six views, ordered by the question people arrive with. "Replay" is the
       // old Time Travel: it absorbed the separate span-replay tab, which scrubbed
       // the same run on a second slider and left everyone asking which was which.
-      var VIEWS = [["metrics", "Metrics"], ["canvas", "Live fleet"], ["graph", "Handoffs"], ["alerts", "Self-heal"], ["timeline", "Timeline"], ["decisions", "Decisions"], ["logs", "Logs"], ["travel", "Replay"]];
+      var VIEWS = [["metrics", "Metrics"], ["canvas", "Live fleet"], ["graph", "Handoffs"], ["alerts", "Self-heal"], ["timeline", "Timeline"], ["decisions", "Decisions"], ["hydra", "Provenance"], ["logs", "Logs"], ["travel", "Replay"]];
       var tabs = VIEWS.map(function(v){
         var on = state.obView === v[0];
         return '<button class="obtab' + (on ? " on" : "") + '" role="tab" aria-selected="' + on + '" tabindex="' + (on ? "0" : "-1") + '" data-obv="' + v[0] + '">' + esc(v[1]) + "</button>";
@@ -3233,13 +3762,13 @@ ${BRAND_SPRITE}
       else if (state.obView === "logs") body = '<div id="oblogs" class="obasync">' + LOADER + "</div>";
       else if (state.obView === "alerts") body = '<div id="obalerts" class="obasync">' + LOADER + "</div>";
       else if (state.obView === "travel") body = '<div id="obtravel" class="obasync">' + LOADER + "</div>";
+      else if (state.obView === "hydra") body = '<div id="obhydra" class="obasync">' + LOADER + "</div>";
       else body = '<div class="obcanvaswrap">' + observatoryCanvas(agents, p.holder, byAgent) + "</div>";
       el.innerHTML =
         '<div class="obhead"><div class="obtitle">' + ICONS.telescope +
           '<span>Observatory</span> <span class="obsub">agents in action \\u00b7 the one brain</span></div>' +
           '<button class="obask" id="obaskbtn" type="button">' + (ICONS.spark || ICONS.route) + " Ask Noz</button>" +
-          '<button class="obprov" id="obprovbtn" type="button" title="create the Notch dashboard, alert rules and the self-heal webhook in SigNoz">' + (ICONS.gear || "") + " Set up SigNoz</button>" +
-          '<a class="obsignoz" href="' + signozBase() + '" target="_blank" rel="noreferrer">' + ICONS.route + " View in SigNoz</a></div>" +
+          "</div>" +
         '<div class="obmetrics">' + cards + "</div>" +
         '<div class="obtabs" role="tablist" aria-label="Observatory views">' + tabs + "</div>" +
         obExplain(state.obView) +
@@ -3318,6 +3847,7 @@ ${BRAND_SPRITE}
       if (state.obView === "logs") observatoryLogs(p);
       if (state.obView === "alerts") observatoryAlerts(p, events);
       if (state.obView === "travel") observatoryTravel(p);
+      if (state.obView === "hydra") observatoryHydra(p);
     }
     // "Why did I fail?" — pull the agent's own traces and root-cause them.
     function openTriage(p, agent){
@@ -3336,8 +3866,8 @@ ${BRAND_SPRITE}
       api("/api/projects/" + p.id + "/triage/" + encodeURIComponent(agent))
         .then(function(r){
           var t = (r && r.triage) || {};
-          var src = t.source === "llm" ? '<span class="tbadge on">Claude</span>' : t.source === "heuristic" ? '<span class="tbadge">rule-based</span>' : '<span class="tbadge">no data</span>';
-          var frm = t.from === "signoz" ? '<span class="tbadge">from SigNoz</span>' : t.from === "local-log" ? '<span class="tbadge">from event log</span>' : "";
+          var src = t.source === "llm" ? '<span class="tbadge on">Claude</span>' : t.source === "cli" ? '<span class="tbadge on">local model</span>' : t.source === "heuristic" ? '<span class="tbadge">rule-based</span>' : t.source === "human" ? '<span class="tbadge">you decided</span>' : '<span class="tbadge">no data</span>';
+          var frm = t.from === "hydradb" ? '<span class="tbadge">from HydraDB</span>' : t.from === "local-log" ? '<span class="tbadge">from event log</span>' : "";
           var evs = (t.evidence || []).map(function(s){
             var d = new Date(s.ts), hh = ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2);
             return '<div class="tev' + (s.code === 2 ? " err" : "") + '"><span class="tevn">' + esc(s.name) + "</span>" +
@@ -3354,7 +3884,7 @@ ${BRAND_SPRITE}
         })
         .catch(function(){
           var body = document.querySelector(".triagemodal .modalbody");
-          if (body) body.innerHTML = '<div class="obsub">Triage failed \\u2014 the daemon or SigNoz is unreachable.</div>';
+          if (body) body.innerHTML = '<div class="obsub">Triage failed \\u2014 the daemon or HydraDB is unreachable.</div>';
         });
     }
     // Agent Health Score breakdown — the 4 penalty buckets behind the pill.
@@ -3381,15 +3911,13 @@ ${BRAND_SPRITE}
       scrim.addEventListener("click", function(ev){ if (ev.target === scrim) close(); });
       document.getElementById("hx").onclick = close;
     }
-    function signozBase(){ var u = window.__notchSignozUrl; return (u && u.charAt(0) !== "%" ? u : "http://localhost:8080").replace(/\\/+$/, ""); }
-    function signozTraceUrl(id){ return signozBase() + "/trace/" + encodeURIComponent(id || ""); }
-    // BURN: per-agent cost over time (real ClickHouse), linear projection, budgets.
+    // BURN: per-agent cost over time (real spans from HydraDB), projection, budgets.
     function observatoryBurn(p){
       var host = document.getElementById("obburn"); if (!host) return;
       api("/api/projects/" + p.id + "/insights/burn?hours=24&buckets=12").then(function(r){
         host.innerHTML = burnView(p, r.burn || { buckets: [], totalUsd: 0, ratePerHour: 0, projected24h: 0 }, r.budgets || {});
         wireBurnBudgets(p, host);
-      }).catch(function(){ host.innerHTML = '<div class="obnote">Burn data unavailable \\u2014 SigNoz/ClickHouse unreachable.</div>'; });
+      }).catch(function(){ host.innerHTML = '<div class="obnote">Burn data unavailable \\u2014 HydraDB is unreachable.</div>'; });
     }
     function burnView(p, burn, budgets){
       var bk = burn.buckets || [], n = bk.length, W = 680, H = 150, PADL = 6, PADR = 6, PADT = 12, PADB = 8;
@@ -3427,7 +3955,7 @@ ${BRAND_SPRITE}
           '<input class="budinput" type="number" min="0" step="0.5" data-agent="' + esc(a.id) + '" value="' + (v != null ? v : "") + '" placeholder="none"/>' +
           '<button class="budsave" data-agent="' + esc(a.id) + '">Save</button></div>';
       }).join("");
-      return '<div class="burnwrap"><div class="obmlabel">Burn rate \\u00b7 per-agent cost, last 24h (from SigNoz)</div>' + svg + summary + empty +
+      return '<div class="burnwrap"><div class="obmlabel">Burn rate \\u00b7 per-agent cost, last 24h (from HydraDB)</div>' + svg + summary + empty +
         '<div class="obmlabel" style="margin-top:16px">Per-agent budgets</div><div class="budgets">' + budrows + "</div></div>";
     }
     function wireBurnBudgets(p, host){
@@ -3451,7 +3979,7 @@ ${BRAND_SPRITE}
         state.obReplaySrc = r.from;
         state.obReplayTurns = turns; if (state.obReplayIx == null || state.obReplayIx >= turns.length) state.obReplayIx = 0;
         renderReplay(p, host);
-      }).catch(function(){ host.innerHTML = '<div class="obnote">Span replay unavailable \\u2014 SigNoz/ClickHouse unreachable.</div>'; });
+      }).catch(function(){ host.innerHTML = '<div class="obnote">Span replay unavailable \\u2014 HydraDB is unreachable.</div>'; });
     }
     function renderReplay(p, host){
       var turns = state.obReplayTurns || [], ix = state.obReplayIx || 0, t = turns[ix] || {};
@@ -3465,19 +3993,19 @@ ${BRAND_SPRITE}
         '<div class="rpmetrics">' + pill("duration ", (t.ms || 0) + "ms") + pill("in ", tokfmt(t.tin || 0)) + pill("out ", tokfmt(t.tout || 0)) + pill("cost ", money(t.cost || 0)) + "</div>" +
         '<div class="rpactions">' +
           (t.traceId
-            ? '<button class="rpwf" data-trace="' + esc(t.traceId) + '">Trace waterfall</button><a class="rpsignoz" href="' + signozTraceUrl(t.traceId) + '" target="_blank" rel="noreferrer">Open in SigNoz \\u2197</a>'
-            : '<span class="rpnote">' + ICONS.route + " The trace waterfall + SigNoz link light up once SigNoz is reachable \\u2014 this turn is from the local event log.</span>") +
+            ? '<button class="rpwf" data-trace="' + esc(t.traceId) + '">Trace waterfall</button>'
+            : '<span class="rpnote">' + ICONS.route + " This turn came from the local event log, so it carries no trace to expand.</span>") +
           "</div></div>";
       var src = state.obReplaySrc === "local-log";
       var scrub = '<div class="rpscrubwrap"><input class="rpscrub" type="range" aria-label="Scrub turns" aria-valuetext="turn ' + (ix + 1) + " of " + turns.length + (t.agent ? ", " + esc(t.agent) : "") + '" min="0" max="' + (turns.length - 1) + '" value="' + ix + '"/>' +
         '<div class="rpscrubinfo">turn ' + (ix + 1) + " / " + turns.length + " \\u00b7 " + hh + "</div></div>";
-      host.innerHTML = '<div class="replaywrap"><div class="obmlabel">Span replay \\u00b7 scrub the fleet\\u2019s turns \\u00b7 ' + (src ? "local event log" : "from SigNoz") + "</div>" + scrub + frame + "</div>";
+      host.innerHTML = '<div class="replaywrap"><div class="obmlabel">Span replay \\u00b7 scrub the fleet\\u2019s turns \\u00b7 ' + (src ? "local event log" : "from HydraDB") + "</div>" + scrub + frame + "</div>";
       var range = host.querySelector(".rpscrub");
       if (range) range.oninput = function(){ state.obReplayIx = Number(range.value); renderReplay(p, host); };
       var wf = host.querySelector(".rpwf");
       if (wf) wf.onclick = function(){ openWaterfall(p, wf.getAttribute("data-trace")); };
     }
-    // WATERFALL: one trace's spans as time-positioned bars + a SigNoz deep link.
+    // WATERFALL: one trace's spans as time-positioned bars, straight from HydraDB.
     function openWaterfall(p, traceId){
       if (!traceId || document.querySelector(".scrim")) return;
       var scrim = document.createElement("div"); scrim.className = "scrim";
@@ -3491,9 +4019,29 @@ ${BRAND_SPRITE}
       scrim.addEventListener("click", function(ev){ if (ev.target === scrim) close(); });
       document.getElementById("wfx").onclick = close;
       function wfpill(l, v){ return '<span class="wfp"><span class="wfpl">' + l + "</span>" + v + "</span>"; }
+      /**
+       * Re-read while the turn is still running.
+       *
+       * A waterfall opened mid-turn used to be a snapshot of whatever had
+       * landed by then — usually one bar — and it stayed that way while the
+       * turn went on producing spans behind it. The interesting moment is
+       * watching the tree fill in, so it polls until the trace stops growing
+       * and then stops: a finished trace does not change, and a modal that
+       * polls forever is a modal nobody closes cleanly.
+       */
+      var wfLast = -1, wfStill = 0, wfTimer = null;
+      function wfStop(){ if (wfTimer) { clearTimeout(wfTimer); wfTimer = null; } }
+      var closeInner = close;
+      close = function(){ wfStop(); closeInner(); };
+      function draw(){
       api("/api/projects/" + p.id + "/insights/trace/" + encodeURIComponent(traceId)).then(function(r){
         var spans = r.spans || [], body = scrim.querySelector(".modalbody");
-        if (!spans.length){ body.innerHTML = '<div class="wfempty">No spans in this trace yet \\u2014 they land in SigNoz within about a second of the turn finishing.</div>' + signozLink(traceId); return; }
+        if (!body || !document.body.contains(scrim)) return wfStop();
+        // Keep looking while the count is still moving; three quiet passes and
+        // the turn is done producing.
+        if (spans.length === wfLast) wfStill++; else { wfStill = 0; wfLast = spans.length; }
+        if (wfStill < 3) { wfStop(); wfTimer = setTimeout(draw, 900); }
+        if (!spans.length){ body.innerHTML = '<div class="wfempty">No spans in this trace yet \\u2014 they land within about a second of the turn finishing.</div>'; return; }
         var t0 = Math.min.apply(null, spans.map(function(s){ return s.ts; }));
         var t1 = Math.max.apply(null, spans.map(function(s){ return s.ts + (s.ms || 0); }));
         var dur = Math.max(1, t1 - t0);
@@ -3513,10 +4061,12 @@ ${BRAND_SPRITE}
         body.innerHTML = summary +
           '<div class="wflabel">Spans \\u00b7 each bar is one span, placed by when it started</div>' +
           '<div class="wfrows">' + rows + "</div>" +
-          '<div class="wfaxis"><span>0ms</span><span>' + fmtMs(dur) + "</span></div>" + signozLink(traceId);
-      }).catch(function(){ var body = scrim.querySelector(".modalbody"); if (body) body.innerHTML = '<div class="wfempty">Trace unavailable \\u2014 SigNoz is unreachable.</div>' + signozLink(traceId); });
+          '<div class="wfaxis"><span>0ms</span><span>' + fmtMs(dur) + "</span></div>" +
+          (wfStill < 3 ? '<div class="wflive"><span class="busy"></span>still running \\u2014 new spans appear as they land</div>' : "");
+      }).catch(function(){ wfStop(); var body = scrim.querySelector(".modalbody"); if (body) body.innerHTML = '<div class="wfempty">Trace unavailable \\u2014 HydraDB is unreachable.</div>'; });
+      }
+      draw();
     }
-    function signozLink(traceId){ return '<a class="rpsignoz wide" href="' + signozTraceUrl(traceId) + '" target="_blank" rel="noreferrer">View full trace in SigNoz \\u2197</a>'; }
     // ---- KAIRO-style dense metrics panels (above the fleet table) ----------
     function fmtMs(ms){ ms = Number(ms) || 0; if (ms < 1000) return ms + "ms"; if (ms < 60000) return (ms / 1000).toFixed(1) + "s"; return Math.floor(ms / 60000) + "m " + Math.round((ms % 60000) / 1000) + "s"; }
     function kmSpark(values, cls){
@@ -3573,6 +4123,7 @@ ${BRAND_SPRITE}
       var L = { llm: ["model-read", "an LLM read the turn and rated its own confidence"],
                 cli: ["model-read", "a local model read the turn and rated its own confidence"],
                 heuristic: ["pattern-matched", "found by text patterns \\u2014 no confidence is claimed"],
+                human: ["you decided", "recorded by hand with loom decision \\u2014 not extracted, so no confidence is claimed"],
                 unknown: ["source unknown", "this decision predates extraction-source tracking"] };
       var e = L[s] || L.unknown;
       return '<span class="decsrc ' + esc(s) + '" title="' + esc(e[1]) + '">' + esc(e[0]) + "</span>";
@@ -3616,6 +4167,334 @@ ${BRAND_SPRITE}
       Array.prototype.forEach.call(document.querySelectorAll(".deccard"), function(c){ c.classList.toggle("sel", c.getAttribute("data-id") === id); });
       var el = document.getElementById("decdetail"); if (el) el.innerHTML = renderDecisionDetail(d);
     }
+    /**
+     * Provenance — the graph-native half of the Observatory.
+     *
+     * Every panel here answers a question the old SQLite-backed build could
+     * not, and each one shows the Cypher that produced it. A traversal you are
+     * asked to take on faith is a traversal you have no reason to believe, and
+     * the whole point of these panels is that the claim is checkable.
+     */
+    function observatoryHydra(p){
+      var host = document.getElementById("obhydra"); if (!host) return;
+      Promise.all([
+        api("/api/projects/" + p.id + "/graph/health").catch(function(){ return null; }),
+        api("/api/projects/" + p.id + "/graph/baton").catch(function(){ return null; }),
+        api("/api/projects/" + p.id + "/graph/fencing").catch(function(){ return null; }),
+        api("/api/projects/" + p.id + "/graph/handoffs").catch(function(){ return null; })
+      ]).then(function(r){
+        var health = r[0], baton = r[1], fencing = r[2], handoffs = r[3];
+        if (!health || !health.ok){
+          host.innerHTML = '<div class="obnote">HydraDB is not answering at <code>' +
+            esc((health && health.url) || "http://127.0.0.1:8443") + '</code>. ' +
+            'The log, the baton and the brain all live there, so this view has nothing to fall back on \\u2014 ' +
+            'and saying otherwise would be the screen inventing a fleet. Start a node and switch tabs to retry.' +
+            (health && health.detail ? '<div class="obsub" style="margin-top:8px"><code>' + esc(health.detail) + '</code></div>' : '') +
+            '</div>';
+          return;
+        }
+        host.innerHTML =
+          hydraHealthHtml(health) +
+          batonLedgerHtml(baton, p) +
+          fencingHtml(fencing) +
+          handoffLedgerHtml(handoffs) +
+          projectedHtml(handoffs) +
+          causalHtml() +
+          inspectorHtml();
+        wireHydraPanels(host, p);
+      }).catch(function(err){
+        host.innerHTML = '<div class="obnote">Could not read the graph \\u2014 ' + esc(String(err && err.message || err)) + '</div>';
+      });
+    }
+
+    function hydraHealthHtml(h){
+      var c = h.counts || {};
+      function cell(label, value, sub){
+        return '<div class="obcard" style="flex:1;min-width:104px"><div class="obsub">' + esc(label) + '</div>' +
+          '<div style="font-size:19px;font-weight:600;margin-top:2px">' + esc(String(value)) + '</div>' +
+          (sub ? '<div class="obsub" style="margin-top:1px">' + esc(sub) + '</div>' : '') + '</div>';
+      }
+      return '<div class="decheader"><span class="declabel">HYDRADB</span><span class="deccount">' +
+        esc(h.graph) + " \\u00b7 " + esc(h.cell) + " \\u00b7 " + esc(h.url) + "</span></div>" +
+        '<div class="obrow" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">' +
+        cell("Events", c.events, "the log itself") +
+        cell("Memories", c.memories, "brain units") +
+        cell("Entities", c.entities, "shared across runs") +
+        cell("Handoffs", c.handoffs, "baton moves") +
+        cell("Ballots", c.claims, "election claims") +
+        cell("Fenced", c.violations, "stale writes refused") +
+        cell("Queued", h.pendingEvents, "not yet durable") +
+        "</div>";
+    }
+
+    /**
+     * The election, with its arithmetic showing.
+     *
+     * The seq column is the point: it is the storage sequence HydraDB
+     * assigned each ballot at commit, and the lowest one at an epoch wins.
+     * Seeing two ballots at one epoch with different sequences is seeing the
+     * total order that makes the baton safe.
+     */
+    function batonLedgerHtml(b, p){
+      if (!b) return "";
+      var st = b.state || {}, epochs = b.epochs || [];
+      var head = '<div class="decheader"><span class="declabel">BATON LEDGER</span><span class="deccount">' +
+        (st.holder ? esc(st.holder) + " holds epoch " + st.epoch : "unheld") +
+        (st.tenureEpoch && st.holder ? " \\u00b7 tenure since epoch " + st.tenureEpoch : "") + "</span></div>";
+      if (!epochs.length){
+        return head + '<div class="obnote">No elections yet. The first agent to take a turn stands unopposed \\u2014 and still gets an epoch, because the epoch is what fencing compares against.</div>';
+      }
+      var rows = epochs.slice(0, 24).map(function(e){
+        var contested = (e.contenders || []).length > 1;
+        var ballots = (e.contenders || []).map(function(c, i){
+          return '<span class="' + (i === 0 ? "obwon" : "oblost") + '">' + esc(c.agent || "\\u2014") + "@" + c.seq + "</span>";
+        }).join(" ");
+        return '<tr' + (contested ? ' class="obcontested"' : '') + '><td>' + e.epoch + "</td><td><b>" +
+          esc(e.holder || "\\u2014") + "</b></td><td>" + e.seq + "</td><td>" + esc(e.reason || "") + "</td><td>" +
+          ballots + (contested ? ' <span class="obsub">(' + (e.contenders.length) + " stood)</span>" : "") + "</td></tr>";
+      }).join("");
+      return head +
+        '<div class="obnote">Lowest commit sequence at an epoch wins. A ballot that arrives later can never draw a lower sequence, so a winner cannot be overtaken once anyone has seen it \\u2014 which is why every client computes the same holder without asking each other.</div>' +
+        '<table class="obtbl"><thead><tr><th>epoch</th><th>holder</th><th>seq</th><th>why</th><th>ballots (winner first)</th></tr></thead><tbody>' +
+        rows + "</tbody></table>" +
+        '<div class="obcypher"><code>MATCH (p:Project {id: $pv})-[:HAS_CLAIM]->(c:BatonClaim) RETURN c.epoch, c.agent, c.seq ORDER BY epoch, seq</code></div>';
+    }
+
+    function fencingHtml(f){
+      var v = (f && f.violations) || [];
+      var head = '<div class="decheader" style="margin-top:22px"><span class="declabel">FENCING</span><span class="deccount">' +
+        v.length + " stale write" + (v.length === 1 ? "" : "s") + " refused</span></div>";
+      var drill = '<button class="obdrill" id="obdrill">Run a fence drill</button>' +
+        '<span class="obsub" style="margin-left:9px">Performs a real stale-epoch write through the same gate every agent action goes through. Not a simulation \u2014 which is why the self-heal watcher counts it, and will pause that agent.</span>';
+      if (!v.length){
+        return head + '<div class="obnote">Nothing has been fenced. That is the expected state \\u2014 but a guarantee nobody can watch fail is one nobody has reason to believe, so:</div>' +
+          '<div style="margin-bottom:14px">' + drill + '<div id="obdrillout">' + drillResultHtml() + "</div></div>";
+      }
+      var rows = v.map(function(x){
+        return "<tr><td>" + esc(new Date(x.at).toLocaleTimeString()) + "</td><td><b>" + esc(x.agent) + "</b></td><td>" +
+          x.staleEpoch + " \\u2192 " + x.currentEpoch + "</td><td>" + esc(x.currentHolder || "\\u2014") +
+          "</td><td>" + esc(x.op) + '</td><td class="obsub">' + esc(x.detail || "") + "</td></tr>";
+      }).join("");
+      return head +
+        '<div class="obnote">A write carrying an epoch older than the holder\\u2019s current tenure is refused and recorded. The file-based lock this replaced had no epoch, so there was nothing to be stale about and the write simply landed.</div>' +
+        '<table class="obtbl"><thead><tr><th>when</th><th>agent</th><th>epoch</th><th>holder now</th><th>op</th><th>detail</th></tr></thead><tbody>' +
+        rows + "</tbody></table>" +
+        '<div style="margin:12px 0">' + drill + '<div id="obdrillout">' + drillResultHtml() + "</div></div>";
+    }
+
+    /**
+     * The drill's outcome, rendered from state rather than written into the DOM.
+     *
+     * The panel refreshes a moment after a drill so the new FencingViolation
+     * row appears — and that refresh rebuilt the whole host, destroying
+     * anything written straight into the output div. The result flashed and
+     * vanished, which is the one thing this button exists to show you.
+     */
+    function drillResultHtml(){
+      var r = state.obDrill;
+      if (!r) return "";
+      return '<div class="obcard" style="margin-top:10px;border-color:' +
+        (r.fenced ? "var(--shuttle)" : "var(--border)") + '">' +
+        "<b>" + (r.fenced ? "Fenced." : "Allowed.") + "</b> " + esc(r.detail) +
+        '<div class="obsub" style="margin-top:6px">agent <code>' + esc(r.agent) + "</code> wrote at epoch " +
+        r.epoch + "; the holder\u2019s tenure begins at epoch " + ((r.current && r.current.tenureEpoch) || "?") +
+        ". This was a real write, refused by the same gate every agent action goes through.</div></div>";
+    }
+
+    function handoffLedgerHtml(h){
+      var e = (h && h.edges) || [];
+      if (!e.length) return "";
+      var max = e.reduce(function(m, x){ return Math.max(m, x.count); }, 1);
+      return '<div class="decheader" style="margin-top:22px"><span class="declabel">HANDOFF EDGES</span>' +
+        '<span class="deccount">' + e.length + " route" + (e.length === 1 ? "" : "s") + " walked</span></div>" +
+        '<div class="obnote">Read straight out of the graph rather than folded from the log in the browser \\u2014 the same query answers it for a run that finished last week.</div>' +
+        e.map(function(x){
+          return '<div class="obedge"><span>' + esc(x.from || "\\u2014") + '</span><span class="obarrow">\\u2192</span><span>' +
+            esc(x.to) + '</span><span class="obbar" style="width:' + Math.round((x.count / max) * 120) + 'px"></span>' +
+            '<span class="obsub">' + x.count + "\\u00d7</span></div>";
+        }).join("") +
+        '<div class="obcypher"><code>MATCH (p:Project {id: $pv})-[:HAS_HANDOFF]->(h:Handoff) RETURN h.from_agent, h.to_agent, count(*)</code></div>';
+    }
+
+    /**
+     * What each agent actually knew when it took the baton.
+     *
+     * Notch always projected the brain one-shot at handoff and then had no
+     * record of it. This is the first build where "what did it know?" is
+     * answerable after the fact — the PROJECTED_AT edges are written at the
+     * moment of injection, so the answer is the real one rather than a
+     * reconstruction of what recall would return today.
+     */
+    function projectedHtml(h){
+      var list = (h && h.handoffs) || [];
+      if (!list.length) return "";
+      return '<div class="decheader" style="margin-top:22px"><span class="declabel">WHAT EACH AGENT KNEW</span>' +
+        '<span class="deccount">memory injected at handoff</span></div>' +
+        '<div class="obnote">One-shot per handoff, recorded as it happened. A row reading <b>0</b> is an agent that took over cold \u2014 worth knowing, and previously invisible.</div>' +
+        list.map(function(x){
+          return '<div class="obedge obknew" data-hkey="' + esc(x.key) + '">' +
+            '<span class="obsub">epoch ' + x.epoch + '</span>' +
+            "<span>" + esc(x.from || "\u2014") + '</span><span class="obarrow">\u2192</span><span>' + esc(x.to) + "</span>" +
+            '<span class="' + (x.injected ? "obinj" : "obinj0") + '">' + x.injected + " memor" + (x.injected === 1 ? "y" : "ies") + "</span>" +
+            (x.injected ? '<span class="obsub obreveal">show</span>' : "") +
+            '</div><div class="obknewout" id="knew-' + esc(x.key).replace(/[^A-Za-z0-9_-]/g, "_") + '"></div>';
+        }).join("") +
+        '<div class="obcypher"><code>MATCH (m:MemoryUnit)-[:PROJECTED_AT]->(h:Handoff {hkey: $key}) RETURN m.kind, m.text</code></div>';
+    }
+
+    /**
+     * A Cypher box, against the same graph every panel above reads.
+     *
+     * Every panel prints the query behind it. This makes those queries
+     * runnable: edit one, run it, read the rows. It is the difference between
+     * a dashboard telling you the log and the brain share a graph and you
+     * checking. Read-only, enforced by the daemon rather than by the box.
+     *
+     * $pv and $slot are bound to this project, so the printed queries above
+     * paste in and run unchanged.
+     */
+    function inspectorHtml(){
+      var q = state.gqCypher || "MATCH (p:Project {id: $pv})-[:HAS_EVENT]->(e:Event) RETURN e.kind AS kind, count(*) AS n";
+      var out = "";
+      if (state.gqBusy) out = '<div class="obnote">running\u2026</div>';
+      else if (state.gqErr) out = '<div class="obnote gqerr">' + esc(state.gqErr) + "</div>";
+      else if (state.gqRows) {
+        var cols = state.gqCols || [];
+        if (!state.gqRows.length) out = '<div class="obnote">No rows. The query ran \u2014 nothing matched it.</div>';
+        else out = '<div class="gqwrap"><table class="obtbl"><thead><tr>' +
+          cols.map(function(c){ return "<th>" + esc(c) + "</th>"; }).join("") +
+          "</tr></thead><tbody>" +
+          state.gqRows.map(function(r){
+            return "<tr>" + cols.map(function(c){
+              var v = r[c];
+              return "<td>" + esc(v === null || v === undefined ? "\u2014" : String(v)) + "</td>";
+            }).join("") + "</tr>";
+          }).join("") + "</tbody></table></div>" +
+          '<div class="obsub">' + state.gqTotal + " row" + (state.gqTotal === 1 ? "" : "s") +
+          (state.gqTrunc ? " (showing 200)" : "") + " \u00b7 " + state.gqMs + "ms</div>";
+      }
+      return '<div class="decheader" style="margin-top:22px"><span class="declabel">ASK THE GRAPH</span>' +
+        '<span class="deccount">read-only Cypher</span></div>' +
+        '<div class="obnote">Every panel above prints its query. Paste one in and run it \u2014 <code>$pv</code> and <code>$slot</code> are bound to this project. Writes are refused here; they go through the app.</div>' +
+        '<textarea class="gqbox" id="gqbox" rows="3" spellcheck="false">' + esc(q) + "</textarea>" +
+        '<button class="obdrill" id="gqrun">Run</button>' +
+        '<div id="gqout">' + out + "</div>";
+    }
+
+    function causalHtml(){
+      return '<div class="decheader" style="margin-top:22px"><span class="declabel">WHY DID IT FAIL</span>' +
+        '<span class="deccount">multi-hop causal chain</span></div>' +
+        '<div class="obnote">Pick a failure the fleet recorded and walk backwards: what decision caused it, and what constraint that decision was made under. Each hop is a real edge with the evidence that justified it.</div>' +
+        '<select id="obcausalpick" class="obsel"><option value="">Loading failures\\u2026</option></select>' +
+        '<div id="obcausalout"></div>';
+    }
+
+    function wireHydraPanels(host, p){
+      var gqrun = document.getElementById("gqrun");
+      if (gqrun) gqrun.onclick = function(){
+        var box = document.getElementById("gqbox");
+        var cypher = box ? box.value.trim() : "";
+        if (!cypher) return;
+        state.gqCypher = cypher; state.gqBusy = true; state.gqErr = null; state.gqRows = null;
+        var outEl = document.getElementById("gqout");
+        if (outEl) outEl.innerHTML = '<div class="obnote">running\u2026</div>';
+        api("/api/projects/" + p.id + "/graph/query", { method: "POST", body: JSON.stringify({ cypher: cypher }) })
+          .then(function(r){
+            state.gqBusy = false; state.gqErr = null;
+            state.gqRows = r.rows || []; state.gqCols = r.columns || [];
+            state.gqTotal = r.total || 0; state.gqTrunc = !!r.truncated; state.gqMs = r.ms || 0;
+            var el = document.getElementById("gqout");
+            if (el) el.outerHTML = '<div id="gqout">' + inspectorHtml().split('<div id="gqout">')[1];
+          })
+          .catch(function(err){
+            state.gqBusy = false; state.gqRows = null;
+            state.gqErr = String((err && err.message) || err);
+            var el = document.getElementById("gqout");
+            if (el) el.innerHTML = '<div class="obnote gqerr">' + esc(state.gqErr) + "</div>";
+          });
+      };
+      var drill = document.getElementById("obdrill");
+      if (drill) drill.onclick = function(){
+        drill.disabled = true; drill.textContent = "Running\\u2026";
+        api("/api/projects/" + p.id + "/graph/fence-drill", { method: "POST", body: "{}" }).then(function(r){
+          state.obDrill = r;
+          var out = document.getElementById("obdrillout");
+          if (out) out.innerHTML = drillResultHtml();
+          drill.disabled = false; drill.textContent = "Run a fence drill";
+          setTimeout(function(){ observatoryHydra(p); }, 1200);
+        }).catch(function(err){
+          drill.disabled = false; drill.textContent = "Run a fence drill";
+          var out = document.getElementById("obdrillout");
+          if (out) out.innerHTML = '<div class="obnote">Drill failed: ' + esc(String(err && err.message || err)) + "</div>";
+        });
+      };
+
+      Array.prototype.forEach.call(host.querySelectorAll(".obknew"), function(row){
+        if (!row.querySelector(".obreveal")) return;
+        row.style.cursor = "pointer";
+        row.onclick = function(){
+          var key = row.getAttribute("data-hkey");
+          var out = document.getElementById("knew-" + key.replace(/[^A-Za-z0-9_-]/g, "_"));
+          if (!out) return;
+          if (out.innerHTML){ out.innerHTML = ""; return; }
+          out.innerHTML = LOADER;
+          api("/api/projects/" + p.id + "/graph/projected/" + encodeURIComponent(key)).then(function(r){
+            var ms = r.memories || [];
+            out.innerHTML = ms.length
+              ? ms.map(function(m){ return '<div class="obcard obchainnode" style="margin:3px 0 3px 18px"><span class="obkind">' + esc(m.kind) + "</span> " + esc(m.text) + "</div>"; }).join("")
+              : '<div class="obnote" style="margin-left:18px">nothing recorded for this handoff</div>';
+          }).catch(function(err){
+            out.innerHTML = '<div class="obnote">' + esc(String(err && err.message || err)) + "</div>";
+          });
+        };
+      });
+
+      var pick = document.getElementById("obcausalpick");
+      if (!pick) return;
+      api("/api/projects/" + p.id + "/brain?limit=200").then(function(r){
+        var mem = (r.memories || []).filter(function(m){ return m.kind === "failure"; });
+        if (!mem.length){
+          pick.outerHTML = '<div class="obnote">No failures recorded yet. Failures are the memories that pay for the rest \\u2014 they appear here as soon as the fleet learns one.</div>';
+          return;
+        }
+        pick.innerHTML = '<option value="">Choose a failure\\u2026</option>' + mem.map(function(m){
+          return '<option value="' + esc(m.id) + '">' + esc(m.text.slice(0, 96)) + "</option>";
+        }).join("");
+        pick.onchange = function(){
+          var out = document.getElementById("obcausalout");
+          if (!pick.value){ if (out) out.innerHTML = ""; return; }
+          if (out) out.innerHTML = LOADER;
+          api("/api/projects/" + p.id + "/graph/causal/" + encodeURIComponent(pick.value)).then(function(c){
+            if (!out) return;
+            if (!c.nodes || c.nodes.length < 2){
+              out.innerHTML = '<div class="obnote">This failure has no causes recorded yet \\u2014 nothing it shares an entity, a distinctive term, or a conversation with.</div>';
+              return;
+            }
+            var byId = {}; c.nodes.forEach(function(n){ byId[n.memoryId] = n; });
+            var seen = {}, chain = [], cur = pick.value, guard = 0;
+            while (cur && byId[cur] && !seen[cur] && guard++ < 8){
+              seen[cur] = 1; chain.push(byId[cur]);
+              var next = null;
+              (c.links || []).forEach(function(l){ if (l.from === cur && !seen[l.to]) next = l; });
+              if (!next) break;
+              chain.push({ edge: next });
+              cur = next.to;
+            }
+            out.innerHTML = '<div class="obchain">' + chain.map(function(step){
+              if (step.edge){
+                return '<div class="obchainedge">\\u2193 <b>' + esc(step.edge.rel) + '</b> <span class="obsub">' + esc(step.edge.basis) + "</span></div>";
+              }
+              return '<div class="obcard obchainnode"><span class="obkind">' + esc(step.kind) + "</span> " +
+                esc(step.text) + '<div class="obsub" style="margin-top:4px">learned by ' + esc(step.agent) + "</div></div>";
+            }).join("") + "</div>" +
+              '<div class="obcypher"><code>' + esc(c.cypher) + "</code></div>";
+          }).catch(function(err){
+            if (out) out.innerHTML = '<div class="obnote">' + esc(String(err && err.message || err)) + "</div>";
+          });
+        };
+      }).catch(function(){});
+    }
+
     function observatoryDecisions(p){
       var host = document.getElementById("obdecisions"); if (!host) return;
       api("/api/projects/" + p.id + "/decisions").then(function(r){
@@ -3646,19 +4525,17 @@ ${BRAND_SPRITE}
       }).catch(function(){ host.innerHTML = '<div class="obnote">Decisions unavailable \\u2014 the daemon didn\\u2019t answer. Switch tabs and back to retry.</div>'; });
     }
     /**
-     * Self-heal — what SigNoz said, and what Notch did about it.
+     * Self-heal — what the fleet noticed about itself, and what it did.
      *
-     * Deliberately built from Notch's OWN record rather than SigNoz's API: the
-     * webhook already tells us every fire and resolve, so this needs no
-     * credentials, no polling of another service, and it keeps working when
-     * SigNoz is down — which is exactly the moment you want to know which
-     * agents are still paused. SigNoz can tell you an alert fired; only this
-     * can tell you the fleet reacted.
+     * Built from Notch's own record, which is now also the only record: the
+     * watcher reads each agent's error spans and fencing violations out of
+     * HydraDB, decides, and writes what it did back to the same log. No
+     * credentials, no second service to poll, and nothing to be down.
      */
     function observatoryAlerts(p, events){
       var host = document.getElementById("obalerts"); if (!host) return;
       // Fetched fresh, not read off the project object we were handed: a pause
-      // arrives over a webhook from SigNoz, so the cached copy is precisely the
+      // is decided by the watcher on a timer, so the cached copy is exactly the
       // thing that will be stale on the view whose whole job is "right now".
       api("/api/projects/" + p.id).then(function(r){
         var proj = (r && r.project) || r || {};
@@ -3676,7 +4553,7 @@ ${BRAND_SPRITE}
       // Pair each intervention with the recovery that ended it, so the history
       // reads as episodes with a duration rather than a stream of half-events.
       var heal = (events || []).filter(function(e){
-        return e.kind === "status" && /^signoz_/.test(String((e.payload || {}).state || ""));
+        return e.kind === "status" && /^heal_/.test(String((e.payload || {}).state || ""));
       }).sort(function(a, b){ return a.ts - b.ts; });
       // An intervention with no matching recovery is only "still paused" if the
       // live quarantine map agrees. Otherwise the episode ended and we simply
@@ -3686,13 +4563,13 @@ ${BRAND_SPRITE}
       var open = {}, episodes = [];
       heal.forEach(function(e){
         var pay = e.payload || {}, agent = e.agentId || "?";
-        if (pay.state === "signoz_intervention"){
-          open[agent] = { agent: agent, alert: pay.alert || "alert", from: e.ts, fallback: pay.fallback || null, to: null, via: null, retried: false };
+        if (pay.state === "heal_intervention"){
+          open[agent] = { agent: agent, why: pay.reason || pay.alert || "unhealthy", from: e.ts, fallback: pay.fallback || null, to: null, via: null, retried: false };
           episodes.push(open[agent]);
-        } else if (pay.state === "signoz_recovery"){
+        } else if (pay.state === "heal_recovery"){
           var ep = open[agent];
           if (ep){ ep.to = e.ts; ep.via = pay.via || "resolved"; ep.retried = !!pay.retried; delete open[agent]; }
-          else episodes.push({ agent: agent, alert: pay.alert || "alert", from: null, to: e.ts, via: pay.via || "resolved", retried: !!pay.retried, fallback: null });
+          else episodes.push({ agent: agent, why: pay.reason || pay.alert || "recovered", from: null, to: e.ts, via: pay.via || "watcher", retried: !!pay.retried, fallback: null });
         }
       });
       episodes.reverse();
@@ -3721,23 +4598,28 @@ ${BRAND_SPRITE}
             var lost = ep.from && !ep.to && !live;
             return '<div class="alrow"><span class="aldot ' + (live ? "firing" : "resolved") + '"></span>' +
               '<div class="alinfo"><div class="alname">' + esc(ep.agent) +
-                '<span class="alalert">' + esc(ep.alert) + "</span></div>" +
+                '<span class="alalert">' + esc(ep.why) + "</span></div>" +
                 '<div class="alwhy">' +
                   (ep.from ? new Date(ep.from).toLocaleTimeString() : "\\u2014") +
-                  (ep.to ? " \\u2192 " + new Date(ep.to).toLocaleTimeString() + " \\u00b7 held " + dur(ep.to - ep.from)
+                  (ep.to ? " \\u2192 " + new Date(ep.to).toLocaleTimeString() +
+                             // Only when both ends are known. An unpaired recovery — the
+                             // pause happened before this window of the log — has no start
+                             // to subtract, and "held 29781426m" is worse than saying nothing.
+                             (ep.from ? " \\u00b7 held " + dur(ep.to - ep.from) : "")
                          : live ? " \\u00b7 still paused" : " \\u00b7 ended (no recovery recorded)") +
                   (ep.fallback ? " \\u00b7 baton moved to " + esc(ep.fallback) : "") +
                   (ep.retried ? " \\u00b7 baton handed back" : "") +
-                  (ep.via && ep.via !== "resolved" ? " \\u00b7 via " + esc(ep.via) : "") +
+                  (ep.via ? " \\u00b7 via " + esc(ep.via) : "") +
                 "</div></div>" +
               '<span class="alstate ' + (live ? "firing" : lost ? "" : "ok") + '">' + (live ? "FIRING" : lost ? "ENDED" : "RECOVERED") + "</span></div>";
           }).join("")
-        : '<div class="obnote">No alert has fired yet. Wire the rules up with <b>Set up SigNoz</b> above, and every fire and recovery lands here.</div>';
+        : '<div class="obnote">Nothing has tripped yet. Notch watches each agent\\u2019s error spans and fencing violations in HydraDB; when one crosses a threshold it is paused here, and released again once it stops failing.</div>';
 
       return '<div class="alwrap">' + nowCard +
         '<div class="alsec">HISTORY \\u00b7 ' + episodes.length + " episode" + (episodes.length === 1 ? "" : "s") + "</div>" + hist +
-        '<div class="alfoot">Rules live in SigNoz \\u2014 <a href="' + signozBase() + '/alerts" target="_blank" rel="noreferrer">open them there</a>. ' +
-        "A firing alert refuses that agent the baton; a resolved one gives it back.</div></div>";
+        '<div class="alfoot">Thresholds are constants in the daemon, judged against the fleet\\u2019s own ' +
+        "spans and fencing record in HydraDB. A paused agent is refused the baton; it gets it back once it " +
+        "stops failing, and a release gives it a clean slate so the same failures cannot pause it twice.</div></div>";
     }
 
     /** Lift a pause by hand, then redraw from the map the API returns. */
@@ -3764,7 +4646,7 @@ ${BRAND_SPRITE}
      * The panels above answer fixed questions. This answers "what is Notch
      * actually recording, and what does each series look like right now",
      * which is the question you have when a panel disagrees with your
-     * expectation. Every series is read back out of SigNoz through
+     * expectation. Every series is derived from the spans in HydraDB through
      * /insights/metrics; nothing here is computed locally.
      *
      * Deliberately a section of the dashboard rather than a ninth tab: it is
@@ -3778,7 +4660,7 @@ ${BRAND_SPRITE}
       api("/api/projects/" + p.id + "/insights/metrics?since=" + st.sinceMs).then(function(r){
         if (r.from === "unavailable"){
           host.innerHTML = '<div class="obmexhd"><span class="declabel">METRIC EXPLORER</span></div>' +
-            '<div class="obnote">' + ICONS.route + " Metrics live in SigNoz, and ClickHouse isn\u2019t answering. Bring it up with <code>./scripts/signoz-up.sh</code> and the series appear.</div>";
+            '<div class="obnote">' + ICONS.route + " No metric series yet \u2014 they are derived from turn spans, so they appear once an agent has taken a turn.</div>";
           return;
         }
         var series = (r.series || []).slice().sort(function(a, b){
@@ -3787,6 +4669,17 @@ ${BRAND_SPRITE}
         var chips = WINDOWS.map(function(w){
           return '<button class="decchip' + (st.sinceMs === w[0] ? " on" : "") + '" data-win="' + w[0] + '">' + w[1] + "</button>";
         }).join("");
+        // A non-zero value must never render as 0. Cost is the case that made
+        // this a bug: rounding $0.003 to two decimals put a 0 in the explorer
+        // next to a $0.0050 total on the burn panel, and two true numbers that
+        // disagree read as the dashboard contradicting itself.
+        function mexNum(v){
+          if (v == null) return "\u2014";
+          var a = Math.abs(v);
+          if (a === 0) return "0";
+          if (a < 0.01) return String(Number(v.toPrecision(2)));
+          return String(Math.round(v * 100) / 100);
+        }
         var rows = series.map(function(sr){
           var pts = sr.points || [];
           var key = sr.prefer === "avg" ? "avg" : "sum";
@@ -3806,7 +4699,7 @@ ${BRAND_SPRITE}
             spark = '<svg class="mexspark" viewBox="0 0 100 20" preserveAspectRatio="none"><polyline points="' + pl +
               '" fill="none" stroke="var(--ch2)" stroke-width="1.4"/></svg>';
           } else spark = '<span class="mexflat">single point</span>';
-          var shown = sr.prefer === "avg" ? (last == null ? "\u2014" : (Math.round(last * 100) / 100)) : Math.round(total * 100) / 100;
+          var shown = mexNum(sr.prefer === "avg" ? last : total);
           return '<div class="mexrow"><div class="mexinfo"><div class="mexname">' + esc(sr.metric) +
             '<span class="mextype">' + esc(sr.type || "") + (sr.unit ? " \u00b7 " + esc(sr.unit) : "") + "</span></div>" +
             '<div class="mexlbls">' + (labels || '<span class="mexlbl">no labels</span>') + "</div></div>" +
@@ -3815,7 +4708,7 @@ ${BRAND_SPRITE}
         }).join("");
         host.innerHTML =
           '<div class="obmexhd"><span class="declabel">METRIC EXPLORER</span>' +
-            '<span class="deccount">' + series.length + " series \u00b7 from SigNoz</span>" +
+            '<span class="deccount">' + series.length + " series \u00b7 from HydraDB</span>" +
             '<span class="mexwins">' + chips + "</span></div>" +
           (rows ? '<div class="mexlist">' + rows + "</div>"
                 : '<div class="obnote">No series in this window. Notch records turns, cost, tokens, handoffs, live agent count and turn duration \u2014 run a turn, or widen the window.</div>');
@@ -3828,12 +4721,12 @@ ${BRAND_SPRITE}
     }
 
     /**
-     * The fleet's logs, read back out of SigNoz.
+     * The fleet's logs, read back out of HydraDB.
      *
      * Notch emits all three OTel signals, but for a long time it could only read
      * traces — logs were write-only from the product's side, which is a strange
      * thing to ship in an observability tool. There is deliberately no local
-     * fallback here: spans genuinely have one, logs do not, so when ClickHouse
+     * fallback here: spans genuinely have one, logs do not, so when the store
      * is unreachable this says so instead of showing an empty list that reads
      * like "nothing happened".
      */
@@ -3844,7 +4737,7 @@ ${BRAND_SPRITE}
         (st.q ? "&q=" + encodeURIComponent(st.q) : "");
       api("/api/projects/" + p.id + "/insights/logs" + qs).then(function(r){
         if (r.from === "unavailable"){
-          host.innerHTML = '<div class="obnote">' + ICONS.route + " Logs live in SigNoz, and ClickHouse isn\\u2019t answering \\u2014 so there is nothing to read. Unlike spans, logs have no local fallback. Bring SigNoz up (<code>./scripts/signoz-up.sh</code>) and this fills in.</div>";
+          host.innerHTML = '<div class="obnote">' + ICONS.route + " No log lines yet \\u2014 they are written as the fleet runs, so this fills in with the first turn.</div>";
           return;
         }
         var logs = r.logs || [];
@@ -3859,11 +4752,11 @@ ${BRAND_SPRITE}
             '<span class="lgsev ' + esc(sev.toLowerCase()) + '">' + esc(sev) + "</span>" +
             '<span class="lgagent">' + esc(l.agent || "\\u2014") + "</span>" +
             '<span class="lgbody">' + esc(l.body || "") + "</span>" +
-            (l.traceId ? '<a class="lgtrace" href="' + signozTraceUrl(l.traceId) + '" target="_blank" rel="noreferrer" title="open this trace in SigNoz">' + esc(l.traceId.slice(0, 8)) + "</a>" : '<span class="lgtrace none">\\u2014</span>') +
+            (l.traceId ? '<span class="lgtrace" title="the trace this line belongs to">' + esc(l.traceId.slice(0, 8)) + "</span>" : '<span class="lgtrace none">\\u2014</span>') +
             "</div>";
         }).join("");
         host.innerHTML =
-          '<div class="decheader"><span class="declabel">LOGS</span><span class="deccount">' + logs.length + " lines \\u00b7 from SigNoz</span></div>" +
+          '<div class="decheader"><span class="declabel">LOGS</span><span class="deccount">' + logs.length + " lines \\u00b7 from HydraDB</span></div>" +
           '<div class="decfilters">' + chips +
             '<input class="mcpin lgq" id="lgq" placeholder="filter text\\u2026" value="' + esc(st.q) + '"/></div>' +
           (rows ? '<div class="lglist">' + rows + "</div>"
@@ -3922,6 +4815,39 @@ ${BRAND_SPRITE}
           if (t.timer){ clearInterval(t.timer); t.timer = null; btn.textContent = "\\u25b6 Play"; }
           else { btn.textContent = "\\u23f8 Pause"; t.timer = setInterval(function(){ if (t.i < snaps.length - 1) go(t.i + 1); else { clearInterval(t.timer); t.timer = null; btn.textContent = "\\u25b6 Play"; } }, 800); }
         };
+        /**
+         * Keyboard transport, the way a video scrubber works.
+         *
+         * Replay is the one view people *scrub* rather than read, and reaching
+         * for the mouse to advance one frame at a time breaks the thing it is
+         * for — watching a run unfold. Arrows step, Home/End jump to the ends,
+         * space plays and pauses. Bound on the pane rather than the document so
+         * it cannot steal space from the composer, and ignored while you are
+         * typing in a field.
+         */
+        function travelKeys(e){
+          if (state.obView !== "travel" || state.tab !== "observatory") return;
+          var el = document.activeElement;
+          if (el && (el.tagName === "INPUT" && el.type !== "range" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+          var t = state.obTravel; if (!t) return;
+          var last = t.snaps.length - 1, k = e.key;
+          if (k === "ArrowRight" || k === "ArrowDown") { e.preventDefault(); if (t.i < last) go(t.i + 1); }
+          else if (k === "ArrowLeft" || k === "ArrowUp") { e.preventDefault(); if (t.i > 0) go(t.i - 1); }
+          else if (k === "Home") { e.preventDefault(); go(0); }
+          else if (k === "End") { e.preventDefault(); go(last); }
+          else if (k === " " || k === "Spacebar") { e.preventDefault(); host.querySelector("#ttplay").click(); }
+          else return;
+          // Nudge the visual focus onto the scrubber so the caret and the frame
+          // agree about where you are.
+          if (document.activeElement !== scrub) scrub.focus();
+        }
+        document.removeEventListener("keydown", state.obTravelKeys || function(){});
+        state.obTravelKeys = travelKeys;
+        document.addEventListener("keydown", travelKeys);
+        var hint = document.createElement("div");
+        hint.className = "ttkeys";
+        hint.innerHTML = "<kbd>\\u2190</kbd><kbd>\\u2192</kbd> step \\u00b7 <kbd>space</kbd> play \\u00b7 <kbd>home</kbd><kbd>end</kbd> jump";
+        host.querySelector(".ttheader").appendChild(hint);
         updateTravelFrame();
       }).catch(function(){ host.innerHTML = '<div class="obnote">Time-travel unavailable \\u2014 the daemon didn\\u2019t answer. Switch tabs and back to retry.</div>'; });
     }
@@ -3960,7 +4886,7 @@ ${BRAND_SPRITE}
      * The turn that was running at this frame's instant — the old span-replay
      * tab, folded in. "Running at" means the last turn to have started at or
      * before this moment, which is the one whose work produced the state on the
-     * left. When SigNoz is unreachable the local event log has no trace id, so
+     * left. A turn folded from the local event log has no trace id, so
      * the waterfall link is replaced by an honest note rather than a dead button.
      */
     function ttTurnCard(t, s){
@@ -3980,9 +4906,8 @@ ${BRAND_SPRITE}
         '<div class="rpmetrics">' + pill("took ", ((cur.ms || 0) / 1000).toFixed(1) + "s") +
           pill("in ", tokfmt(cur.tin || 0)) + pill("out ", tokfmt(cur.tout || 0)) + pill("cost ", money(cur.cost || 0)) + "</div>" +
         (cur.traceId
-          ? '<div class="rpactions"><button class="rpwf" data-trace="' + esc(cur.traceId) + '">Trace waterfall</button>' +
-            '<a class="rpsignoz" href="' + signozTraceUrl(cur.traceId) + '" target="_blank" rel="noreferrer">Open in SigNoz \\u2197</a></div>'
-          : '<div class="rpnote">' + ICONS.route + " Trace waterfall lights up once SigNoz is reachable \\u2014 this turn came from the local event log.</div>") +
+          ? '<div class="rpactions"><button class="rpwf" data-trace="' + esc(cur.traceId) + '">Trace waterfall</button></div>'
+          : '<div class="rpnote">' + ICONS.route + " This turn came from the local event log, so it carries no trace to expand.</div>") +
         "</div>";
     }
     // GRAPH: the baton/handoff DAG — agents in columns by handoff depth, edges
@@ -4066,8 +4991,8 @@ ${BRAND_SPRITE}
       var KINDS = { run_complete: ["ok", 1], handoff: ["baton", 1], route_started: ["info", 1], route_step: ["info", 1],
         route_completed: ["ok", 1], route_failed: ["err", 1], memory_add: ["mem", 1], memory_update: ["mem", 1],
         memory_forget: ["mem", 1], needs_input: ["warn", 1], error: ["err", 1], decision: ["info", 1] };
-      var isHeal = function(e){ return e.kind === "status" && (e.payload || {}).state === "signoz_intervention"; };
-      var isRecover = function(e){ return e.kind === "status" && (e.payload || {}).state === "signoz_recovery"; };
+      var isHeal = function(e){ return e.kind === "status" && (e.payload || {}).state === "heal_intervention"; };
+      var isRecover = function(e){ return e.kind === "status" && (e.payload || {}).state === "heal_recovery"; };
       // A refused turn and a re-admitted agent are things you must be able to
       // see; so is the moment an agent was actually handed its MCP servers,
       // which is the only visible proof that half of this feature is real.
@@ -4088,8 +5013,8 @@ ${BRAND_SPRITE}
             (p.budgetUsd != null ? " (" + money(p.spentTodayUsd || 0) + " of " + money(p.budgetUsd) + ")" : "")
           : "\\u2713 " + esc(e.agentId || "agent") + " back under budget \\u2014 pause lifted";
         else if (isMcp(e)) label = "\\ud83d\\udd0c " + esc(e.agentId || "agent") + " got MCP: " + esc(((p.servers || []).join(", ")) || "no servers");
-        else if (isHeal(e)) label = "\\u26a1 SigNoz alert \\u00b7 " + esc(p.alert || "alert") + " \\u2192 baton forced off " + esc(e.agentId || "agent") + (p.fallback ? " to " + esc(p.fallback) : "");
-        else if (isRecover(e)) label = "\\u2713 SigNoz recovery \\u00b7 " + esc(p.alert || "alert") + " resolved \\u2192 " + (p.retried ? "baton retried on " + esc(e.agentId || "agent") : "quarantine lifted on " + esc(e.agentId || "agent"));
+        else if (isHeal(e)) label = "\\u26a1 self-heal \\u00b7 " + esc(p.reason || "threshold") + " \\u2192 baton forced off " + esc(e.agentId || "agent") + (p.fallback ? " to " + esc(p.fallback) : "");
+        else if (isRecover(e)) label = "\\u2713 recovered \\u00b7 " + esc(p.reason || "healthy again") + " \\u2192 " + (p.retried ? "baton retried on " + esc(e.agentId || "agent") : "quarantine lifted on " + esc(e.agentId || "agent"));
         else if (isDecision(e)){ label = "\\ud83d\\udca1 " + esc(e.agentId || "agent") + " decided: <strong>" + esc(p.title || "decision") + "</strong>" +
           (p.confidence != null ? ' <span class="obtlconf">' + p.confidence + "%</span>" : ""); extra = ' data-decid="' + esc(p.decisionId || "") + '"'; }
         else if (e.kind === "run_complete") label = esc(e.agentId || "agent") + " finished a turn" + (p.durationMs ? " \\u00b7 " + (Math.round(p.durationMs / 100) / 10) + "s" : "");
@@ -4137,7 +5062,7 @@ ${BRAND_SPRITE}
           healthBadge(hb[a.id], a.id) +
           '<span class="obspend">' + money(c.usd || 0) + '</span><span class="obturns">' + (c.turns || 0) + " turns</span>" +
           '<span class="obtok">' + tokfmt((c.tokensIn || 0) + (c.tokensOut || 0)) + " tok</span>" +
-          '<button class="obtriage" data-triage="' + esc(a.id) + '" title="Why did I fail? Root-cause this agent from its own SigNoz traces">\\u26a0 Triage</button></div>';
+          '<button class="obtriage" data-triage="' + esc(a.id) + '" title="Why did I fail? Root-cause this agent from its own traces">\\u26a0 Triage</button></div>';
       }).join("") || '<div class="obsub" style="padding:10px 2px">No agents.</div>';
       function mini(l, v){ return '<div class="obminicard"><div class="obcl">' + l + '</div><div class="obcv sm">' + v + "</div></div>"; }
       return '<div class="obmsec"><div class="obmlabel">Baton path</div><div class="obchain">' + chainHtml + "</div></div>" +
@@ -4310,8 +5235,232 @@ ${BRAND_SPRITE}
         el.scrollTop = 0;
       }).catch(function(err){ el.innerHTML = '<div class="sys err">' + esc(err.message) + "</div>"; });
     }
+    /**
+     * Saved actions.
+     *
+     * The toolbar popover is the whole feature: the shell commands and agent
+     * prompts you keep, run against whichever workspace is open. They are
+     * stored globally in HydraDB rather than per project, so one saved here is
+     * on the toolbar of the next project you open — that is the difference
+     * between a template and a note to yourself.
+     */
+    var actionsCache = null;
+
+    function actionsPop(){ return document.getElementById("actpop"); }
+
+    function closeActions(){
+      var el = actionsPop();
+      if (el) el.remove();
+      document.removeEventListener("mousedown", actionsAway);
+      document.removeEventListener("keydown", actionsKey);
+    }
+    function actionsAway(ev){
+      var el = actionsPop();
+      var btn = document.getElementById("actionsbtn");
+      if (!el) return;
+      if (el.contains(ev.target) || (btn && btn.contains(ev.target))) return;
+      closeActions();
+    }
+    function actionsKey(ev){ if (ev.key === "Escape") closeActions(); }
+
+    /**
+     * Open the popover. With an id, it skips the list and runs that action
+     * straight away — which is how the command palette reaches them: the
+     * result still lands somewhere you can read it, rather than being run
+     * invisibly and dropped.
+     */
+    function openActions(runId){
+      if (actionsPop()) {
+        closeActions();
+        if (!runId) return;
+      }
+      var btn = document.getElementById("actionsbtn");
+      if (!btn) return;
+      var r = btn.getBoundingClientRect();
+      var el = document.createElement("div");
+      el.id = "actpop"; el.className = "actpop";
+      el.style.top = (r.bottom + 6) + "px";
+      el.style.right = Math.max(8, window.innerWidth - r.right) + "px";
+      el.innerHTML = '<div class="actbody"><div class="loader"><i></i><i></i><i></i><i></i></div></div>';
+      document.body.appendChild(el);
+      setTimeout(function(){
+        document.addEventListener("mousedown", actionsAway);
+        document.addEventListener("keydown", actionsKey);
+      }, 0);
+      if (runId) runAction(runId); else loadActions();
+    }
+
+    function loadActions(){
+      api("/api/actions")
+        .then(function(r){ actionsCache = (r && r.actions) || []; drawActions(); })
+        .catch(function(err){
+          var el = actionsPop(); if (!el) return;
+          el.innerHTML = '<div class="actbody"><div class="sys err">' + esc(err.message) + "</div></div>";
+        });
+    }
+
+    function drawActions(){
+      var el = actionsPop(); if (!el) return;
+      var list = actionsCache || [];
+      var rows = list.map(function(a){
+        return '<div class="actrow" data-aid="' + esc(a.id) + '">' +
+          '<span class="actkind ' + (a.kind === "prompt" ? "pr" : "sh") + '">' +
+            (a.kind === "prompt" ? "prompt" : "shell") + "</span>" +
+          '<span class="actname">' + esc(a.name) + "</span>" +
+          (a.runs ? '<span class="actruns">' + a.runs + "×</span>" : "") +
+          '<button class="actdel" data-del="' + esc(a.id) + '" title="forget this action">' + ICONS.x + "</button>" +
+          '<div class="actbodytext">' + esc(a.body.slice(0, 140)) + "</div>" +
+          "</div>";
+      }).join("");
+      el.innerHTML =
+        '<div class="acthead">Actions<span class="actsub">saved commands and prompts · every workspace</span></div>' +
+        '<div class="actbody">' +
+        (rows || '<div class="actempty">Nothing saved yet. An action is a shell command or an agent prompt you keep — the build, the focused test, the review prompt you always type.</div>') +
+        "</div>" +
+        '<div class="actfoot"><button class="actnew" id="actnew">+ New action</button></div>';
+      el.querySelectorAll(".actrow").forEach(function(row){
+        row.onclick = function(ev){
+          if (ev.target.closest(".actdel")) return;
+          runAction(row.getAttribute("data-aid"));
+        };
+      });
+      el.querySelectorAll(".actdel").forEach(function(b){
+        b.onclick = function(ev){
+          ev.stopPropagation();
+          var id = b.getAttribute("data-del");
+          api("/api/actions/" + encodeURIComponent(id), { method: "DELETE" })
+            .then(function(){
+              actionsCache = (actionsCache || []).filter(function(a){ return a.id !== id; });
+              drawActions();
+              toast("action forgotten");
+            })
+            .catch(function(err){ toast(err.message); });
+        };
+      });
+      document.getElementById("actnew").onclick = function(){ closeActions(); openActionEditor(null); };
+    }
+
+    /**
+     * Run one against the open workspace.
+     *
+     * A shell action prints back into the popover, exit code and all — a
+     * non-zero exit is the answer, not an error, so it is rendered rather than
+     * thrown. A prompt action goes down the same path a typed message takes:
+     * it takes the baton, lands in the thread, and is folded into the brain.
+     */
+    function runAction(id){
+      var p = state.project; if (!p) return;
+      var a = (actionsCache || []).filter(function(x){ return x.id === id; })[0];
+      if (!a) {
+        // Reached from the command palette, which never loaded the list.
+        api("/api/actions")
+          .then(function(r){ actionsCache = (r && r.actions) || []; runAction(id); })
+          .catch(function(err){ toast(err.message); });
+        return;
+      }
+      var el = actionsPop();
+      if (el) {
+        el.innerHTML =
+          '<div class="acthead">' + esc(a.name) + '<span class="actsub">running…</span></div>' +
+          '<div class="actbody"><div class="loader"><i></i><i></i><i></i><i></i></div></div>';
+      }
+      api("/api/projects/" + p.id + "/actions/" + encodeURIComponent(id) + "/run", {
+        method: "POST",
+        body: JSON.stringify({ chat: state.chat || undefined }),
+      })
+        .then(function(r){
+          if (r.kind === "prompt") {
+            closeActions();
+            showTab("thread");
+            toast("sent to " + ((r.sent && r.sent.agentId) || "the agent"));
+            refresh();
+            return;
+          }
+          var pop = actionsPop(); if (!pop) return;
+          var ok = Number(r.code) === 0;
+          pop.innerHTML =
+            '<div class="acthead">' + esc(a.name) +
+              '<span class="actsub ' + (ok ? "ok" : "bad") + '">exit ' + Number(r.code) + "</span></div>" +
+            '<pre class="actout">' + esc(r.out || "(no output)") + "</pre>" +
+            '<div class="actfoot"><button class="actnew" id="actback">← all actions</button></div>';
+          var back = document.getElementById("actback");
+          if (back) back.onclick = function(){ loadActions(); };
+          var out = pop.querySelector(".actout");
+          if (out) out.scrollTop = out.scrollHeight;
+        })
+        .catch(function(err){
+          var pop = actionsPop();
+          if (pop) pop.innerHTML = '<div class="actbody"><div class="sys err">' + esc(err.message) + "</div></div>";
+          else toast(err.message);
+        });
+    }
+
+    /** The save form. A seed object prefills it — used by "save this as an action". */
+    function openActionEditor(seed){
+      if (document.querySelector(".scrim")) return;
+      seed = seed || {};
+      var scrim = document.createElement("div"); scrim.className = "scrim";
+      scrim.innerHTML =
+        '<div class="modal"><div class="modalhead">New action' +
+        '<button class="iconbtn" id="aex" aria-label="close">' + ICONS.x + "</button></div>" +
+        '<div class="modalbody">' +
+        '<label class="aelab">Name</label>' +
+        '<input class="aeinput" id="aename" placeholder="unit tests" maxlength="80" value="' + esc(seed.name || "") + '">' +
+        '<label class="aelab">Kind</label>' +
+        '<div class="aekinds">' +
+          '<button class="aekind' + (seed.kind === "prompt" ? "" : " on") + '" data-k="shell">Shell command</button>' +
+          '<button class="aekind' + (seed.kind === "prompt" ? " on" : "") + '" data-k="prompt">Agent prompt</button>' +
+        "</div>" +
+        '<label class="aelab" id="aebodylab">' + (seed.kind === "prompt" ? "Prompt" : "Command") + "</label>" +
+        '<textarea class="aearea" id="aebody" rows="4" placeholder="npm test">' + esc(seed.body || "") + "</textarea>" +
+        '<div class="aehint" id="aehint"></div>' +
+        "</div>" +
+        '<div class="modalfoot"><button class="btn" id="aecancel">Cancel</button>' +
+        '<button class="btn primary" id="aesave">Save action</button></div></div>';
+      document.body.appendChild(scrim);
+      var kind = seed.kind === "prompt" ? "prompt" : "shell";
+      function close(){ scrim.remove(); document.removeEventListener("keydown", onKey); }
+      function onKey(e){ if (e.key === "Escape") close(); }
+      document.addEventListener("keydown", onKey);
+      scrim.addEventListener("click", function(ev){ if (ev.target === scrim) close(); });
+      document.getElementById("aex").onclick = close;
+      document.getElementById("aecancel").onclick = close;
+      function drawHint(){
+        document.getElementById("aebodylab").textContent = kind === "prompt" ? "Prompt" : "Command";
+        document.getElementById("aebody").placeholder =
+          kind === "prompt" ? "Review the working diff against the constraints in the brain." : "npm test";
+        document.getElementById("aehint").textContent =
+          kind === "prompt"
+            ? "Sent to whichever agent holds the baton, in the open chat — it lands in the thread like a message you typed."
+            : "Run in the open workspace’s directory. Output and exit code come back here.";
+      }
+      scrim.querySelectorAll(".aekind").forEach(function(b){
+        b.onclick = function(){
+          kind = b.getAttribute("data-k");
+          scrim.querySelectorAll(".aekind").forEach(function(x){ x.classList.toggle("on", x === b); });
+          drawHint();
+        };
+      });
+      drawHint();
+      document.getElementById("aename").focus();
+      document.getElementById("aesave").onclick = function(){
+        var name = document.getElementById("aename").value.trim();
+        var body = document.getElementById("aebody").value.trim();
+        if (!name || !body) { toast("an action needs a name and something to run"); return; }
+        api("/api/actions", { method: "POST", body: JSON.stringify({ name: name, kind: kind, body: body }) })
+          .then(function(){ close(); actionsCache = null; toast("action saved"); })
+          .catch(function(err){ toast(err.message); });
+      };
+    }
+
     if (desktop) {
       document.getElementById("dockclose").onclick = closeDock;
+      var abtn = document.getElementById("actionsbtn");
+      if (abtn) abtn.onclick = function(){ openActions(); };
+      // The palette reaches actions through these; both live here because the
+      // popover and the editor are closures over the desktop shell.
+      state.runSavedAction = function(id){ openActions(id); };
+      state.newSavedAction = function(seed){ openActionEditor(seed); };
       document.getElementById("railbtn").onclick = toggleRail;
       // The terminal button wants the terminal. If the console tab is the active
       // pane, switch to a terminal rather than closing the dock out from under it.
@@ -4446,6 +5595,36 @@ ${BRAND_SPRITE}
       document.getElementById("termpanes").appendChild(el);
       return el;
     }
+    /**
+     * Right-click a selection in the terminal to keep the command.
+     *
+     * This is the other half of saved actions and the half that actually gets
+     * used: you rarely sit down to write a template, you notice halfway
+     * through a session that you have typed the same thing four times. Select
+     * it, keep it, and it is on the toolbar of every workspace from then on.
+     */
+    function wireTermMenu(){
+      var host = document.getElementById("termpanes");
+      if (!host || host.getAttribute("data-menu")) return;
+      host.setAttribute("data-menu", "1");
+      host.addEventListener("contextmenu", function(ev){
+        var t = curTerm();
+        var sel = "";
+        if (t && t.xterm && t.xterm.getSelection) sel = String(t.xterm.getSelection() || "").trim();
+        if (!sel) sel = String(window.getSelection ? window.getSelection().toString() : "").trim();
+        if (!sel) return; // nothing selected: leave the browser's own menu alone
+        ev.preventDefault();
+        openMenuAt(ev.clientX, ev.clientY, [
+          { label: "Save as a shell action", run: function(){
+            if (state.newSavedAction) state.newSavedAction({ kind: "shell", body: sel, name: sel.slice(0, 40) });
+          } },
+          { label: "Copy", run: function(){
+            if (navigator.clipboard) navigator.clipboard.writeText(sel).then(function(){ toast("copied"); });
+          } },
+        ]);
+      });
+    }
+
     function addTerm(){
       termSeq++;
       var id = "t" + termSeq;
@@ -4457,6 +5636,7 @@ ${BRAND_SPRITE}
       // measuring a display:none element yields a 1x1 grid, and the pty would
       // be sized to match.
       var host = paneFor(t);
+      wireTermMenu();
       drawTermTabs();
       showTermPane();
       api("/api/projects/" + pid + "/term/open",
@@ -4568,6 +5748,28 @@ ${BRAND_SPRITE}
       showTermPane();
       focusTerm();
     }
+    /**
+     * Tear down every terminal of a project that no longer exists.
+     *
+     * Local-only: there is nothing on the other end to tell. A shell whose
+     * project has been removed can only print "unknown project" at whatever it
+     * is asked, so it is closed rather than left as a dead prompt the user has
+     * to work out for themselves.
+     */
+    state.closeProjectTerms = function(gone){
+      if (gone !== pid) return;
+      terms.slice().forEach(function(t){
+        if (t.ro) { try { t.ro.disconnect(); } catch (e) {} }
+        if (t.xterm) { try { t.xterm.dispose(); } catch (e) {} }
+        var pane = document.querySelector('.termpane[data-t="' + t.id + '"]');
+        if (pane) pane.remove();
+      });
+      terms.length = 0;
+      activeTerm = null;
+      localStorage.setItem(TERM_KEY, "0");
+      try { applyTerm(); } catch (e) {}
+    };
+
     function drawTermTabs(){
       var box = document.getElementById("termtabs"); if (!box) return;
       var html = terms.map(function(t){
@@ -4874,6 +6076,69 @@ ${BRAND_SPRITE}
     var brainKind = "";
     var BRAIN_KINDS = ["constraint", "failure", "decision", "convention", "fact", "task"];
 
+    /**
+     * What every *other* project knows about this.
+     *
+     * The whole reason the log, the baton and the brain share one graph is
+     * that a lesson is not the property of the repository it was learned in.
+     * A constraint about writer fencing that Notch learned last month, in a
+     * different project, is still true here — and until now the only way to
+     * see that was a Cypher query. This is that query with a text box on it.
+     *
+     * Deliberately scoped to *other* projects. The list above already shows
+     * this project's memory; repeating it here would bury the one row that is
+     * genuinely new information.
+     */
+    var crossQ = "", crossHits = null, crossNames = {}, crossBusy = false;
+
+    function crossHtml(){
+      var body;
+      if (crossBusy) body = '<div class="bempty sm">searching every project\u2026</div>';
+      else if (crossHits === null) body =
+        '<div class="bempty sm">Every project on this node shares one graph, and entity links are not project-scoped \u2014 so a constraint learned elsewhere about the same file, symbol or error is one hop away. Ask for it.</div>';
+      else if (!crossHits.length) body =
+        '<div class="bempty sm">No other project on this node has recorded anything about \u201c' + esc(crossQ) + '\u201d.</div>';
+      else body = '<div class="bmems">' + crossHits.map(function(x){
+        var proj = crossNames[x.project] || ("project " + x.project);
+        return '<div class="bmem xrun">' +
+          '<div class="bmrow"><span class="bbadge bk-' + esc(x.kind) + '">' + esc(x.kind) + "</span>" +
+          '<span class="bmtext">' + esc(x.text) + "</span></div>" +
+          '<div class="bmmeta">' + brandMark(kindOf(x.agent || "")) + esc(x.agent || "user") +
+          ' <span class="xproj">' + esc(proj) + "</span>" +
+          (x.at ? ' <span class="dim">\u00b7 ' + esc(rel(x.at)) + "</span>" : "") +
+          "</div></div>";
+      }).join("") + "</div>";
+      return '<div class="bsec">What other projects know<span class="bhint">one graph, every run</span></div>' +
+        '<form class="bseed" id="xrform">' +
+        '<input id="xrbox" placeholder="A file, a symbol, an error code\u2026" autocomplete="off" value="' + esc(crossQ) + '">' +
+        '<button class="btn sm" type="submit">Recall</button></form>' + body;
+    }
+
+    function wireCross(){
+      var f = document.getElementById("xrform");
+      if (!f) return;
+      f.onsubmit = function(ev){
+        ev.preventDefault();
+        var q = (document.getElementById("xrbox") || {}).value || "";
+        q = q.trim();
+        if (!q) return;
+        crossQ = q; crossBusy = true; crossHits = null;
+        refreshBrain();
+        api("/api/projects/" + pid + "/graph/crossrun?limit=25&q=" + encodeURIComponent(q))
+          .then(function(r){
+            crossBusy = false;
+            crossHits = (r && r.memories) || [];
+            crossNames = (r && r.projectNames) || {};
+            refreshBrain();
+          })
+          .catch(function(err){
+            crossBusy = false; crossHits = [];
+            refreshBrain();
+            toast(err.message);
+          });
+      };
+    }
+
     function refreshBrain(){
       var el = document.getElementById("pane-brain"); if (!el) return;
       if (!el.querySelector(".brain")) el.innerHTML = '<div class="pane-inner">' + LOADER + "</div>";
@@ -4942,7 +6207,7 @@ ${BRAND_SPRITE}
             }).join("") + "</div>"
           : '<div class="bempty sm">No native ADE memory found (CLAUDE.md, AGENTS.md, .kiro/steering). Notch reads these but never writes to them.</div>';
 
-        el.innerHTML = '<div class="pane-inner brain">' + head + seed + list + src + "</div>";
+        el.innerHTML = '<div class="pane-inner brain">' + head + seed + list + crossHtml() + src + "</div>";
 
         Array.prototype.forEach.call(el.querySelectorAll(".bkind"), function(b){
           b.onclick = function(){ brainKind = b.getAttribute("data-kind"); refreshBrain(); };
@@ -4958,6 +6223,7 @@ ${BRAND_SPRITE}
               .catch(function(err){ toast(err.message); });
           };
         });
+        wireCross();
         var reimp = document.getElementById("reimport");
         if (reimp) reimp.onclick = function(){
           api("/api/projects/" + pid + "/memory/import", { method: "POST", body: "{}" })
@@ -5651,6 +6917,157 @@ ${BRAND_SPRITE}
     // Actions the module-level command palette (and status bar) drive back in.
     state.openFile = openFileFromTree;
     state.showTab = showTab;
+
+    /**
+     * Right-click a file in the tree.
+     *
+     * The two things you actually want from a file in a fleet workspace are
+     * not "rename" and "duplicate" — they are "who changed this and why", and
+     * "put this file in front of every agent at once". Both are one traversal
+     * away in the graph, so both are one click away here.
+     */
+    var railEl = document.getElementById("railbody");
+    if (railEl) railEl.addEventListener("contextmenu", function(ev){
+      var row = ev.target.closest ? ev.target.closest(".trow.file") : null;
+      if (!row) return;
+      ev.preventDefault();
+      var rel = row.getAttribute("data-file") || "";
+      if (!rel) return;
+      openMenuAt(ev.clientX, ev.clientY, [
+        { label: "Open", run: function(){ openFileFromTree(rel); } },
+        { label: "Who changed this", run: function(){ openFileHistory(rel); } },
+        { label: "Ask the fleet about this file", run: function(){
+          showTab("council");
+          setTimeout(function(){
+            var q = document.getElementById("cnq");
+            if (q) { q.value = "What should change in " + rel + ", and why?"; q.focus(); }
+          }, 420);
+        } },
+        { label: "Search this project for its name", run: function(){
+          state.railSearchMode = "code";
+          state.railSearchQ = rel.split("/").pop();
+          state.showRail("search");
+        } },
+        { label: "Copy path", run: function(){
+          if (navigator.clipboard) navigator.clipboard.writeText(rel).then(function(){ toast("copied " + rel); });
+        } },
+      ]);
+    });
+
+    /**
+     * Right-click a message you sent to put the same question to the whole
+     * fleet.
+     *
+     * The Council is the strongest thing this app does and it lived behind a
+     * tab you had to know about. The moment you actually want it is when one
+     * agent's answer left you unsure — which is when you are looking at that
+     * message, not at a tab strip. So the action is on the message.
+     */
+    var feedEl = document.getElementById("pane-thread");
+    if (feedEl) feedEl.addEventListener("contextmenu", function(ev){
+      var row = ev.target.closest ? ev.target.closest("[data-ask]") : null;
+      if (!row) return;
+      ev.preventDefault();
+      var text = row.getAttribute("data-ask") || "";
+      openMenuAt(ev.clientX, ev.clientY, [
+        { label: "Ask the fleet about this", run: function(){
+          showTab("council");
+          setTimeout(function(){
+            var q = document.getElementById("cnq");
+            if (q) { q.value = text; q.focus(); }
+          }, 420);
+        } },
+        { label: "Save as a prompt action", run: function(){
+          if (state.newSavedAction) state.newSavedAction({ kind: "prompt", body: text, name: text.slice(0, 40) });
+        } },
+        { label: "Copy", run: function(){
+          if (navigator.clipboard) navigator.clipboard.writeText(text).then(function(){ toast("copied"); });
+        } },
+      ]);
+    });
+
+    /**
+     * One file's commits, each credited to the agent whose turn produced it.
+     *
+     * Git records the human who ran the commit — on a fleet that is one name for
+     * everybody's work. Notch already logs which files each agent turn
+     * touched, so the credit is a join rather than a guess, and a file no
+     * turn accounts for says **you** rather than being handed to whoever
+     * happened to hold the baton.
+     */
+    function openFileHistory(rel){
+      if (document.querySelector(".scrim")) return;
+      var scrim = document.createElement("div"); scrim.className = "scrim";
+      scrim.innerHTML =
+        '<div class="modal fhmodal"><div class="modalhead">' + esc(rel) +
+        '<button class="iconbtn" id="fhx" aria-label="close">' + ICONS.x + "</button></div>" +
+        '<div class="modalbody"><div class="loader"><i></i><i></i><i></i><i></i></div></div></div>';
+      document.body.appendChild(scrim);
+      function close(){ scrim.remove(); document.removeEventListener("keydown", onKey); }
+      function onKey(e){ if (e.key === "Escape") close(); }
+      document.addEventListener("keydown", onKey);
+      scrim.addEventListener("click", function(ev){ if (ev.target === scrim) close(); });
+      document.getElementById("fhx").onclick = close;
+      api("/api/projects/" + pid + "/git/file-history?limit=25&path=" + encodeURIComponent(rel))
+        .then(function(r){
+          var body = scrim.querySelector(".modalbody"); if (!body) return;
+          var cs = (r && r.commits) || [];
+          if (!cs.length) {
+            body.innerHTML = '<div class="bempty sm">No commit in this repository has touched ' +
+              esc(rel) + " yet.</div>";
+            return;
+          }
+          var agents = {};
+          cs.forEach(function(c){ if (c.agent) agents[c.agent] = (agents[c.agent] || 0) + 1; });
+          var names = Object.keys(agents).sort(function(a, b){ return agents[b] - agents[a]; });
+          var human = cs.filter(function(c){ return !c.agent; }).length;
+          body.innerHTML =
+            '<div class="fhsum">' +
+            names.map(function(n){
+              return '<span class="fhagent">' + brandMark(kindOf(n)) + esc(n) +
+                '<b>' + agents[n] + "</b></span>";
+            }).join("") +
+            (human ? '<span class="fhagent fhhuman">you<b>' + human + "</b></span>" : "") +
+            "</div>" +
+            '<div class="fhlist">' + cs.map(function(c){
+              return '<div class="fhrow">' +
+                '<span class="fhsha mono">' + esc(c.short) + "</span>" +
+                '<span class="fhsub">' + esc(c.subject) + "</span>" +
+                '<span class="fhwho">' + (c.agent
+                  ? brandMark(kindOf(c.agent)) + esc(c.agent)
+                  : '<span class="dim">hand edit</span>') + "</span>" +
+                '<span class="fhwhen dim">' + esc(c.relative) + "</span>" +
+                "</div>";
+            }).join("") + "</div>";
+        })
+        .catch(function(err){
+          var body = scrim.querySelector(".modalbody");
+          if (body) body.innerHTML = '<div class="sys err">' + esc(err.message) + "</div>";
+        });
+    }
+
+    /** A small context menu at a point. Closes on the next click or Escape. */
+    function openMenuAt(x, y, items){
+      var old = document.getElementById("ctxmenu"); if (old) old.remove();
+      var m = document.createElement("div");
+      m.id = "ctxmenu"; m.className = "ctxmenu";
+      m.style.left = Math.min(x, window.innerWidth - 220) + "px";
+      m.style.top = Math.min(y, window.innerHeight - 90) + "px";
+      items.forEach(function(it){
+        var b = document.createElement("button");
+        b.className = "ctxitem"; b.textContent = it.label;
+        b.onclick = function(){ m.remove(); it.run(); };
+        m.appendChild(b);
+      });
+      document.body.appendChild(m);
+      function away(e){ if (!m.contains(e.target)) { m.remove(); cleanup(); } }
+      function esckey(e){ if (e.key === "Escape") { m.remove(); cleanup(); } }
+      function cleanup(){ document.removeEventListener("mousedown", away); document.removeEventListener("keydown", esckey); }
+      setTimeout(function(){
+        document.addEventListener("mousedown", away);
+        document.addEventListener("keydown", esckey);
+      }, 0);
+    }
     state.reloadBoard = loadBoard;
     state.showRail = function(view){ state.railView = view; drawRail(); };
     state.selectAgent = function(id){
@@ -5884,17 +7301,61 @@ ${BRAND_SPRITE}
     function gitLogHtml(){
       var log = state.gitLog || [];
       if (!log.length) return "";
+      state.gcOpen = state.gcOpen || {};
       return '<div class="rsec gcommits-h">Commits</div>' +
         '<div class="gcommits">' + log.map(function(c){
-          return '<div class="gclog" title="' + esc(c.sha) + '">' +
-            '<span class="gcsha">' + esc(c.short) + "</span>" +
-            '<span class="gcsub">' + esc(c.subject) + "</span>" +
-            '<span class="gcmeta">' + esc(c.author) + " \\u00b7 " + esc(c.relative) + "</span></div>";
+          var open = !!state.gcOpen[c.sha];
+          var agents = c.agents || [];
+          // Who actually wrote this commit. A chip per agent, sized by how many
+          // of the commit's files came out of that agent's turns.
+          var chips = agents.map(function(a){
+            return '<span class="gcagent" style="color:hsl(' + hue(a.agent) + ',55%,var(--agent-l))" title="' +
+              esc(a.agent) + " wrote " + a.files + " file" + (a.files === 1 ? "" : "s") + ' in this commit">' +
+              esc(a.agent) + (a.files > 1 ? " \\u00d7" + a.files : "") + "</span>";
+          }).join("");
+          if (c.humanFiles > 0) {
+            chips += '<span class="gcagent human" title="' + c.humanFiles +
+              ' file' + (c.humanFiles === 1 ? "" : "s") + ' no agent turn accounts for \\u2014 a hand edit">you' +
+              (c.humanFiles > 1 ? " \\u00d7" + c.humanFiles : "") + "</span>";
+          }
+          var files = open && (c.files || []).length
+            ? '<div class="gcfiles">' + c.files.map(function(f){
+                return '<div class="gcfile" data-hfile="' + esc(f.path) + '">' +
+                  '<span class="gcfp">' + esc(f.path) + "</span>" +
+                  '<span class="gcfa' + (f.agent ? "" : " human") + '"' +
+                    (f.agent ? ' style="color:hsl(' + hue(f.agent) + ',55%,var(--agent-l))"' : "") + ">" +
+                    esc(f.agent || "you") + "</span></div>";
+              }).join("") + "</div>"
+            : "";
+          return '<div class="gclogwrap">' +
+            '<div class="gclog' + (open ? " open" : "") + '" data-commit="' + esc(c.sha) + '" title="' + esc(c.sha) + '">' +
+              '<span class="gcsha">' + esc(c.short) + "</span>" +
+              '<span class="gcsub">' + esc(c.subject) + "</span>" +
+              '<span class="gcmeta">' + esc(c.relative) + "</span>" +
+              (chips ? '<span class="gcagents">' + chips + "</span>" : "") +
+            "</div>" + files + "</div>";
         }).join("") + "</div>";
     }
 
     /** Every control in the Source control view. */
     function wireGitRows(el){
+      // Expanding a commit shows its files with the agent that wrote each one;
+      // clicking a file opens it. The history is a way back into the work, not
+      // a list of hashes.
+      Array.prototype.forEach.call(el.querySelectorAll("[data-commit]"), function(row){
+        row.onclick = function(){
+          var sha = row.getAttribute("data-commit");
+          state.gcOpen = state.gcOpen || {};
+          state.gcOpen[sha] = !state.gcOpen[sha];
+          drawRail();
+        };
+      });
+      Array.prototype.forEach.call(el.querySelectorAll("[data-hfile]"), function(row){
+        row.onclick = function(ev){
+          ev.stopPropagation();
+          if (state.openFile) state.openFile(row.getAttribute("data-hfile"));
+        };
+      });
       function act(path, body, said){
         return api("/api/projects/" + pid + "/git/" + path, { method: "POST", body: JSON.stringify(body) })
           .then(function(){ refreshGit(); if (said) toast(said); })
@@ -6024,7 +7485,10 @@ ${BRAND_SPRITE}
         // The log and branch list come alongside — cheap, and the panel shows
         // both. Failures are non-fatal: a repo with no commits has neither.
         if (g && g.branch) {
-          api("/api/projects/" + pid + "/git/log?limit=30")
+          // The attributed history, not the plain log: same commits, plus which
+          // agent's turn produced each file. Git records the human who ran the
+          // commit, which on a fleet is one name for everybody's work.
+          api("/api/projects/" + pid + "/git/history?limit=30")
             .then(function(j){ state.gitLog = j.commits || []; if (state.railView === "scm") drawRail(); })
             .catch(function(){ state.gitLog = []; });
           api("/api/projects/" + pid + "/git/branches")
@@ -6066,7 +7530,10 @@ ${BRAND_SPRITE}
           (a.id === p.holder ? ' <span class="abadge">baton</span>' : "") +
           // your project decides what jobs exist — click and type
           '<span class="role edit" data-role-p="' + esc(pid) + '" data-role-a="' + esc(a.id) +
-          '" title="click to rename this job">' + esc(a.role || "\\u2026") + "</span></div>";
+          '" title="click to rename this job">' + esc(a.role || "\\u2026") + "</span>" +
+          '<button class="knowsbtn" data-knows="' + esc(a.id) + '" title="what has ' + esc(a.id) +
+            ' actually been told?">knows</button></div>' +
+          knowsHtml(a.id);
       });
       var bridges = p ? p.agents.filter(function(a){ return a.tier === "bridge"; }) : [];
       bridges.forEach(function(a){
@@ -6088,9 +7555,12 @@ ${BRAND_SPRITE}
 
       el.innerHTML = html;
       document.getElementById("railnewtask").onclick = function(){ openTaskModal(pid); };
+      Array.prototype.forEach.call(el.querySelectorAll("[data-knows]"), function(b){
+        b.onclick = function(ev){ ev.stopPropagation(); loadKnows(b.getAttribute("data-knows")); };
+      });
       Array.prototype.forEach.call(el.querySelectorAll(".frow[data-agent]"), function(row){
         row.onclick = function(ev){
-          if (ev.target.closest("[data-remove]") || ev.target.closest(".role")) return;
+          if (ev.target.closest("[data-remove]") || ev.target.closest(".role") || ev.target.closest("[data-knows]")) return;
           state.selected = row.getAttribute("data-agent");
           drawRail();
           drawStatus();
@@ -6104,7 +7574,12 @@ ${BRAND_SPRITE}
             .then(function(){
               toast(id + " removed \\u00b7 its history stays in the thread");
               state.avail = null;
-              refreshProject();
+              // refresh(), not refreshProject() — the latter was never defined
+              // anywhere, so this threw inside the promise and the rail never
+              // repainted. The removal had already landed on the server, so the
+              // UI simply disagreed with the config on disk until a reload.
+              refresh();
+              drawRail();
             })
             .catch(function(e){ toast(e.message); });
         };
@@ -6113,6 +7588,52 @@ ${BRAND_SPRITE}
       if (rescan) rescan.onclick = function(){ state.avail = null; drawAddAgents(); };
       wireRoleEditors(el, function(){ drawRail(); });
       drawAddAgents();
+    }
+
+    /**
+     * What one agent has actually been told.
+     *
+     * Notch has always projected the brain into the receiving agent at handoff,
+     * and has always been able to say so *per handoff*. What it could not say
+     * is the thing you actually want when an agent does something inexplicable:
+     * what does THIS agent know, right now. Three numbers, kept apart on
+     * purpose — handed to it, learned by it, and the part of the project's
+     * brain it has never seen.
+     */
+    function knowsHtml(agentId){
+      var k = (state.knows || {})[agentId];
+      if (!k) return "";
+      if (k.loading) return '<div class="knowsbox"><span class="knowswait">reading the graph\u2026</span></div>';
+      if (k.error) return '<div class="knowsbox"><span class="knowserr">' + esc(k.error) + "</span></div>";
+      var rows = (k.handed || []).map(function(m){
+        return '<div class="knowsm"><span class="knowsk ' + esc(m.kind) + '">' + esc(m.kind) + "</span>" +
+          '<span class="knowst">' + esc(m.text) + "</span></div>";
+      }).join("");
+      var learned = (k.learned || []).length;
+      return '<div class="knowsbox">' +
+        '<div class="knowsnums">' +
+          '<span title="memories injected into it at its last handoff">handed <b>' + (k.handed || []).length + "</b></span>" +
+          '<span title="memories this agent asserted itself">learned <b>' + learned + "</b></span>" +
+          '<span class="' + (k.unseen > 0 ? "knowsgap" : "") + '" title="what the project knows that this agent has never been handed">' +
+            "unseen <b>" + k.unseen + "</b> / " + k.total + "</span>" +
+        "</div>" +
+        (k.lastHandoff
+          ? '<div class="knowswhen">last briefed at ' + esc(k.lastHandoff.key) + "</div>"
+          : '<div class="knowswhen">never briefed \u2014 it has only ever had the prompt</div>') +
+        (rows || (k.total
+          ? '<div class="knowswait">nothing was injected at that handoff</div>'
+          : '<div class="knowswait">the project has learned nothing yet</div>')) +
+      "</div>";
+    }
+
+    function loadKnows(agentId){
+      state.knows = state.knows || {};
+      if (state.knows[agentId]) { delete state.knows[agentId]; drawRail(); return; }
+      state.knows[agentId] = { loading: true };
+      drawRail();
+      api("/api/projects/" + pid + "/agents/" + encodeURIComponent(agentId) + "/knows")
+        .then(function(j){ state.knows[agentId] = j; drawRail(); })
+        .catch(function(err){ state.knows[agentId] = { error: err.message }; drawRail(); });
     }
 
     /**
@@ -6132,7 +7653,16 @@ ${BRAND_SPRITE}
           box.innerHTML = '<div class="rempty">every agent Notch can drive is already here</div>';
           return;
         }
-        box.innerHTML = list.map(function(a){
+        // Adding a fleet one agent at a time is six clicks and six repaints for
+        // the thing everybody does first. One line, one click, and it names the
+        // agents so you know exactly what you are about to get.
+        var ready = list.filter(function(a){ return a.installed !== false && a.tier !== "bridge"; });
+        var allBar = ready.length > 1
+          ? '<button class="addall" id="addallagents" title="add every installed agent to this project">' +
+              (ICONS.plus || "+") + "add all \u00b7 " + ready.map(function(a){ return esc(a.label); }).join(", ") +
+            "</button>"
+          : "";
+        box.innerHTML = allBar + list.map(function(a){
           var can = a.installed !== false; // bridges report null: presence is live
           return '<div class="frow addrow' + (can ? "" : " off") + '" data-add="' + esc(a.kind) + '"' +
             ' title="' + (can ? "add " + esc(a.label) + " to this project" : esc(a.label) + " isn\\u2019t installed") + '">' +
@@ -6143,6 +7673,40 @@ ${BRAND_SPRITE}
                  : '<span class="role" style="margin-left:auto">not installed</span>') +
             "</div>";
         }).join("");
+        var addAll = document.getElementById("addallagents");
+        if (addAll) addAll.onclick = function(){
+          addAll.disabled = true;
+          addAll.textContent = "adding\u2026";
+          // Sequential, not parallel: each add rewrites the project's config
+          // file, and two writes racing on one file is how a roster loses an
+          // agent it just gained.
+          var added = [];
+          ready.reduce(function(chain, a){
+            return chain.then(function(){
+              return api("/api/projects/" + pid + "/agents", { method: "POST", body: JSON.stringify({ kind: a.kind }) })
+                .then(function(r){ added.push(r.id || a.kind); })
+                .catch(function(e){ toast(a.label + ": " + e.message); });
+            });
+          }, Promise.resolve()).then(function(){
+            state.avail = null;
+            refresh();
+            drawRail();
+            // A fleet you just assembled and cannot do anything with is a
+            // roster, not a fleet. Offer the one action that uses all of them
+            // at once, right here, instead of making you go and find it.
+            if (added.length > 1 && state.showTab) {
+              toastAction(
+                "added " + added.join(", "),
+                "ask them all something",
+                function(){ state.showTab("council"); setTimeout(function(){
+                  var q = document.getElementById("cnq"); if (q) q.focus();
+                }, 400); },
+              );
+            } else {
+              toast(added.length ? "added " + added.join(", ") : "nothing was added");
+            }
+          });
+        };
         Array.prototype.forEach.call(box.querySelectorAll(".addrow:not(.off)"), function(row){
           row.onclick = function(){
             var kind = row.getAttribute("data-add");
@@ -6152,15 +7716,20 @@ ${BRAND_SPRITE}
                 // not an opinion. Click it to name the job you actually have.
                 toast(a.id + " added \\u00b7 click its role to name the job");
                 state.avail = null;
-                refreshProject();
+                refresh();
+                drawRail();
               })
               .catch(function(e){ toast(e.message); });
           };
         });
       }
-      if (state.avail) return render();
+      // The cache is per project, because inProject is a fact ABOUT this
+      // project. Keyed only by presence, switching from a full roster to an
+      // empty one showed "every agent Notch can drive is already here" over a
+      // project with no agents at all — the previous project's answer.
+      if (state.avail && state.availFor === pid) return render();
       api("/api/projects/" + pid + "/agents/available")
-        .then(function(j){ state.avail = j.ades || []; render(); })
+        .then(function(j){ state.avail = j.ades || []; state.availFor = pid; render(); })
         .catch(function(){ box.innerHTML = '<div class="rempty">couldn\\u2019t ask the daemon what\\u2019s installed</div>'; });
     }
     state.drawRail = drawRail;
@@ -6438,7 +8007,7 @@ ${BRAND_SPRITE}
     function uploadFile(file){
       var isImg = /^image\\//.test(file.type);
       var rec = { name: file.name || (isImg ? "pasted-image" : "file"), kind: isImg ? "image" : "file", uploading: true, thumb: null, path: null };
-      attach.push(rec); drawAttach();
+      attach.push(rec); drawAttach(); if (window.__syncSendEnabled) window.__syncSendEnabled();
       var reader = new FileReader();
       reader.onload = function(){
         var dataUrl = reader.result;
@@ -6449,7 +8018,8 @@ ${BRAND_SPRITE}
           rec.uploading = false; rec.path = j.path; drawAttach();
         }).catch(function(err){
           var i = attach.indexOf(rec); if (i >= 0) attach.splice(i, 1);
-          drawAttach(); toast("attach failed: " + err.message);
+          drawAttach(); if (window.__syncSendEnabled) window.__syncSendEnabled();
+          toast("attach failed: " + err.message);
         });
       };
       reader.onerror = function(){
@@ -6734,7 +8304,25 @@ ${BRAND_SPRITE}
       box.setAttribute("data-bound", "1");
       autosizeBox();
 
-      box.addEventListener("input", function(){ autosizeBox(); scanTrigger(); scheduleSkillSuggest(box.value); });
+      /**
+       * The send button reflects whether there is anything to send.
+       *
+       * send() already refuses an empty or whitespace-only message, but it
+       * refused it *silently* — a live-looking button that does nothing when
+       * clicked, next to a commit box two panes over that says "a commit needs
+       * a message". Same rule, so the same feedback: here the affordance
+       * carries it, because "you have not typed anything yet" does not need a
+       * sentence.
+       */
+      function syncSendEnabled(){
+        var btn = document.getElementById("send"); if (!btn) return;
+        var empty = !String(box.value || "").trim() && !attach.length;
+        btn.disabled = empty;
+        btn.setAttribute("aria-disabled", empty ? "true" : "false");
+      }
+      window.__syncSendEnabled = syncSendEnabled;
+      syncSendEnabled();
+      box.addEventListener("input", function(){ autosizeBox(); scanTrigger(); scheduleSkillSuggest(box.value); syncSendEnabled(); });
       loadSkillCache(); // so "/" can offer every skill without a fetch per keystroke
       box.addEventListener("keydown", function(e){
         // Menu open: arrows move, Enter/Tab accept, Esc closes.
@@ -6759,7 +8347,7 @@ ${BRAND_SPRITE}
       });
       box.addEventListener("blur", function(){ setTimeout(closeMenu, 120); });
 
-      form.addEventListener("submit", function(ev){ ev.preventDefault(); send(); });
+      form.addEventListener("submit", function(ev){ ev.preventDefault(); send(); syncSendEnabled(); });
 
       var attachBtn = document.getElementById("attach");
       var fileInput = document.getElementById("cfile");
@@ -6871,7 +8459,6 @@ ${BRAND_SPRITE}
       cloudflare: '<path d="M16.5 16.3c.2-.6.1-1.1-.2-1.5-.3-.4-.8-.6-1.4-.6l-10.5-.1c-.1 0-.1 0-.2-.1v-.2c0-.1.1-.2.2-.2l10.6-.1c1.3 0 2.6-1 3.1-2.3l.6-1.5v-.2a5.9 5.9 0 0 0-11.3-.6 2.7 2.7 0 0 0-4.2 2.6A3.8 3.8 0 0 0 0 15.4c0 .2 0 .4.1.6 0 .1.1.2.2.2h15.6c.1 0 .2-.1.3-.2l.3.3Zm2.9-6.4h-.3c-.1 0-.1.1-.2.2l-.4 1.4c-.2.6-.1 1.1.2 1.5.3.4.8.6 1.4.6l2.2.1c.1 0 .1 0 .2.1v.2c0 .1-.1.2-.2.2l-2.3.1c-1.3 0-2.6 1-3.1 2.3l-.2.5c0 .1 0 .2.1.2h7.9c.1 0 .2-.1.2-.2.1-.5.2-1.1.2-1.6a5 5 0 0 0-5-5Z"/>',
       playwright: '<path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm-3.7 7.4c.9 0 1.6.7 1.6 1.6H6.7c0-.9.7-1.6 1.6-1.6Zm7.4 0c.9 0 1.6.7 1.6 1.6h-3.2c0-.9.7-1.6 1.6-1.6ZM12 18.2a5.6 5.6 0 0 1-5.3-3.7h10.6a5.6 5.6 0 0 1-5.3 3.7Z"/>',
       postgres: '<path d="M17.4 2.6c-1.6-.4-3.3-.5-4.9-.2-.6-.2-1.2-.3-1.8-.3-1.2 0-2.3.3-3.3.9-1-.4-3.6-1.2-5 .3C1.2 4.6 1.5 8 2.7 12.6c.6 2.3 1.4 4.3 2.2 5.6.4.6 1 1.4 1.9 1.5.6.1 1.2-.2 1.8-.8.6.2 1.3.3 2 .3h.1c.7 0 1.3-.1 1.9-.3.4.4.9.7 1.5.8h.4c1.1 0 1.9-.8 2.5-1.8 1.2-2 1.9-5.9 2-7.3.2-1.9 0-5.5-1.6-7.4-.2-.3-.6-.5-1-.6ZM8.4 7.6c-.1.9.1 1.7.4 2.4.3.9.5 1.6-.1 2.5-.6-1.4-.9-3.4-.6-4.9Zm7.3 8.7c-.5.9-.9 1.1-1.1 1.1-.4 0-.8-.5-1-.9.7-1.1.9-2.4.9-2.5v-.4c0-.2-.1-.3-.3-.4-.5-.2-1.2-.1-1.7.1.2-.9.7-1.6 1.5-2.1 1.3 1.2 2 2.8 2.2 3.9-.1.5-.3 1-.5 1.2Z"/>',
-      signoz: '<path d="M12 2 3 7v10l9 5 9-5V7l-9-5Zm0 2.3 6.8 3.8L12 11.9 5.2 8.1 12 4.3ZM5 9.8l6 3.4v6.8l-6-3.3V9.8Zm8 10.2v-6.8l6-3.4v6.9l-6 3.3Z"/>',
       filesystem: '<path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2Z"/>'
     };
     function mcpMark(slug, name){
@@ -6949,7 +8536,7 @@ ${BRAND_SPRITE}
             var s = JSON.parse(decodeURIComponent(b.getAttribute("data-install")));
             var url = s.url;
             if (s.needsUrl || (!s.url && !s.command)){
-              // Some providers can't be shipped with a fixed endpoint — SigNoz
+              // Some providers can't be shipped with a fixed endpoint — a
               // Cloud embeds your account region in the hostname. The catalog
               // hands over a template rather than guessing a URL that would
               // simply fail, so prefill it and let the person finish it.
@@ -7051,7 +8638,12 @@ ${BRAND_SPRITE}
             b.disabled = true;
             api("/api/projects/" + pid + "/skills/" + encodeURIComponent(b.getAttribute("data-tog")),
               { method: "PUT", body: JSON.stringify({ enabled: !on }) })
-              .then(load).catch(function(err){ toast(err.message); b.disabled = false; });
+              // The composer's Skills badge is the only place this is visible
+              // once the modal closes. Reloading the list alone left it reading
+              // 0 while the agent was genuinely being handed the skill — the UI
+              // disagreeing with what the next turn would actually do.
+              .then(function(){ load(); refreshSkillCount(); })
+              .catch(function(err){ toast(err.message); b.disabled = false; });
           };
         });
         body.querySelector("#skadd").onclick = function(){
@@ -7060,7 +8652,7 @@ ${BRAND_SPRITE}
           var btn = this; btn.disabled = true; btn.textContent = "Installing\\u2026";
           var payload = /^(https?:|git@|ssh:)/.test(v) ? { gitUrl: v } : { dir: v };
           api("/api/projects/" + pid + "/skills/install", { method: "POST", body: JSON.stringify(payload) })
-            .then(function(r){ toast("Installed " + ((r && r.installed && r.installed.id) || "skill")); load(); })
+            .then(function(r){ toast("Installed " + ((r && r.installed && r.installed.id) || "skill")); load(); refreshSkillCount(); })
             .catch(function(err){ toast(err.message || "install failed"); })
             .then(function(){ btn.disabled = false; btn.textContent = "Install"; });
         };
@@ -7152,7 +8744,9 @@ ${BRAND_SPRITE}
     var gc = document.getElementById("ghconnect");
     if (gc) gc.onclick = connectGithub;
     var lpp = document.getElementById("lppill");
-    if (lpp) lpp.onclick = openLoomPad;
+    // Offline: the tooltip says "click to re-check", so clicking re-checks now
+    // rather than opening a panel about a backend that isn't there.
+    if (lpp) lpp.onclick = (state.loompad && state.loompad.up) ? openLoomPad : window.__loompadRecheck;
     var upill = document.getElementById("usagepill");
     if (upill) upill.onclick = openUsage;
   }
@@ -7163,15 +8757,33 @@ ${BRAND_SPRITE}
     if (!state.token) return;
     api("/api/github/status").then(function(s){ state.github = s; drawStatusbar(); }).catch(function(){});
   }
-  // LoomPad voice-backend health, shown as a pill in the status bar and polled so
-  // the demo can see the pad go live the moment the backend starts.
+  /**
+   * LoomPad voice-backend health, shown as a pill in the status bar.
+   *
+   * Polled every 5s while it is UP, so the demo sees the pad go live and sees
+   * it go away. Backed off hard while it is DOWN, which is the state on every
+   * machine that hasn't started the pad's backend — i.e. almost all of them.
+   * The daemon answers this by opening an outbound connection with a 2.5s
+   * timeout, so a flat 5s poll meant a failing connection every five seconds
+   * for the life of the session, forever, for hardware that isn't plugged in.
+   * The pill is unchanged; only the asking stopped being rude.
+   */
   function loadLoomPad(){
     if (!state.token) return;
     api("/api/loompad/health")
-      .then(function(s){ state.loompad = s; drawStatusbar(); })
-      .catch(function(){ state.loompad = { up:false }; drawStatusbar(); });
+      .then(function(s){ state.loompad = s; scheduleLoomPad(!!(s && s.up)); drawStatusbar(); })
+      .catch(function(){ state.loompad = { up:false }; scheduleLoomPad(false); drawStatusbar(); });
   }
-  if (!window.__loompadPoll){ window.__loompadPoll = setInterval(function(){ loadLoomPad(); }, 5000); }
+  // Up: keep the 5s beat. Down: 5s, 15s, 45s, then every 2 minutes — enough to
+  // notice a backend that starts later without hammering one that never will.
+  function scheduleLoomPad(up){
+    if (window.__loompadTimer) clearTimeout(window.__loompadTimer);
+    window.__loompadMisses = up ? 0 : (window.__loompadMisses || 0) + 1;
+    var wait = up ? 5000 : Math.min(120000, 5000 * Math.pow(3, window.__loompadMisses - 1));
+    window.__loompadTimer = setTimeout(loadLoomPad, wait);
+  }
+  // Clicking the pill re-checks now, which is what its tooltip promises.
+  window.__loompadRecheck = function(){ window.__loompadMisses = 0; loadLoomPad(); };
   // Click the $ pill: a usage breakdown — this project's share and every
   // project's spend against the running total.
   function openUsage(){
@@ -7403,6 +9015,28 @@ ${BRAND_SPRITE}
     con.logs.forEach(function(r){ if (r.id > con.seen) con.seen = r.id; });
     drawConsole();
     drawErrDot();
+    // …and re-read from the daemon, because opening this pane is the moment
+    // somebody is asking "what just went wrong". Records normally arrive on
+    // the live stream, but a record that landed while the socket was
+    // reconnecting would otherwise stay invisible until the next one pushed it
+    // in. Merged by id, so a record the stream already delivered is not
+    // duplicated, and nothing already on screen flickers.
+    refreshConsole();
+  }
+
+  /** Pull the daemon's log and merge it into whatever the stream has given us. */
+  function refreshConsole(){
+    if (!state.token) return;
+    api("/api/logs").then(function(j){
+      var have = {};
+      con.logs.forEach(function(r){ have[r.id] = true; });
+      (j.logs || []).forEach(function(r){ if (!have[r.id]) con.logs.push(r); });
+      con.logs.sort(function(a, b){ return a.id - b.id; });
+      if (con.logs.length > 500) con.logs.splice(0, con.logs.length - 500);
+      con.logs.forEach(function(r){ if (r.id > con.seen) con.seen = r.id; });
+      drawConsole();
+      drawErrDot();
+    }).catch(function(){ /* an older daemon has no /api/logs — the pane keeps what it has */ });
   }
 
   function closeConsole(){
@@ -8423,7 +10057,7 @@ ${BRAND_SPRITE}
     document.body.appendChild(scrim);
     var inp = document.getElementById("pq");
     var body = document.getElementById("pbody");
-    var items = [], sel = 0, reqId = 0, curQ = "", acc = {}, wt = null, to = null;
+    var items = [], sel = 0, reqId = 0, curQ = "", acc = {}, wt = null, to = null, acts = null;
 
     function close(){ scrim.remove(); document.removeEventListener("keydown", onKey, true); }
     function onKey(e){
@@ -8462,6 +10096,9 @@ ${BRAND_SPRITE}
         C.push({ icon: ICONS.branch, label: "Source Control", sub: "panel", run: function(){ state.showRail("scm"); } });
         C.push({ icon: ICONS.agents, label: "Agents", sub: "panel", run: function(){ state.showRail("tasks"); } });
       }
+      if (pid && state.newSavedAction) {
+        C.push({ icon: ICONS.bolt, label: "New action", sub: "shell or prompt", run: function(){ state.newSavedAction(null); } });
+      }
       C.push({ icon: ICONS.tasks, label: "New task", run: function(){ openTaskModal(pid); } });
       C.push({ icon: ICONS.folderPlus, label: "New project", run: function(){ openProjectModal(); } });
       C.push({ icon: ICONS.gear, label: "Settings", run: function(){ openSettingsModal("setup"); } });
@@ -8493,6 +10130,17 @@ ${BRAND_SPRITE}
       if (state.selectAgent) h += section("Agents", ags.filter(function(a){ return fuzzy(a.id + " " + (a.role || ""), q); }).map(function(a){
         return { markKind: a.kind, label: a.id, sub: (a.tier === "bridge" ? "bridge" : (a.role || "agent")) + " \\u00b7 talk to", run: function(){ state.selectAgent(a.id); } };
       }));
+      // Saved actions, runnable without leaving the keyboard. Listed whether
+      // or not you have typed, because their whole point is that you already
+      // know which one you want.
+      if (pid && state.runSavedAction && acts) {
+        h += section("Actions", acts.filter(function(a){
+          return fuzzy(a.name + " " + a.body, q);
+        }).slice(0, 6).map(function(a){
+          return { icon: ICONS.bolt, label: a.name, sub: a.kind === "prompt" ? "prompt" : a.body.slice(0, 40),
+                   run: function(){ state.runSavedAction(a.id); } };
+        }));
+      }
       if (state.termRun && wt) {
         var wts = wt.filter(function(w){ return !w.main && fuzzy((w.branch || "") + " " + w.path, q); });
         h += section("Worktrees", wts.map(function(w){
@@ -8500,26 +10148,61 @@ ${BRAND_SPRITE}
                    run: function(){ state.termRun("cd " + shq(w.path)); toast("cd \\u2192 " + (w.branch || w.path)); } };
         }));
       }
+      var pending = false;
       if (q && pid) {
         if (state.openFile && acc.files && acc.files.length) h += section("Files", acc.files.map(function(f){
           return { icon: ICONS.file, label: f, run: function(){ state.openFile(f); } };
         }));
         if (state.openFile && acc.code && acc.code.length) h += section("Code", acc.code.map(function(hit){
           return { icon: ICONS.search, label: hit.path,
-                   html: '<span class="ppath">' + esc(hit.path) + ":" + hit.line + "</span> " + esc((hit.text || "").trim().slice(0, 90)),
+                   html: '<span class="ppath">' + esc(hit.path) + ":" + hit.line + "</span> " + hlMatch(hit.text || "", q),
                    run: function(){ state.openFile(hit.path); } };
         }));
         if (state.setChat && acc.chats && acc.chats.length) h += section("Conversations", acc.chats.map(function(c){
           return { icon: ICONS.chat, label: (c.snippet || "").trim().slice(0, 72) || c.chat, sub: c.chat,
                    run: function(){ state.setChat(pid, c.chat); } };
         }));
-        var pending = acc.files === undefined || acc.code === undefined || acc.chats === undefined;
+        pending = acc.files === undefined || acc.code === undefined || acc.chats === undefined;
         if (pending) h += '<div class="pmore">searching the project\\u2026</div>';
       }
       if (!items.length && !q) h += '<div class="pmore">type to search \\u2014 files, code, agents, worktrees, commands</div>';
+      // A query that matches nothing must say so. It used to render the footer
+      // over an empty box, which reads as a broken panel rather than an honest
+      // "nothing here" — and only once the async search had landed, so there
+      // was no way to tell "still looking" from "found nothing".
+      if (!items.length && q && !pending) {
+        h += '<div class="pmore">no matches for \\u201c' + esc(q) + '\\u201d</div>';
+      }
       body.innerHTML = h;
       if (sel >= items.length) sel = items.length ? items.length - 1 : 0;
       paint(); wireRows();
+    }
+
+    /**
+     * A code hit with the searched term marked in it.
+     *
+     * A list of lines that each contain your term somewhere is a list you have
+     * to re-read; marking the hit is the difference between scanning and
+     * reading. Escaped first, then the marks are added to the escaped string,
+     * so a match inside something that looked like markup cannot become markup.
+     * The window is centred on the first match rather than being the first 90
+     * characters, because a match at column 200 was previously off the end of
+     * the line Notch chose to show.
+     */
+    function hlMatch(line, term){
+      var raw = String(line || "").replace(/\\t/g, "  ").trim();
+      var t = String(term || "").trim();
+      if (!t) return esc(raw.slice(0, 90));
+      var at = raw.toLowerCase().indexOf(t.toLowerCase());
+      if (at < 0) return esc(raw.slice(0, 90));
+      var from = at > 34 ? at - 30 : 0;
+      var slice = raw.slice(from, from + 96);
+      var pos = at - from;
+      return (from > 0 ? "\\u2026" : "") +
+        esc(slice.slice(0, pos)) +
+        '<mark class="phl">' + esc(slice.slice(pos, pos + t.length)) + "</mark>" +
+        esc(slice.slice(pos + t.length)) +
+        (from + 96 < raw.length ? "\\u2026" : "");
     }
 
     function paint(){
@@ -8555,6 +10238,7 @@ ${BRAND_SPRITE}
     };
     // worktrees once, up front — few, and useful in the default (empty) menu
     if (pid) api("/api/projects/" + pid + "/worktrees").then(function(j){ wt = j.worktrees || []; draw(); }).catch(function(){});
+    if (pid) api("/api/actions").then(function(j){ acts = j.actions || []; draw(); }).catch(function(){});
     draw();
     setTimeout(function(){ inp.focus(); }, 20);
   }

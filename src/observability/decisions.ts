@@ -40,7 +40,15 @@ export type DecisionCategory =
   | "other";
 
 /** How a decision was extracted — see the module header. */
-export type DecisionSource = "llm" | "cli" | "heuristic";
+/**
+ * Where a decision came from.
+ *
+ * `human` is not an extractor tier — it is a decision somebody typed, via
+ * `loom decision` or the API. It carries no confidence because nobody measured
+ * one, and it is listed here so the Explorer can say who decided rather than
+ * filing a deliberate human choice under "heuristic".
+ */
+export type DecisionSource = "llm" | "cli" | "heuristic" | "human";
 
 export interface AgentDecision {
   id: string;
@@ -51,9 +59,9 @@ export interface AgentDecision {
   timestamp: number;
   turnIndex: number;
   /**
-   * The SigNoz trace of the turn this came out of, when telemetry minted one.
+   * The trace of the turn this came out of, when telemetry minted one.
    * Absent when export is off — a decision with no trace links to nothing, and
-   * the empty string it used to carry made every "open in SigNoz" a dead end
+   * the empty string it used to carry made every trace link a dead end
    * that looked like a live one.
    */
   traceId?: string;
@@ -362,7 +370,7 @@ export interface ExtractOpts {
   projectId: string;
   chatId: string;
   turnIndex: number;
-  /** The turn's SigNoz trace, when telemetry minted one. Omit when it didn't. */
+  /** The turn's trace, when telemetry minted one. Omit when it didn't. */
   traceId?: string;
   /** The `run_complete` log event this turn is, when the caller knows it. */
   turnId?: string;
@@ -410,7 +418,7 @@ export async function extractDecisions(opts: ExtractOpts): Promise<AgentDecision
     timestamp: now,
     turnIndex: opts.turnIndex,
     // Absent, not "", when this turn has no trace: the difference is a working
-    // link versus one that opens a SigNoz search for nothing.
+    // link versus one that opens a search for nothing.
     ...(opts.traceId ? { traceId: opts.traceId } : {}),
     ...(opts.turnId ? { turnId: opts.turnId } : {}),
     category: d.category,
@@ -466,7 +474,7 @@ export function normalizeStoredDecision(raw: AgentDecision & { tokensUsed?: numb
 export function decisionStats(decisions: AgentDecision[]): DecisionStats {
   const byAgent: Record<string, number> = {};
   const byCategory: Record<string, number> = {};
-  const bySource: Record<DecisionSource, number> = { llm: 0, cli: 0, heuristic: 0 };
+  const bySource: Record<DecisionSource, number> = { llm: 0, cli: 0, heuristic: 0, human: 0 };
   const altCounts = new Map<string, number>();
   let confSum = 0;
   let confSamples = 0;
