@@ -1542,7 +1542,22 @@ export class ProjectRuntime {
    */
   private async validHolder(): Promise<string | null> {
     const holder = this.baton.holder();
-    if (holder && !this.agents.has(holder)) {
+    if (!holder) return null;
+    // Against the *roster*, not the live process map.
+    //
+    // `this.agents` holds agents that have been spawned in this daemon. An agent
+    // sitting in .loom/config.json that has not taken a turn yet is absent from
+    // it — and this used to read that absence as "no longer in config" and
+    // force-clear the baton. So a daemon restart dropped the lock of any holder
+    // that had not yet been spawned, and the Observatory disagreed with the
+    // graph ledger about who held it: the ledger said claude-code at epoch 6,
+    // a status poll cleared it, and the tile fell back to the previous holder.
+    //
+    // The baton is elected in HydraDB and is meant to outlive the process. The
+    // only thing that legitimately invalidates a holder is being taken off the
+    // roster, which is what this now checks.
+    const onRoster = this.config.agents.some((a) => a.id === holder);
+    if (!onRoster) {
       await this.baton.forceClear(`agent "${holder}" no longer in config`);
       return null;
     }

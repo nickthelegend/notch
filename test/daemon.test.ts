@@ -101,6 +101,43 @@ describe("loom daemon end-to-end", () => {
     expect(nothing.hits).toEqual([]);
   });
 
+  /**
+   * The baton is elected in HydraDB and must outlive the process.
+   *
+   * `validHolder()` used to check the holder against `this.agents` — the map of
+   * agents *spawned in this daemon* — and force-clear the baton when it missed.
+   * An agent on the roster that had not taken a turn yet is absent from that
+   * map, so a status poll silently dropped a legitimately-held lock, and the
+   * Observatory disagreed with the graph ledger about who held it. Being taken
+   * off the roster is the only thing that should invalidate a holder.
+   *
+   * On its own project: handing the baton around in the shared one reorders
+   * the baton assumptions every other test in this file is built on.
+   */
+  it("keeps the baton with an agent that is on the roster but not yet spawned", async () => {
+    const dir = makeProjectDir({ name: "baton-durability" });
+    const { project } = await client.addProject(dir);
+    const pid = project.id;
+
+    await client.handoff(pid, "execbot");
+    expect((await client.project(pid)).project.holder).toBe("execbot");
+
+    const ledgerOf = async () =>
+      fetch(`${baseUrl}/api/projects/${pid}/graph/baton`, { headers: adminAuth() }).then((r) => r.json());
+    const before = await ledgerOf();
+    expect(before.state.holder).toBe("execbot");
+
+    // The old code cleared the baton on the first poll that found the holder
+    // absent from the live map, so poll more than once.
+    for (let i = 0; i < 3; i++) {
+      expect((await client.project(pid)).project.holder).toBe("execbot");
+    }
+
+    const after = await ledgerOf();
+    expect(after.state.holder).toBe("execbot");
+    expect(after.state.epoch).toBe(before.state.epoch);
+  });
+
   it("rejects unauthenticated requests", async () => {
     const res = await fetch(`${baseUrl}/api/projects`);
     expect(res.status).toBe(401);
