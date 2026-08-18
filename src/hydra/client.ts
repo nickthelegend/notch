@@ -218,6 +218,17 @@ export interface QueryOpts {
   timeoutMs?: number;
   /** Attempts on a transient failure. Default 4. */
   retries?: number;
+  /**
+   * Pin the request id instead of minting one.
+   *
+   * Normally every call draws its own `query_id` so a retry is a replay and a
+   * new write is a new write. Supplying one deliberately re-enters HydraDB's
+   * deduplication: send the same id with the same payload and the second
+   * request is recognised as the first, not applied twice. That is a real
+   * durability property of the engine and the only way to *show* it is to
+   * reuse an id on purpose — see the idempotency drill.
+   */
+  queryId?: string;
 }
 
 /**
@@ -472,7 +483,7 @@ export class HydraClient {
     // us instead: a retried batch carries the same id only when it is genuinely
     // the same request (pagination), so a replay is a replay and a new write is
     // a new write.
-    const id = `notch-${crypto.randomUUID()}`;
+    const id = opts.queryId ?? `notch-${crypto.randomUUID()}`;
     const first = await this.withRetry(
       () => this.page(cypher, parameters, opts, undefined, id),
       opts,

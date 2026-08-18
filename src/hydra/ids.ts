@@ -44,6 +44,8 @@ export const KIND = {
   council: 16,
   answer: 17,
   action: 18,
+  /** The idempotency drill's own scratch rows — see the drill route. */
+  drill: 19,
 } as const;
 
 export type IdKind = keyof typeof KIND;

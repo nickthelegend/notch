@@ -29,6 +29,7 @@ import { probeMcpServer, writeMcpSession } from "../core/mcp.js";
 import { searchCatalog } from "../core/mcp-catalog.js";
 import { buildSnapshots } from "../observability/snapshots.js";
 import { hydra } from "../hydra/client.js";
+import { kindBase } from "../hydra/ids.js";
 import { actionStore, type ActionKind } from "../hydra/actions.js";
 import { graphCounts, replayAt } from "../hydra/views.js";
 import { projectGraph } from "../hydra/graph.js";
@@ -2453,6 +2454,90 @@ export class LoomDaemon {
     );
 
     /** Everything the machine knows about one entity — the node you clicked. */
+    /**
+     * The idempotency drill — the fence drill's twin.
+     *
+     * The fence drill makes a safety guarantee fail on purpose so you can watch
+     * it hold. This makes a *durability* guarantee succeed on purpose, which is
+     * harder to believe and impossible to fake.
+     *
+     * Three writes, in order:
+     *   1. one write under a pinned `query_id`         → the row appears
+     *   2. the byte-identical write, same `query_id`   → still one row
+     *   3. the same payload under a fresh `query_id`   → now two rows
+     *
+     * Step 2 is the claim: HydraDB recognised the second request as the first
+     * and did not apply it twice. Step 3 is the control that stops step 2 being
+     * explained away by `MERGE` — same content, different id, and it lands. The
+     * dedup is keyed on the request, not the data.
+     *
+     * The records are durable and outlive the process, which is why the client
+     * mints a UUID per call in normal operation: after a node restart a
+     * process-local counter walks back over ids that already stored a different
+     * payload, and every batched write fails. This drill is that machinery,
+     * pointed at itself.
+     */
+    app.post(
+      "/api/projects/:id/graph/idempotency-drill",
+      withRuntime(async (rt, _req, res) => {
+        const g = rt.graph;
+        await g.open();
+        const drill = crypto.randomUUID();
+        const pinned = `notch-drill-${drill}`;
+        // Its own id range, so drill rows can never collide with real data.
+        const base = kindBase("drill") + Math.floor(Math.random() * 1_000_000) * 4;
+        const rows = [{ id: base + 1, drill, step: "pinned" }];
+
+        const write = (queryId?: string) =>
+          g.client.query(
+            "UNWIND $rows AS row MERGE (n {id: row.id}) SET n:IdempotencyDrill, n.drill = row.drill, n.step = row.step",
+            { rows },
+            queryId ? { queryId } : {},
+          );
+        const countRows = async () => {
+          const r = await g.client.query(
+            "MATCH (n:IdempotencyDrill {drill: $drill}) RETURN n.id AS id",
+            { drill },
+            { consistency: "strong" },
+          );
+          return r.rows.length;
+        };
+
+        try {
+          await write(pinned);
+          const afterFirst = await countRows();
+
+          await write(pinned); // byte-identical, same id
+          const afterReplay = await countRows();
+
+          rows[0] = { id: base + 2, drill, step: "fresh" };
+          await write(); // same payload shape, new id
+          const afterFresh = await countRows();
+
+          res.json({
+            drill,
+            queryId: pinned,
+            afterFirst,
+            afterReplay,
+            afterFresh,
+            deduplicated: afterReplay === afterFirst,
+            freshApplied: afterFresh > afterReplay,
+            detail:
+              afterReplay === afterFirst
+                ? `the replay under query_id "${pinned}" was recognised and not applied twice — ` +
+                  `${afterFirst} row after the first write, ${afterReplay} after re-sending it, ` +
+                  `${afterFresh} once the same payload went out under a fresh id`
+                : `the replay was applied again (${afterFirst} → ${afterReplay}) — deduplication did not hold`,
+          });
+        } catch (err) {
+          res.status(500).json({
+            error: "drill_failed",
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }),
+    );
+
     app.get(
       "/api/projects/:id/graph/entity/:name",
       withRuntime(async (rt, req, res) => {

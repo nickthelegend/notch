@@ -4344,11 +4344,17 @@ ${BRAND_SPRITE}
       var v = (f && f.violations) || [];
       var head = '<div class="decheader" style="margin-top:22px"><span class="declabel">FENCING</span><span class="deccount">' +
         v.length + " stale write" + (v.length === 1 ? "" : "s") + " refused</span></div>";
+      var idem = '<div class="decheader" style="margin-top:22px"><span class="declabel">IDEMPOTENCY</span>' +
+        '<span class="deccount">a replayed write, recognised</span></div>' +
+        '<div class="obnote">The fence drill makes a safety guarantee fail on purpose. This makes a durability one succeed on purpose, which is harder to believe: one write under a pinned request id, the byte-identical write again under the same id, then the same payload under a fresh id. If the middle one lands twice, the guarantee is not real.</div>' +
+        '<button class="obdrill" id="obidem">Replay a write</button>' +
+        '<span class="obsub" style="margin-left:9px">Three real writes against the node. The third is the control \u2014 same payload, new id \u2014 so the second cannot be explained away by MERGE.</span>' +
+        '<div id="obidemout">' + idemResultHtml() + "</div>";
       var drill = '<button class="obdrill" id="obdrill">Run a fence drill</button>' +
         '<span class="obsub" style="margin-left:9px">Performs a real stale-epoch write through the same gate every agent action goes through. Not a simulation \u2014 which is why the self-heal watcher counts it, and will pause that agent.</span>';
       if (!v.length){
         return head + '<div class="obnote">Nothing has been fenced. That is the expected state \\u2014 but a guarantee nobody can watch fail is one nobody has reason to believe, so:</div>' +
-          '<div style="margin-bottom:14px">' + drill + '<div id="obdrillout">' + drillResultHtml() + "</div></div>";
+          '<div style="margin-bottom:14px">' + drill + '<div id="obdrillout">' + drillResultHtml() + "</div></div>" + idem;
       }
       var rows = v.map(function(x){
         return "<tr><td>" + esc(new Date(x.at).toLocaleTimeString()) + "</td><td><b>" + esc(x.agent) + "</b></td><td>" +
@@ -4359,7 +4365,20 @@ ${BRAND_SPRITE}
         '<div class="obnote">A write carrying an epoch older than the holder\\u2019s current tenure is refused and recorded. The file-based lock this replaced had no epoch, so there was nothing to be stale about and the write simply landed.</div>' +
         '<table class="obtbl"><thead><tr><th>when</th><th>agent</th><th>epoch</th><th>holder now</th><th>op</th><th>detail</th></tr></thead><tbody>' +
         rows + "</tbody></table>" +
-        '<div style="margin:12px 0">' + drill + '<div id="obdrillout">' + drillResultHtml() + "</div></div>";
+        '<div style="margin:12px 0">' + drill + '<div id="obdrillout">' + drillResultHtml() + "</div></div>" + idem;
+    }
+
+    function idemResultHtml(){
+      var r = state.obIdem;
+      if (!r) return "";
+      var ok = r.deduplicated && r.freshApplied;
+      return '<div class="obcard" style="margin-top:10px;border-color:' +
+        (ok ? "color-mix(in srgb, var(--ok,#4ade80) 55%, transparent)" : "var(--danger,#f87171)") + '">' +
+        '<div class="obcv sm">' + (ok ? "Deduplicated." : "Not deduplicated.") + "</div>" +
+        '<div class="obsub" style="margin-top:6px">' + esc(r.detail || "") + "</div>" +
+        '<div class="obsub" style="margin-top:8px;font-family:var(--font-mono)">' +
+          "first " + r.afterFirst + " \u2192 replay " + r.afterReplay + " \u2192 fresh id " + r.afterFresh +
+        "</div></div>";
     }
 
     /**
@@ -4493,6 +4512,23 @@ ${BRAND_SPRITE}
             if (el) el.innerHTML = '<div class="obnote gqerr">' + esc(state.gqErr) + "</div>";
           });
       };
+      var idemBtn = document.getElementById("obidem");
+      if (idemBtn) idemBtn.onclick = function(){
+        idemBtn.disabled = true; idemBtn.textContent = "Replaying\u2026";
+        api("/api/projects/" + p.id + "/graph/idempotency-drill", { method: "POST", body: "{}" })
+          .then(function(r){
+            state.obIdem = r;
+            var out = document.getElementById("obidemout");
+            if (out) out.innerHTML = idemResultHtml();
+            idemBtn.disabled = false; idemBtn.textContent = "Replay a write";
+          })
+          .catch(function(err){
+            idemBtn.disabled = false; idemBtn.textContent = "Replay a write";
+            var out = document.getElementById("obidemout");
+            if (out) out.innerHTML = '<div class="obnote">Drill failed: ' + esc(String(err && err.message || err)) + "</div>";
+          });
+      };
+
       var drill = document.getElementById("obdrill");
       if (drill) drill.onclick = function(){
         drill.disabled = true; drill.textContent = "Running\\u2026";
