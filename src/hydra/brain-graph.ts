@@ -534,6 +534,89 @@ export class BrainGraph {
       .slice(0, opts.limit ?? 20);
   }
 
+  /**
+   * The whole knowledge graph for one project, as nodes and edges.
+   *
+   * Every other read here answers a *question* — what is connected to this,
+   * what caused that. This one answers "show me everything", because a graph
+   * is the one shape a list cannot stand in for: you only see that a constraint
+   * and a failure three turns apart are about the same file when the two are
+   * drawn touching the same node.
+   *
+   * Three node kinds, because those are the three the edges actually run
+   * between: the memories themselves, the entities they are `ABOUT`, and the
+   * agents that `ASSERTED` them. Everything else in the graph (events, spans,
+   * claims) is provenance rather than knowledge, and belongs on other panels.
+   *
+   * Bounded deliberately. A force layout with a thousand nodes is a hairball,
+   * and a hairball reads as noise no matter how real the data behind it is.
+   */
+  async knowledgeGraph(limit = 120): Promise<{
+    nodes: { id: string; kind: "memory" | "entity" | "agent"; label: string; sub?: string; weight: number }[];
+    edges: { from: string; to: string; type: string }[];
+  }> {
+    await this.graph.open();
+    const nodes = new Map<string, { id: string; kind: "memory" | "entity" | "agent"; label: string; sub?: string; weight: number }>();
+    const edges: { from: string; to: string; type: string }[] = [];
+    const bump = (id: string) => { const n = nodes.get(id); if (n) n.weight += 1; };
+
+    const mem = await this.graph.client.query(
+      `MATCH (p:${LABEL.project} {id: $pv})-[:${REL.hasMemory}]->(m:${LABEL.memory}) ` +
+        "RETURN m.mid AS mid, m.text AS text, m.kind AS kind, m.agent AS agent " +
+        `ORDER BY m.updated DESC LIMIT ${Math.max(1, Math.min(400, limit))}`,
+      { pv: this.graph.vid },
+    );
+    for (const r of mem.rows) {
+      const mid = String(r.mid ?? "");
+      if (!mid) continue;
+      nodes.set("m:" + mid, {
+        id: "m:" + mid, kind: "memory",
+        label: String(r.text ?? "").slice(0, 90),
+        sub: String(r.kind ?? ""), weight: 1,
+      });
+      const agent = String(r.agent ?? "").trim();
+      if (agent) {
+        const aid = "a:" + agent;
+        if (!nodes.has(aid)) nodes.set(aid, { id: aid, kind: "agent", label: agent, weight: 1 });
+        edges.push({ from: aid, to: "m:" + mid, type: REL.asserted });
+        bump(aid);
+      }
+    }
+
+    // The entity fan-out is what makes the picture worth looking at: two
+    // memories that never share a word still meet on the file they are about.
+    for (const key of [...nodes.keys()].filter((k) => k.startsWith("m:"))) {
+      const mid = key.slice(2);
+      const res = await this.graph.client.query(
+        `MATCH (m:${LABEL.memory} {id: $mv})-[:${REL.about}]->(e:${LABEL.entity}) RETURN e.name AS name LIMIT 12`,
+        { mv: await this.graph.memoryVid(mid) },
+      );
+      for (const row of res.rows) {
+        const name = String(row.name ?? "").trim();
+        if (!name) continue;
+        const eid = "e:" + name;
+        if (!nodes.has(eid)) nodes.set(eid, { id: eid, kind: "entity", label: name, weight: 1 });
+        edges.push({ from: key, to: eid, type: REL.about });
+        bump(eid);
+        bump(key);
+      }
+      for (const [rel, type] of [[REL.causedBy, REL.causedBy], [REL.constrainedBy, REL.constrainedBy], [REL.supersedes, REL.supersedes]] as const) {
+        const link = await this.graph.client.query(
+          `MATCH (m:${LABEL.memory} {id: $mv})-[:${rel}]->(o:${LABEL.memory}) RETURN o.mid AS mid LIMIT 8`,
+          { mv: await this.graph.memoryVid(mid) },
+        );
+        for (const row of link.rows) {
+          const other = "m:" + String(row.mid ?? "");
+          if (!nodes.has(other)) continue; // only draw edges between nodes we are showing
+          edges.push({ from: key, to: other, type });
+          bump(key); bump(other);
+        }
+      }
+    }
+
+    return { nodes: [...nodes.values()], edges };
+  }
+
   // -------------------------------------------------------------------------
   // Handoff provenance
   // -------------------------------------------------------------------------

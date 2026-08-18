@@ -2436,6 +2436,22 @@ export class LoomDaemon {
       }),
     );
 
+    /**
+     * The whole knowledge graph, for drawing.
+     *
+     * Every other /graph route answers a question; this one hands over the
+     * shape so the client can lay it out. Bounded, because a force layout
+     * past a couple of hundred nodes stops being a picture and starts being
+     * a hairball.
+     */
+    app.get(
+      "/api/projects/:id/graph/knowledge",
+      withRuntime(async (rt, req, res) => {
+        const limit = Math.min(400, Math.max(10, Number(req.query.limit) || 120));
+        res.json(await rt.brainGraph.knowledgeGraph(limit));
+      }),
+    );
+
     app.get(
       "/api/projects/:id/graph/handoffs",
       withRuntime(async (rt, _req, res) => {

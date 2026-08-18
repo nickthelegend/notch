@@ -886,6 +886,42 @@ try{if(localStorage.getItem("loomTheme")==="light")document.documentElement.clas
   .aekind.on{border-color:var(--primary);color:var(--foreground);
     background:color-mix(in srgb, var(--primary) 12%, transparent)}
   .aehint{margin-top:8px;font-size:11px;line-height:1.5;color:var(--muted-foreground)}
+  /* The knowledge graph. A list can tell you a constraint exists; only this
+     can show you it shares a file with a failure three turns away. */
+  .kgwrap{position:relative;margin:10px 0 4px;border:1px solid var(--border);border-radius:12px;
+    background:color-mix(in srgb, var(--card) 60%, transparent);overflow:hidden}
+  .kgsvg{display:block;width:100%;height:420px;cursor:grab;touch-action:none}
+  .kgsvg:active{cursor:grabbing}
+  .kgedge{stroke:var(--border);stroke-width:1.1;fill:none;transition:stroke .18s,stroke-width .18s,opacity .18s}
+  .kgedge.about{stroke:color-mix(in srgb, var(--muted-foreground) 55%, transparent)}
+  .kgedge.asserted{stroke:color-mix(in srgb, var(--primary) 45%, transparent)}
+  .kgedge.caused{stroke:var(--danger,#f87171);stroke-dasharray:4 3}
+  .kgedge.constrained{stroke:#a78bfa}
+  .kgedge.supersedes{stroke:#f59e0b;stroke-dasharray:2 3}
+  .kgwrap.focused .kgedge{opacity:.12}
+  .kgwrap.focused .kgedge.lit{opacity:1;stroke-width:2}
+  .kgnode{cursor:pointer}
+  .kgnode circle,.kgnode rect,.kgnode polygon{transition:opacity .18s,filter .18s}
+  .kgwrap.focused .kgnode{opacity:.22}
+  .kgwrap.focused .kgnode.lit{opacity:1}
+  .kgmem{fill:var(--card);stroke:var(--border);stroke-width:1.2}
+  .kgnode.k-constraint .kgmem{stroke:#a78bfa}
+  .kgnode.k-failure .kgmem{stroke:var(--danger,#f87171)}
+  .kgnode.k-decision .kgmem{stroke:var(--primary)}
+  .kgnode.k-convention .kgmem{stroke:#34d399}
+  .kgnode.k-fact .kgmem{stroke:#60a5fa}
+  .kgent{fill:color-mix(in srgb, var(--primary) 16%, var(--card));stroke:var(--primary);stroke-width:1.2}
+  .kgagt{fill:color-mix(in srgb, #f59e0b 18%, var(--card));stroke:#f59e0b;stroke-width:1.4}
+  .kglabel{font-size:9.5px;fill:var(--foreground);pointer-events:none;font-family:var(--font-mono)}
+  .kgsub{font-size:8px;fill:var(--muted-foreground);pointer-events:none;
+    text-transform:uppercase;letter-spacing:.06em}
+  .kglegend{position:absolute;left:10px;bottom:8px;display:flex;gap:10px;flex-wrap:wrap;
+    font-size:9.5px;color:var(--muted-foreground);pointer-events:none}
+  .kglegend i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+  .kgcount{position:absolute;right:10px;top:8px;font-size:10px;color:var(--muted-foreground);
+    font-family:var(--font-mono);pointer-events:none}
+  @keyframes kgin{from{opacity:0;transform:scale(.82)}to{opacity:1;transform:none}}
+  .kgnode{animation:kgin .32s cubic-bezier(.2,.8,.3,1) backwards}
   .bmem.xrun{border-left:2px solid color-mix(in srgb, var(--primary) 55%, transparent)}
   .xproj{font-family:var(--font-mono);font-size:10px;padding:1px 5px;border-radius:4px;margin-left:6px;
     border:1px solid color-mix(in srgb, var(--primary) 40%, transparent);color:var(--primary)}
@@ -6099,6 +6135,150 @@ ${BRAND_SPRITE}
      * this project's memory; repeating it here would bury the one row that is
      * genuinely new information.
      */
+    /**
+     * The knowledge graph, drawn.
+     *
+     * Every other Brain surface is a list, and a list flattens the one thing
+     * that makes this a graph: a constraint and a failure recorded three turns
+     * apart, by different agents, in different words, are the same knowledge if
+     * they are about the same file. You only see that when they are drawn
+     * touching the same node.
+     *
+     * The layout is a small spring simulation rather than a library, because
+     * the app has no build step and no CDN — see the vendor note at the top.
+     * Repulsion between every pair, springs along every edge, and a weak pull
+     * to centre so nothing drifts off the canvas. It settles in about a second
+     * and then stops, because a graph that never stops moving is a graph nobody
+     * can read.
+     */
+    var kgState = null;
+
+    function kgHtml(){
+      return '<div class="bsec">The knowledge graph<span class="bhint">memories, what they are about, who asserted them</span></div>' +
+        '<div class="kgwrap" id="kgwrap"><svg class="kgsvg" id="kgsvg"></svg>' +
+        '<div class="kgcount" id="kgcount"></div>' +
+        '<div class="kglegend">' +
+          '<span><i style="background:var(--card);border:1px solid var(--border)"></i>memory</span>' +
+          '<span><i style="background:color-mix(in srgb,var(--primary) 40%,transparent)"></i>entity</span>' +
+          '<span><i style="background:color-mix(in srgb,#f59e0b 55%,transparent)"></i>agent</span>' +
+          '<span><i style="background:var(--danger,#f87171)"></i>caused by</span>' +
+          '<span><i style="background:#a78bfa"></i>constrained by</span>' +
+        "</div></div>";
+    }
+
+    function drawKnowledgeGraph(){
+      var svg = document.getElementById("kgsvg");
+      if (!svg) return;
+      api("/api/projects/" + pid + "/graph/knowledge?limit=120")
+        .then(function(g){
+          svg = document.getElementById("kgsvg"); if (!svg) return;
+          var nodes = g.nodes || [], edges = g.edges || [];
+          var cnt = document.getElementById("kgcount");
+          if (cnt) cnt.textContent = nodes.length + " nodes \u00b7 " + edges.length + " edges";
+          if (!nodes.length) {
+            svg.innerHTML = '<text x="50%" y="50%" text-anchor="middle" class="kgsub">nothing learned yet \u2014 run a turn and the graph fills</text>';
+            return;
+          }
+          var W = svg.clientWidth || 700, H = 420;
+          var byId = {};
+          nodes.forEach(function(n, i){
+            // Seed on a circle rather than at random: a random start makes the
+            // same graph settle differently every reload, which reads as noise.
+            var a = (i / nodes.length) * Math.PI * 2;
+            n.x = W/2 + Math.cos(a) * Math.min(W,H) * 0.32;
+            n.y = H/2 + Math.sin(a) * Math.min(W,H) * 0.32;
+            n.vx = 0; n.vy = 0;
+            n.r = n.kind === "memory" ? 0 : (n.kind === "agent" ? 15 : 11 + Math.min(7, n.weight));
+            byId[n.id] = n;
+          });
+          var links = edges.filter(function(e){ return byId[e.from] && byId[e.to]; });
+
+          for (var step = 0; step < 320; step++) {
+            for (var i = 0; i < nodes.length; i++) {
+              for (var j = i + 1; j < nodes.length; j++) {
+                var a1 = nodes[i], b1 = nodes[j];
+                var dx = b1.x - a1.x, dy = b1.y - a1.y;
+                var d2 = dx*dx + dy*dy || 0.01, d = Math.sqrt(d2);
+                var rep = 5200 / d2;
+                var ux = dx/d, uy = dy/d;
+                a1.vx -= ux*rep; a1.vy -= uy*rep; b1.vx += ux*rep; b1.vy += uy*rep;
+              }
+            }
+            links.forEach(function(l){
+              var a2 = byId[l.from], b2 = byId[l.to];
+              var dx = b2.x - a2.x, dy = b2.y - a2.y;
+              var d = Math.sqrt(dx*dx + dy*dy) || 0.01;
+              var f = (d - 96) * 0.012;
+              var ux = dx/d, uy = dy/d;
+              a2.vx += ux*f; a2.vy += uy*f; b2.vx -= ux*f; b2.vy -= uy*f;
+            });
+            nodes.forEach(function(n){
+              n.vx += (W/2 - n.x) * 0.0016; n.vy += (H/2 - n.y) * 0.0016;
+              n.vx *= 0.86; n.vy *= 0.86;
+              n.x += n.vx; n.y += n.vy;
+              n.x = Math.max(70, Math.min(W - 70, n.x));
+              n.y = Math.max(26, Math.min(H - 26, n.y));
+            });
+          }
+
+          var cls = { ABOUT:"about", ASSERTED:"asserted", CAUSED_BY:"caused", CONSTRAINED_BY:"constrained", SUPERSEDES:"supersedes" };
+          var eh = links.map(function(l, i){
+            var a3 = byId[l.from], b3 = byId[l.to];
+            return '<line class="kgedge ' + (cls[l.type] || "") + '" data-a="' + esc(l.from) + '" data-b="' + esc(l.to) + '"' +
+              ' x1="' + a3.x.toFixed(1) + '" y1="' + a3.y.toFixed(1) + '" x2="' + b3.x.toFixed(1) + '" y2="' + b3.y.toFixed(1) + '"><title>' + esc(l.type) + "</title></line>";
+          }).join("");
+
+          var nh = nodes.map(function(n, i){
+            var delay = (i * 14) + "ms";
+            var body;
+            if (n.kind === "memory") {
+              var w = Math.min(150, 42 + n.label.length * 3.1), h = 22;
+              body = '<rect class="kgmem" x="' + (-w/2) + '" y="' + (-h/2) + '" width="' + w + '" height="' + h + '" rx="6"></rect>' +
+                '<text class="kglabel" text-anchor="middle" y="3.4">' + esc(n.label.slice(0, 22)) + (n.label.length > 22 ? "\u2026" : "") + "</text>";
+            } else if (n.kind === "agent") {
+              body = '<circle class="kgagt" r="' + n.r + '"></circle>' +
+                '<text class="kglabel" text-anchor="middle" y="' + (n.r + 11) + '">' + esc(n.label.slice(0, 16)) + "</text>";
+            } else {
+              var r = n.r;
+              body = '<polygon class="kgent" points="0,' + (-r) + ' ' + r + ',0 0,' + r + ' ' + (-r) + ',0"></polygon>' +
+                '<text class="kglabel" text-anchor="middle" y="' + (r + 11) + '">' + esc(n.label.slice(0, 18)) + "</text>";
+            }
+            return '<g class="kgnode k-' + esc(n.sub || n.kind) + '" data-id="' + esc(n.id) + '" transform="translate(' + n.x.toFixed(1) + ',' + n.y.toFixed(1) + ')" style="animation-delay:' + delay + '">' +
+              body + "<title>" + esc((n.sub ? n.sub.toUpperCase() + " \u00b7 " : "") + n.label) + "</title></g>";
+          }).join("");
+
+          svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+          svg.innerHTML = eh + nh;
+
+          // Hover lights the neighbourhood and dims everything else — the
+          // question you actually have in front of a graph is "what touches
+          // this one", and squinting at a hairball does not answer it.
+          var wrap = document.getElementById("kgwrap");
+          Array.prototype.forEach.call(svg.querySelectorAll(".kgnode"), function(gEl){
+            var id = gEl.getAttribute("data-id");
+            gEl.addEventListener("mouseenter", function(){
+              wrap.classList.add("focused");
+              var near = {}; near[id] = 1;
+              Array.prototype.forEach.call(svg.querySelectorAll(".kgedge"), function(e){
+                var a4 = e.getAttribute("data-a"), b4 = e.getAttribute("data-b");
+                if (a4 === id || b4 === id) { e.classList.add("lit"); near[a4] = 1; near[b4] = 1; }
+              });
+              Array.prototype.forEach.call(svg.querySelectorAll(".kgnode"), function(o){
+                if (near[o.getAttribute("data-id")]) o.classList.add("lit");
+              });
+            });
+            gEl.addEventListener("mouseleave", function(){
+              wrap.classList.remove("focused");
+              Array.prototype.forEach.call(svg.querySelectorAll(".lit"), function(e){ e.classList.remove("lit"); });
+            });
+          });
+        })
+        .catch(function(err){
+          var el = document.getElementById("kgsvg");
+          if (el) el.innerHTML = '<text x="50%" y="50%" text-anchor="middle" class="kgsub">' + esc(err.message) + "</text>";
+        });
+    }
+
     var crossQ = "", crossHits = null, crossNames = {}, crossBusy = false;
 
     function crossHtml(){
@@ -6217,7 +6397,7 @@ ${BRAND_SPRITE}
             }).join("") + "</div>"
           : '<div class="bempty sm">No native ADE memory found (CLAUDE.md, AGENTS.md, .kiro/steering). Notch reads these but never writes to them.</div>';
 
-        el.innerHTML = '<div class="pane-inner brain">' + head + seed + list + crossHtml() + src + "</div>";
+        el.innerHTML = '<div class="pane-inner brain">' + head + seed + kgHtml() + list + crossHtml() + src + "</div>";
 
         Array.prototype.forEach.call(el.querySelectorAll(".bkind"), function(b){
           b.onclick = function(){ brainKind = b.getAttribute("data-kind"); refreshBrain(); };
@@ -6234,6 +6414,7 @@ ${BRAND_SPRITE}
           };
         });
         wireCross();
+        drawKnowledgeGraph();
         var reimp = document.getElementById("reimport");
         if (reimp) reimp.onclick = function(){
           api("/api/projects/" + pid + "/memory/import", { method: "POST", body: "{}" })
