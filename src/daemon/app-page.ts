@@ -890,7 +890,13 @@ try{if(localStorage.getItem("loomTheme")==="light")document.documentElement.clas
      can show you it shares a file with a failure three turns away. */
   .kgwrap{position:relative;margin:10px 0 4px;border:1px solid var(--border);border-radius:12px;
     background:color-mix(in srgb, var(--card) 60%, transparent);overflow:hidden}
-  .kgsvg{display:block;width:100%;height:420px;cursor:grab;touch-action:none}
+  .kgsvg{display:block;width:100%;height:520px;cursor:grab;touch-action:none;
+    background:radial-gradient(ellipse at 50% 45%, color-mix(in srgb, var(--primary) 7%, transparent), transparent 68%)}
+  /* Causal edges carry a travelling dash, so the one relationship that means
+     "this led to that" reads as direction rather than a line between dots. */
+  @keyframes kgflow{to{stroke-dashoffset:-28}}
+  .kgedge.caused,.kgedge.supersedes{animation:kgflow 1.5s linear infinite}
+  .kgnode.hub circle,.kgnode.hub polygon{filter:drop-shadow(0 0 7px color-mix(in srgb, var(--primary) 55%, transparent))}
   .kgsvg:active{cursor:grabbing}
   .kgedge{stroke:var(--border);stroke-width:1.1;fill:none;transition:stroke .18s,stroke-width .18s,opacity .18s}
   .kgedge.about{stroke:color-mix(in srgb, var(--muted-foreground) 55%, transparent)}
@@ -6179,7 +6185,7 @@ ${BRAND_SPRITE}
             svg.innerHTML = '<text x="50%" y="50%" text-anchor="middle" class="kgsub">nothing learned yet \u2014 run a turn and the graph fills</text>';
             return;
           }
-          var W = svg.clientWidth || 700, H = 420;
+          var W = svg.clientWidth || 700, H = 520;
           var byId = {};
           nodes.forEach(function(n, i){
             // Seed on a circle rather than at random: a random start makes the
@@ -6224,8 +6230,17 @@ ${BRAND_SPRITE}
           var cls = { ABOUT:"about", ASSERTED:"asserted", CAUSED_BY:"caused", CONSTRAINED_BY:"constrained", SUPERSEDES:"supersedes" };
           var eh = links.map(function(l, i){
             var a3 = byId[l.from], b3 = byId[l.to];
-            return '<line class="kgedge ' + (cls[l.type] || "") + '" data-a="' + esc(l.from) + '" data-b="' + esc(l.to) + '"' +
-              ' x1="' + a3.x.toFixed(1) + '" y1="' + a3.y.toFixed(1) + '" x2="' + b3.x.toFixed(1) + '" y2="' + b3.y.toFixed(1) + '"><title>' + esc(l.type) + "</title></line>";
+            // A gentle bow rather than a straight line: parallel straights
+            // between the same pair overlap into one thick stroke and the graph
+            // loses the fact that two different relationships exist there.
+            var mx = (a3.x + b3.x) / 2, my = (a3.y + b3.y) / 2;
+            var ndx = b3.y - a3.y, ndy = a3.x - b3.x;
+            var nl = Math.sqrt(ndx*ndx + ndy*ndy) || 1;
+            var bow = 14 + (i % 3) * 6;
+            var cx = mx + (ndx / nl) * bow, cy = my + (ndy / nl) * bow;
+            return '<path class="kgedge ' + (cls[l.type] || "") + '" data-a="' + esc(l.from) + '" data-b="' + esc(l.to) + '"' +
+              ' d="M' + a3.x.toFixed(1) + ',' + a3.y.toFixed(1) + ' Q' + cx.toFixed(1) + ',' + cy.toFixed(1) +
+              ' ' + b3.x.toFixed(1) + ',' + b3.y.toFixed(1) + '"><title>' + esc(l.type) + "</title></path>";
           }).join("");
 
           var nh = nodes.map(function(n, i){
@@ -6243,12 +6258,99 @@ ${BRAND_SPRITE}
               body = '<polygon class="kgent" points="0,' + (-r) + ' ' + r + ',0 0,' + r + ' ' + (-r) + ',0"></polygon>' +
                 '<text class="kglabel" text-anchor="middle" y="' + (r + 11) + '">' + esc(n.label.slice(0, 18)) + "</text>";
             }
-            return '<g class="kgnode k-' + esc(n.sub || n.kind) + '" data-id="' + esc(n.id) + '" transform="translate(' + n.x.toFixed(1) + ',' + n.y.toFixed(1) + ')" style="animation-delay:' + delay + '">' +
+            var hub = n.weight >= 4 ? " hub" : "";
+            return '<g class="kgnode' + hub + ' k-' + esc(n.sub || n.kind) + '" data-id="' + esc(n.id) + '" transform="translate(' + n.x.toFixed(1) + ',' + n.y.toFixed(1) + ')" style="animation-delay:' + delay + '">' +
               body + "<title>" + esc((n.sub ? n.sub.toUpperCase() + " \u00b7 " : "") + n.label) + "</title></g>";
           }).join("");
 
           svg.setAttribute("viewBox", "0 0 " + W + " " + H);
           svg.innerHTML = eh + nh;
+
+          /**
+           * Drag a node, pan the canvas, wheel to zoom.
+           *
+           * A force layout you cannot grab is a picture of a graph rather than
+           * a graph: the first thing anyone does when two labels overlap is
+           * reach for one, and if nothing moves they stop trusting that the
+           * thing is live. Dragging rewrites the node's transform and the path
+           * data of every edge touching it, so the bows follow the node instead
+           * of detaching from it.
+           *
+           * Pointer events rather than mouse events, so this works under a
+           * finger on the phone build as well as a trackpad.
+           */
+          var view = { x: 0, y: 0, k: 1 };
+          var host = svg;
+          var root = document.createElementNS("http://www.w3.org/2000/svg", "g");
+          while (svg.firstChild) root.appendChild(svg.firstChild);
+          svg.appendChild(root);
+          function applyView(){
+            root.setAttribute("transform", "translate(" + view.x + "," + view.y + ") scale(" + view.k + ")");
+          }
+          var drag = null;
+          function svgPoint(ev){
+            var r = host.getBoundingClientRect();
+            return {
+              x: ((ev.clientX - r.left) * (W / r.width) - view.x) / view.k,
+              y: ((ev.clientY - r.top) * (H / r.height) - view.y) / view.k,
+            };
+          }
+          function moveNode(n, x, y){
+            n.x = x; n.y = y;
+            var g2 = svg.querySelector('.kgnode[data-id="' + CSS.escape(n.id) + '"]');
+            if (g2) g2.setAttribute("transform", "translate(" + x.toFixed(1) + "," + y.toFixed(1) + ")");
+            // Redraw only the edges that touch this node — rebuilding all of
+            // them on every pointermove drops frames once the graph is busy.
+            Array.prototype.forEach.call(svg.querySelectorAll(".kgedge"), function(e, i){
+              var an = e.getAttribute("data-a"), bn = e.getAttribute("data-b");
+              if (an !== n.id && bn !== n.id) return;
+              var p1 = byId[an], p2 = byId[bn];
+              var mx2 = (p1.x + p2.x)/2, my2 = (p1.y + p2.y)/2;
+              var dx2 = p2.y - p1.y, dy2 = p1.x - p2.x;
+              var l2 = Math.sqrt(dx2*dx2 + dy2*dy2) || 1;
+              var bow2 = 14 + (i % 3) * 6;
+              e.setAttribute("d", "M" + p1.x.toFixed(1) + "," + p1.y.toFixed(1) +
+                " Q" + (mx2 + dx2/l2*bow2).toFixed(1) + "," + (my2 + dy2/l2*bow2).toFixed(1) +
+                " " + p2.x.toFixed(1) + "," + p2.y.toFixed(1));
+            });
+          }
+          svg.addEventListener("pointerdown", function(ev){
+            var g3 = ev.target.closest ? ev.target.closest(".kgnode") : null;
+            var pt = svgPoint(ev);
+            if (g3) {
+              var n2 = byId[g3.getAttribute("data-id")];
+              if (n2) drag = { node: n2, dx: pt.x - n2.x, dy: pt.y - n2.y };
+            } else {
+              drag = { pan: true, sx: ev.clientX, sy: ev.clientY, ox: view.x, oy: view.y };
+            }
+            svg.setPointerCapture(ev.pointerId);
+          });
+          svg.addEventListener("pointermove", function(ev){
+            if (!drag) return;
+            if (drag.pan) {
+              var r2 = host.getBoundingClientRect();
+              view.x = drag.ox + (ev.clientX - drag.sx) * (W / r2.width);
+              view.y = drag.oy + (ev.clientY - drag.sy) * (H / r2.height);
+              applyView();
+              return;
+            }
+            var p = svgPoint(ev);
+            moveNode(drag.node, p.x - drag.dx, p.y - drag.dy);
+          });
+          function endDrag(ev){ if (drag) { try { svg.releasePointerCapture(ev.pointerId); } catch (e2) {} drag = null; } }
+          svg.addEventListener("pointerup", endDrag);
+          svg.addEventListener("pointercancel", endDrag);
+          svg.addEventListener("wheel", function(ev){
+            ev.preventDefault();
+            var pt2 = svgPoint(ev);
+            var k2 = Math.max(0.35, Math.min(3, view.k * (ev.deltaY < 0 ? 1.12 : 0.89)));
+            // Zoom toward the pointer, not the origin, so the thing under the
+            // cursor stays under the cursor.
+            view.x -= (pt2.x * (k2 - view.k));
+            view.y -= (pt2.y * (k2 - view.k));
+            view.k = k2;
+            applyView();
+          }, { passive: false });
 
           // Hover lights the neighbourhood and dims everything else — the
           // question you actually have in front of a graph is "what touches
