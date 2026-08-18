@@ -1390,9 +1390,13 @@ try{if(localStorage.getItem("loomTheme")==="light")document.documentElement.clas
   .obtitle svg{width:18px;height:18px;color:var(--primary)}
   .obtitle .obsub{font-weight:400}
   .obsub{color:var(--muted-foreground);font-size:12px}
-    color:var(--muted-foreground);border:1px solid var(--border);border-radius:var(--radius-sm);
-    padding:6px 11px;text-decoration:none;transition:background .15s,color .15s}
-    border-color:color-mix(in srgb, var(--primary) 45%, transparent)}
+  /* Three orphaned declaration blocks used to sit here — declarations with no
+     selector in front of them, left behind by an edit that removed the
+     selectors and not the bodies. CSS cannot parse a declaration where a
+     selector belongs, so the parser discarded everything until it resynced,
+     and what it ate was the obmetrics rule immediately below. That is why the
+     Observatory tiles rendered as a stacked column instead of a row: the grid
+     rule shipped in the stylesheet and never applied to anything. */
   .obmetrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:10px;margin-bottom:18px}
   .obcard{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px}
   .obcard.accent{border-color:color-mix(in srgb, var(--primary) 40%, transparent)}
