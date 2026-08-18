@@ -38,8 +38,13 @@ export interface Check {
  */
 async function diskCheck(): Promise<Check> {
   const home = os.homedir();
+  // 700ms, not 4s. `df` on a local mount answers in single-digit milliseconds;
+  // a budget that generous only ever gets spent when something is wrong, and
+  // then it stalls `loom doctor` — which the Diagnostics screen runs live and
+  // a test asserts against. A disk check that makes the doctor slow to answer
+  // has traded one diagnosis for a worse one.
   const out = await new Promise<string>((resolve) => {
-    execFile("df", ["-Pk", home], { timeout: 4000 }, (err, stdout) =>
+    execFile("df", ["-Pk", home], { timeout: 700 }, (err, stdout) =>
       resolve(err ? "" : String(stdout)),
     );
   });

@@ -790,7 +790,14 @@ describe("web app · settings", () => {
     );
     expect($(m, "#setpane .updpill"), "a pass/fail summary pill").toBeTruthy();
     expect(m.errors.join("\n")).toBe("");
-  }, 30_000);
+    // 90s, not 30. This is the only test in the file that shells out to the
+    // real `loom doctor`, and doctor probes every installed ADE for sign-in —
+    // measured at 6-8s standing still, and several times that when 60 other
+    // test files are contending for the same machine. The 30s budget was not
+    // about the assertion, it was a bet on load, and it lost that bet roughly
+    // one run in three. Nothing here is slow because of what it checks; it is
+    // slow because it genuinely asks five CLIs a question.
+  }, 90_000);
 
   it("Updates reports the build and version from the daemon", async () => {
     const m = mount();
