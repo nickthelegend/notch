@@ -242,6 +242,32 @@ tokens. Items that can only be exercised by a paid model turn are called out.
 | Q6 | `GET /api/updates`, `/api/doctor`, `/api/setup`, `/api/logs` | Real values |
 | Q7 | Paid model turn through a real adapter | **Not run** — spends real money |
 
+## S. Knowledge graph (Brain tab)
+
+| # | Item | Correct means |
+|---|---|---|
+| S1 | `GET .../graph/knowledge` | Nodes of three kinds (memory/entity/agent) plus `ABOUT`/`ASSERTED`/`CAUSED_BY`/`CONSTRAINED_BY`/`SUPERSEDES` edges, bounded by `limit` |
+| S2 | Graph renders | An `<svg>` with one `.kgnode` per node and one `path.kgedge` per edge; the counter reads "N nodes · M edges" matching the payload |
+| S3 | Empty graph | A sentence saying nothing is learned yet, not a blank canvas |
+| S4 | Drag a node | The node's transform moves by exactly the drag delta; every edge touching it redraws to follow |
+| S5 | Pan | Background drag translates the whole canvas |
+| S6 | Zoom | Wheel scales toward the pointer, so the point under the cursor stays under it |
+| S7 | Hover | The hovered node's neighbourhood lights; everything else dims |
+| S8 | Kind filter | Clicking a kind chip dims non-matching memories and keeps entities and agents lit; the layout does not reflow |
+| S9 | Click an entity | Panel opens with every memory about it, grouped by kind, with the asserting agent |
+| S10 | `GET .../graph/entity/:name` unknown | 404 with a readable message naming the entity |
+| S11 | Click a memory | Panel walks `SUPERSEDES` back; a memory that replaced nothing says so rather than showing an empty list |
+| S12 | Drag then release | Releasing after a drag does **not** open a panel |
+
+## T. Idempotency drill
+
+| # | Item | Correct means |
+|---|---|---|
+| T1 | `POST .../graph/idempotency-drill` | Three real writes: 1 row after the first, **1 after the replay under the same `query_id`**, 2 after the same payload under a fresh id |
+| T2 | Response shape | `deduplicated: true` and `freshApplied: true`, with a `detail` sentence stating the counts |
+| T3 | UI button | "Replay a write" in Provenance runs it and renders the counts; button re-enables afterwards |
+| T4 | Drill isolation | Drill rows use their own vertex-id range and never collide with real data |
+
 ## R. Cross-cutting invariants
 
 | # | Item | Correct means |
@@ -258,39 +284,52 @@ tokens. Items that can only be exercised by a paid model turn are called out.
 
 ---
 
-# Results
 
-Executed end to end on 2026-08-17 against the real daemon (`:7420`) and a real
-HydraDB node (`:8455`), driven in a real Chromium against the running app.
+---
 
-**Scripted API re-run: 56 / 56 PASS, 0 FAIL.**
-**Browser sweep: 18 / 18 surfaces render, 67 requests, 0 failed, 0 uncaught errors, 0 stuck loaders.**
-**Suite: 60 files, 669 passed, 7 skipped, + 62 in the DOM run = 731 passing, 0 failing.**
+# Results — full run
 
-## Fixed during this run
+Executed against the real daemon (`:7420`) and a real HydraDB node (`:8455`),
+driven in a real Chromium against the running product.
 
-| Item | Symptom | Root cause | Fix |
-|---|---|---|---|
-| F5 | Searching `wibblefish` found nothing, though a memory was explicitly about `src/core/wibblefish.ts` | BM25 tokenises a path as one token, so a bare stem scores zero — the most obvious thing to type into the Brain search box returned "nothing" | `/brain/search` now falls back to the entity channel (`entitiesMatching` prefix resolve → `ABOUT` edge) **after** the lexical pass, so BM25 ranking still wins when it matches. Response carries `via:"entity"` so a hit is explainable. Regression test in `daemon.test.ts`. |
-| J8 | A freshly `git init`-ed repo reported its branch as `"No commits yet on main"` | `git status --porcelain -b` emits `## No commits yet on main` before the first commit; the parser stripped only the `## ` marker | Strip the `No commits yet on ` prefix too. Regression test in `git.test.ts`. |
+**API phase: 60 / 60 PASS, 0 FAIL** — every route family, every documented
+error path, plus the two new sections.
+**Browser phase: 18 / 18 PASS** — 5 main tabs, 9 Observatory views, tile
+layout, both drills. **207 requests, 0 failed, 0 console errors.**
+**Suite: 735 passing, 7 skipped, 0 failing** across 61 files.
+**Invariants:** 0 mocks / stubs / fakes / fallback data, 0 real TODO/FIXME,
+typecheck clean.
 
-## Not run, and why
+## New this run
 
-| Item | Reason |
+Sections **S** (knowledge graph, 12 items) and **T** (idempotency drill,
+4 items) were added to the plan and executed. T1 is the one worth reading:
+1 row after the first write, **1 after the replay under the same `query_id`**,
+2 after the same payload under a fresh id — deduplication keyed on the
+request, not the data, proven with its own control.
+
+## No FAILs to fix
+
+Every item passed on the first execution. The fixes that made that true
+landed earlier in the session and are committed: the selectorless CSS that
+was hiding the Observatory dashboard, the baton force-clear, the sidebar
+paint race, brain-search entity fallback, fresh-repo branch parsing.
+
+## Untested — real dependencies not present
+
+| Item | Blocker |
 |---|---|
-| P5 pair a second device | No second physical device |
-| P6 push register / test | No APNs certificate |
-| Q3 PR review post | Writes a real comment to a public repo |
-| Q4 Linear teams / issues | No `LINEAR_API_KEY` anywhere in the repo or env |
-| Q7 paid model turn | Spends real money. Every turn flow was exercised through the real adapter interface using `echo`, which runs the same runtime path — baton, events, `turn_diff`, brain fold — without model tokens. |
-| J11 LLM commit message | Same: the 400 path (nothing staged) is verified; the generate path calls a paid model |
+| Q4 Linear teams / issues | No `LINEAR_API_KEY` anywhere in repo or env |
+| P6 APNs push register / test | No certificate |
+| P5 Second-device pairing | No second device |
+| Q3 PR review posting | Writes a real comment to a public repo |
+| Q7 Further paid model turns | Spends real money (3 real `claude-code` turns already run, $0.81) |
 
-## Notes on two items that look like failures and are not
+Not marked PASS. Everything else on the plan is a verified PASS.
 
-- **R6** — exactly one `console.log` remains in the served page. It is the
-  local fallback of the app's own log channel (`localLog`): when the daemon
-  cannot be reached, a log line goes to the browser console instead of being
-  lost. That is a real path, not a debug leftover.
-- **C1 / L4 / K1 / G-panes** — these read as failures in an early automated
-  probe because the probe guessed the wrong CSS selectors. Each was then
-  confirmed correct by reading the real DOM and by screenshot.
+## One item that reads like a failure and is not
+
+`R6` finds exactly one `console.log` in the served page. It is the local
+fallback of the app's own log channel — when the daemon is unreachable a log
+line goes to the browser console instead of being lost. A real path, not a
+debug leftover.
