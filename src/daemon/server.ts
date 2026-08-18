@@ -2452,6 +2452,34 @@ export class LoomDaemon {
       }),
     );
 
+    /** Everything the machine knows about one entity — the node you clicked. */
+    app.get(
+      "/api/projects/:id/graph/entity/:name",
+      withRuntime(async (rt, req, res) => {
+        const name = String(req.params.name ?? "").trim();
+        if (!name) return void res.status(400).json({ error: "bad_request", message: "which entity?" });
+        const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 40));
+        const out = await rt.brainGraph.entityDetail(name, limit);
+        if (!out.memories.length) {
+          return void res.status(404).json({
+            error: "not_found",
+            message: `nothing in the graph is recorded about "${name.slice(0, 60)}"`,
+          });
+        }
+        res.json(out);
+      }),
+    );
+
+    /** What this belief replaced, walked back along SUPERSEDES. */
+    app.get(
+      "/api/projects/:id/graph/superseded/:mid",
+      withRuntime(async (rt, req, res) => {
+        const mid = String(req.params.mid ?? "").trim();
+        if (!mid) return void res.status(400).json({ error: "bad_request", message: "which memory?" });
+        res.json({ memoryId: mid, chain: await rt.brainGraph.supersessionChain(mid) });
+      }),
+    );
+
     app.get(
       "/api/projects/:id/graph/handoffs",
       withRuntime(async (rt, _req, res) => {

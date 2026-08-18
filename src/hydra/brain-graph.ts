@@ -617,6 +617,101 @@ export class BrainGraph {
     return { nodes: [...nodes.values()], edges };
   }
 
+  /**
+   * Everything recorded about one entity.
+   *
+   * An entity is the join the whole design turns on: a constraint written by
+   * one agent and a failure written by another, weeks apart, in words that
+   * share nothing, are the same knowledge when they point at the same file.
+   * The graph knows that; a list of memories does not. This is the page you
+   * land on when you click that node.
+   *
+   * Deliberately not project-scoped. `(:Entity)` is global on purpose — the
+   * same reason cross-run recall works — so this answers "what does this whole
+   * machine know about src/baton.ts", not "what does this project know".
+   */
+  async entityDetail(name: string, limit = 40): Promise<{
+    entity: string;
+    memories: { memoryId: string; text: string; kind: string; agent: string; project: number; at: number }[];
+    agents: { agent: string; count: number }[];
+    kinds: Record<string, number>;
+  }> {
+    const clean = String(name ?? "").trim().toLowerCase();
+    if (!clean) return { entity: "", memories: [], agents: [], kinds: {} };
+    await this.graph.open();
+    const ev = await this.graph.entityVid(clean);
+    const res = await this.graph.client.query(
+      `MATCH (m:${LABEL.memory})-[:${REL.about}]->(e:${LABEL.entity} {id: $ev}) ` +
+        "RETURN m.mid AS mid, m.text AS text, m.kind AS kind, m.agent AS agent, " +
+        `m.proj AS proj, m.updated AS updated ORDER BY updated DESC LIMIT ${Math.min(200, Math.max(1, limit))}`,
+      { ev },
+    );
+    const memories = res.rows
+      .map((r) => ({
+        memoryId: String(r.mid ?? ""),
+        text: String(r.text ?? ""),
+        kind: String(r.kind ?? ""),
+        agent: String(r.agent ?? ""),
+        project: Number(r.proj ?? -1),
+        at: Number(r.updated ?? 0),
+      }))
+      .filter((m) => m.memoryId);
+
+    const byAgent = new Map<string, number>();
+    const kinds: Record<string, number> = {};
+    for (const m of memories) {
+      if (m.agent) byAgent.set(m.agent, (byAgent.get(m.agent) ?? 0) + 1);
+      if (m.kind) kinds[m.kind] = (kinds[m.kind] ?? 0) + 1;
+    }
+    return {
+      entity: clean,
+      memories,
+      agents: [...byAgent.entries()].map(([agent, count]) => ({ agent, count })).sort((a, b) => b.count - a.count),
+      kinds,
+    };
+  }
+
+  /**
+   * What a belief replaced, walked backwards.
+   *
+   * `SUPERSEDES` is the edge that makes memory have a history rather than a
+   * value. A list shows you what is true now; this shows you what used to be
+   * true, what replaced it, and in what order — which is the difference
+   * between a store and a record.
+   *
+   * Depth-capped because a cycle in a corrected-belief chain is possible in
+   * principle and an infinite walk is not a useful answer to anything.
+   */
+  async supersessionChain(memoryId: string, maxDepth = 8): Promise<
+    { memoryId: string; text: string; kind: string; agent: string; at: number }[]
+  > {
+    await this.graph.open();
+    const chain: { memoryId: string; text: string; kind: string; agent: string; at: number }[] = [];
+    const seen = new Set<string>();
+    let current = String(memoryId ?? "").trim();
+    for (let depth = 0; depth < maxDepth && current && !seen.has(current); depth++) {
+      seen.add(current);
+      const res = await this.graph.client.query(
+        `MATCH (m:${LABEL.memory} {id: $mv})-[:${REL.supersedes}]->(o:${LABEL.memory}) ` +
+          "RETURN o.mid AS mid, o.text AS text, o.kind AS kind, o.agent AS agent, o.updated AS updated LIMIT 1",
+        { mv: await this.graph.memoryVid(current) },
+      );
+      const row = res.rows[0];
+      if (!row) break;
+      const mid = String(row.mid ?? "");
+      if (!mid || seen.has(mid)) break;
+      chain.push({
+        memoryId: mid,
+        text: String(row.text ?? ""),
+        kind: String(row.kind ?? ""),
+        agent: String(row.agent ?? ""),
+        at: Number(row.updated ?? 0),
+      });
+      current = mid;
+    }
+    return chain;
+  }
+
   // -------------------------------------------------------------------------
   // Handoff provenance
   // -------------------------------------------------------------------------

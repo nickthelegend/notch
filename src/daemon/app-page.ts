@@ -921,6 +921,30 @@ try{if(localStorage.getItem("loomTheme")==="light")document.documentElement.clas
   .kglabel{font-size:9.5px;fill:var(--foreground);pointer-events:none;font-family:var(--font-mono)}
   .kgsub{font-size:8px;fill:var(--muted-foreground);pointer-events:none;
     text-transform:uppercase;letter-spacing:.06em}
+  /* Entity page: the panel you land on when you click a diamond. */
+  .kgpanel{position:absolute;right:10px;top:34px;width:290px;max-height:calc(100% - 52px);overflow:auto;
+    background:var(--popover);border:1px solid var(--glass-border);border-radius:10px;padding:11px 12px;
+    box-shadow:0 18px 48px rgb(0 0 0 / .42);animation:kgin .2s ease}
+  .kgph{display:flex;align-items:baseline;gap:7px;margin-bottom:8px}
+  .kgpt{font-family:var(--font-mono);font-size:12px;font-weight:600;word-break:break-all}
+  .kgpx{margin-left:auto;border:0;background:none;color:var(--muted-foreground);cursor:pointer;padding:0 2px}
+  .kgpk{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:9px}
+  .kgpk span{font-size:9px;text-transform:uppercase;letter-spacing:.05em;padding:2px 6px;
+    border-radius:4px;border:1px solid var(--border);color:var(--muted-foreground)}
+  .kgpm{border-left:2px solid var(--border);padding:5px 0 5px 8px;margin-bottom:7px}
+  .kgpm.k-constraint{border-color:#a78bfa} .kgpm.k-failure{border-color:var(--danger,#f87171)}
+  .kgpm.k-decision{border-color:var(--primary)} .kgpm.k-convention{border-color:#34d399}
+  .kgpm.k-fact{border-color:#60a5fa}
+  .kgpmt{font-size:11.5px;line-height:1.45}
+  .kgpmm{font-size:10px;color:var(--muted-foreground);margin-top:2px;font-family:var(--font-mono)}
+  .kgsup{margin-top:6px;padding-left:10px;border-left:1px dashed #f59e0b}
+  .kgsup .kgpmt{font-size:11px;color:var(--muted-foreground)}
+  .kgsupl{font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:#f59e0b;margin-bottom:3px}
+  /* Kind filter: dim what does not match rather than removing it, so the
+     shape of the graph stays put and you can see what you filtered out of. */
+  .kgwrap.filtered .kgnode{opacity:.13}
+  .kgwrap.filtered .kgnode.match{opacity:1}
+  .kgwrap.filtered .kgedge{opacity:.07}
   .kglegend{position:absolute;left:10px;bottom:8px;display:flex;gap:10px;flex-wrap:wrap;
     font-size:9.5px;color:var(--muted-foreground);pointer-events:none}
   .kglegend i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px;vertical-align:-1px}
@@ -6176,6 +6200,94 @@ ${BRAND_SPRITE}
         "</div></div>";
     }
 
+    function closeKgPanel(){
+      var p2 = document.getElementById("kgpanel");
+      if (p2) p2.remove();
+    }
+
+    function kgPanelShell(title, bodyHtml){
+      closeKgPanel();
+      var wrap = document.getElementById("kgwrap");
+      if (!wrap) return;
+      var el = document.createElement("div");
+      el.className = "kgpanel"; el.id = "kgpanel";
+      el.innerHTML = '<div class="kgph"><span class="kgpt">' + esc(title) + "</span>" +
+        '<button class="kgpx" id="kgpx" aria-label="close">' + ICONS.x + "</button></div>" + bodyHtml;
+      wrap.appendChild(el);
+      var x = document.getElementById("kgpx");
+      if (x) x.onclick = closeKgPanel;
+    }
+
+    /** Everything the machine knows about one file, symbol or error code. */
+    function openEntityPanel(name){
+      kgPanelShell(name, '<div class="bempty sm">reading the graph\u2026</div>');
+      api("/api/projects/" + pid + "/graph/entity/" + encodeURIComponent(name))
+        .then(function(d){
+          var kinds = Object.keys(d.kinds || {}).map(function(k){
+            return "<span>" + esc(k) + " " + d.kinds[k] + "</span>";
+          }).join("");
+          var who = (d.agents || []).map(function(a){
+            return "<span>" + esc(a.agent) + " \u00d7" + a.count + "</span>";
+          }).join("");
+          var mems = (d.memories || []).map(function(m){
+            return '<div class="kgpm k-' + esc(m.kind) + '"><div class="kgpmt">' + esc(m.text) + "</div>" +
+              '<div class="kgpmm">' + esc(m.agent || "user") + (m.at ? " \u00b7 " + esc(rel(m.at)) : "") + "</div></div>";
+          }).join("");
+          kgPanelShell(name,
+            '<div class="kgpk">' + kinds + who + "</div>" + mems +
+            '<div class="kgpmm" style="margin-top:8px">Global: (:Entity) is shared across every project, which is why this is what the machine knows, not what this project knows.</div>');
+        })
+        .catch(function(err){
+          kgPanelShell(name, '<div class="bempty sm">' + esc(err.message) + "</div>");
+        });
+    }
+
+    /** What this belief replaced, walked back along SUPERSEDES. */
+    function openSupersessionPanel(n){
+      var mid = n.id.slice(2);
+      kgPanelShell(n.sub ? n.sub.toUpperCase() : "memory",
+        '<div class="kgpm k-' + esc(n.sub || "") + '"><div class="kgpmt">' + esc(n.label) + "</div></div>" +
+        '<div class="bempty sm">walking what it replaced\u2026</div>');
+      api("/api/projects/" + pid + "/graph/superseded/" + encodeURIComponent(mid))
+        .then(function(d){
+          var chain = d.chain || [];
+          var body = '<div class="kgpm k-' + esc(n.sub || "") + '"><div class="kgpmt">' + esc(n.label) + "</div>" +
+            '<div class="kgpmm">current belief</div></div>';
+          body += chain.length
+            ? '<div class="kgsup"><div class="kgsupl">replaced, newest first</div>' +
+              chain.map(function(c){
+                return '<div class="kgpm k-' + esc(c.kind) + '"><div class="kgpmt">' + esc(c.text) + "</div>" +
+                  '<div class="kgpmm">' + esc(c.agent || "user") + (c.at ? " \u00b7 " + esc(rel(c.at)) : "") + "</div></div>";
+              }).join("") + "</div>"
+            : '<div class="bempty sm">This belief has replaced nothing \u2014 it is the first thing recorded on the subject.</div>';
+          kgPanelShell(n.sub ? n.sub.toUpperCase() : "memory", body);
+        })
+        .catch(function(err){
+          kgPanelShell("memory", '<div class="bempty sm">' + esc(err.message) + "</div>");
+        });
+    }
+
+    /**
+     * Filter the graph by memory kind, driven by the chips already above it.
+     *
+     * Dims rather than removes: taking nodes out reflows the layout, and a
+     * graph that rearranges when you filter makes it impossible to see what
+     * you filtered *out of*. Entities and agents stay lit whatever the filter,
+     * because they are the scaffolding the memories hang on.
+     */
+    function applyKgFilter(){
+      var wrap = document.getElementById("kgwrap");
+      var svg = document.getElementById("kgsvg");
+      if (!wrap || !svg) return;
+      if (!brainKind) { wrap.classList.remove("filtered"); return; }
+      wrap.classList.add("filtered");
+      Array.prototype.forEach.call(svg.querySelectorAll(".kgnode"), function(g){
+        var c = g.getAttribute("class") || "";
+        var keep = c.indexOf("k-" + brainKind) >= 0 || c.indexOf("k-entity") >= 0 || c.indexOf("k-agent") >= 0;
+        g.classList.toggle("match", keep);
+      });
+    }
+
     function drawKnowledgeGraph(){
       var svg = document.getElementById("kgsvg");
       if (!svg) return;
@@ -6332,6 +6444,7 @@ ${BRAND_SPRITE}
           svg.addEventListener("pointermove", function(ev){
             if (!drag) return;
             if (drag.pan) {
+              drag.moved = true;
               var r2 = host.getBoundingClientRect();
               view.x = drag.ox + (ev.clientX - drag.sx) * (W / r2.width);
               view.y = drag.oy + (ev.clientY - drag.sy) * (H / r2.height);
@@ -6339,6 +6452,7 @@ ${BRAND_SPRITE}
               return;
             }
             var p = svgPoint(ev);
+            drag.moved = true;
             moveNode(drag.node, p.x - drag.dx, p.y - drag.dy);
           });
           function endDrag(ev){ if (drag) { try { svg.releasePointerCapture(ev.pointerId); } catch (e2) {} drag = null; } }
@@ -6355,6 +6469,28 @@ ${BRAND_SPRITE}
             view.k = k2;
             applyView();
           }, { passive: false });
+
+          /**
+           * Click an entity to open its page; click a memory to walk what it
+           * replaced.
+           *
+           * These are the two questions a graph makes askable and a list does
+           * not. An entity is the join the design turns on — a constraint and
+           * a failure written weeks apart in words that share nothing are the
+           * same knowledge when they point at the same file. And SUPERSEDES is
+           * what gives a belief a history rather than a value.
+           */
+          svg.addEventListener("click", function(ev){
+            if (drag && drag.moved) return; // a drag is not a click
+            var g4 = ev.target.closest ? ev.target.closest(".kgnode") : null;
+            if (!g4) { closeKgPanel(); return; }
+            var n3 = byId[g4.getAttribute("data-id")];
+            if (!n3) return;
+            if (n3.kind === "entity") openEntityPanel(n3.label);
+            else if (n3.kind === "memory") openSupersessionPanel(n3);
+          });
+
+          applyKgFilter();
 
           // Hover lights the neighbourhood and dims everything else — the
           // question you actually have in front of a graph is "what touches
