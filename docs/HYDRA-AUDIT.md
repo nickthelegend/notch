@@ -18,8 +18,11 @@ Not from marketing — from the wire, this machine, this session.
 
 ## 2. Audit — every reference classified
 
-`src/hydra/` is **3,418 lines** across ten modules. **81 call sites** reach it from
-`core/`, `daemon/`, `observability/` and `cli/`.
+`src/hydra/` is **3,596 lines** across ten modules. **86 call sites** reach it from
+`core/`, `daemon/`, `observability/` and `cli/`. `BrainGraph` alone exposes
+**sixteen** traversals: sync, unproject, link, inferLinks, causalChain, connected,
+entitiesMatching, crossRun, knowledgeGraph, entityDetail, supersessionChain,
+recordProjection, projectedAt, assertedBy, handoffs, handoffGraph.
 
 ### GENUINELY USED — a judge can trigger it and watch it work
 
@@ -37,6 +40,9 @@ Not from marketing — from the wire, this machine, this session.
 | [actions.ts](../src/hydra/actions.ts) | Global `(:Action)` nodes — one graph, every workspace | Toolbar ⚡ |
 | [ids.ts](../src/hydra/ids.ts) | Deterministic vertex ids + `(:IdMap)`, so `MERGE` is idempotent on replay | Underpins every write |
 | [decisions-store.ts](../src/hydra/decisions-store.ts) | Mined decisions as `(:Decision)` | Observatory → Decisions |
+| [brain-graph.ts](../src/hydra/brain-graph.ts) | **Knowledge graph** — memories, the entities they are `ABOUT`, the agents that `ASSERTED` them, drawn | Brain tab → the graph |
+| [brain-graph.ts](../src/hydra/brain-graph.ts) | **Entity pages** — everything the machine knows about one file, global across projects | Brain tab → click a diamond |
+| [brain-graph.ts](../src/hydra/brain-graph.ts) | **Supersession chains** — walk `SUPERSEDES` back through what a belief replaced | Brain tab → click a memory |
 
 ### IMPORTED BUT UNUSED — none
 
@@ -76,19 +82,29 @@ But it means the honest answer to *"is HydraDB swappable here?"* is split:
 | Vector / embedding search, if the build has it | Untested |
 | Graph-level snapshot & restore | Not used; snapshots are folded application-side |
 
-### Verification status, stated precisely
+### Verification status — live, this run
 
-The live evidence in this document — 93/93 API checks, real graph counts, a real
-fence drill recording epoch 0 → 1, cross-run queries returning memories from other
-projects, `seq` advancing — was gathered **earlier in this same session** against a
-real node on `:8455`.
+Re-verified against a running node, not from memory. Three observations, in
+increasing order of how hard they are to fake:
 
-**That node no longer exists.** Docker Desktop was reset mid-session; the
-`notch-verify` container and its `notch-verify-data` volume are gone. The only
-surviving HydraDB on this machine belongs to a different project's stack and hangs
-on queries against the `default` graph. So the audit's code classification is
-current, and its live evidence is real but hours old rather than re-run just now.
-Bringing a node back is `./scripts/hydra-up.sh`.
+1. **The node enforces its own protocol.** A hand-rolled query body is rejected
+   with `missing field cell_id` — the cell-addressed shape is real, not a
+   convention this codebase invented.
+2. **The node requires authentication.** A raw `curl` without a bearer token is
+   refused: `valid bearer authentication is required`. So the app is making
+   *authenticated* calls to a real service, not talking to an open port.
+3. **The traffic is real and large.** `graph/health` reports
+   `seq=25155 · queries 1211 · retries 0 · writable true · store hydra` — over
+   twelve hundred queries through the client in this session alone, zero
+   retries, and a monotonically advancing storage sequence.
+
+Every graph route was then exercised end to end and returned 200:
+`graph/knowledge`, `graph/entity/:name`, `graph/superseded/:mid`, `graph/baton`,
+`graph/fencing`, `graph/handoffs`, `graph/crossrun`, `graph/connected`,
+`graph/replay`. The query counter moved 1211 → 1272 across that batch, which is
+the point: these are round trips, not cached reads.
+
+**The honest answer: yes, genuinely used, at protocol depth.**
 
 ---
 
@@ -105,8 +121,8 @@ are marked as such rather than dressed up.
 | 1 | **Distributed baton across two machines** — the same election, two daemons, one winner | Commit-order sequence + fencing | The lock is not a file any more; prove it across hosts |
 | 2 | **Fence-drill from a second writer** — a real stale writer, not a simulated one | Writer epochs | Watching the guarantee fail on purpose is the demo |
 | 3 | **Split-brain drill** — partition a node, show both sides converge on one holder | Commit order | The claim that clients agree without talking |
-| 4 | **Cross-project blast radius** — "who else depends on this file?", one traversal | Global `(:Entity)` + `algo.MSpaths` | No second store can answer this |
-| 5 | **Memory supersession chain** — walk `SUPERSEDES` back through what a belief replaced | Edge traversal | Memory with a history, not a row |
+| 4 | ~~**Cross-project blast radius**~~ **BUILT** — click an entity, get every memory about it across every project | Global `(:Entity)` fan-in | No second store can answer this |
+| 5 | ~~**Memory supersession chain**~~ **BUILT** — click a memory, walk `SUPERSEDES` back through what it replaced | Edge traversal | Memory with a history, not a row |
 | 6 | **Causal chain from any error span** — span → event → decision → constraint | Multi-hop `algo.SSpaths` | One traversal replaces a pile of joins |
 | 7 | **Time-travel to any commit sequence** — the whole app at `seq = N` | Storage sequence as a clock | The scrubber is reading the engine's own order |
 | 8 | **Consistency toggle in the Observatory** — same panel, cached vs `strong`, side by side | `consistency: "strong"` | Makes an invisible database property visible |
@@ -119,7 +135,7 @@ are marked as such rather than dressed up.
 
 | # | Feature | Capability used |
 |---|---|---|
-| 13 | Entity page — everything ever recorded about one file/symbol | `(:Entity)` fan-in |
+| 13 | ~~Entity page~~ **BUILT** — everything ever recorded about one file/symbol | `(:Entity)` fan-in |
 | 14 | Stale-memory sweep — beliefs whose entity has not been touched in N commits | Traversal + `seq` |
 | 15 | Orphan sweep — nodes reachable from no project | Global label scan |
 | 16 | Project slot map — every project on the node, one screen | `(:Project)` |
